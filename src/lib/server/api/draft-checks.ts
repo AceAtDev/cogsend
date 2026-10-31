@@ -75,7 +75,7 @@ function counts(media: MediaAttachment[] | undefined) {
 	return { images: list.length - videos, videos };
 }
 
-function accountLabel(platform: string, handle: string | null): string {
+export function accountLabel(platform: string, handle: string | null): string {
 	if (!handle) return platformName(platform);
 	return `${platformName(platform)} ${handle.startsWith('@') ? handle : `@${handle}`}`;
 }
@@ -87,7 +87,11 @@ function allMedia(content: NormalizedPost): MediaAttachment[] {
 		: (content.media ?? []);
 }
 
-function describe(issue: ValidationIssue, content: NormalizedPost, flattened: boolean): DraftIssue {
+export function describeIssue(
+	issue: ValidationIssue,
+	content: NormalizedPost,
+	flattened: boolean
+): DraftIssue {
 	const kind = kindOf(issue);
 	const segment = /^thread\[(\d+)\]/.exec(issue.field ?? '');
 	const index = segment ? Number(segment[1]) : null;
@@ -107,7 +111,7 @@ function describe(issue: ValidationIssue, content: NormalizedPost, flattened: bo
 	return out;
 }
 
-function line(label: string, issue: DraftIssue): string {
+export function issueLine(label: string, issue: DraftIssue): string {
 	const where = issue.post ? ` (post ${issue.post})` : '';
 	let message = issue.message;
 	if (issue.attached && (issue.code === 'max_images' || issue.code === 'max_videos')) {
@@ -122,7 +126,7 @@ function line(label: string, issue: DraftIssue): string {
  * when the post is scheduled. Checked before that, the copy is not there yet,
  * so count the ones it will make, as the composer does.
  */
-async function withExpectedJpegCopies(
+export async function withExpectedJpegCopies(
 	ctx: OperationContext,
 	draftId: string,
 	content: NormalizedPost
@@ -215,7 +219,7 @@ export async function checkDraft(
 				handle: meta.handle || row.handle || undefined
 			});
 			const flattened = !provider.capabilities.supportsThreads;
-			for (const issue of found) issues.push(describe(issue, content, flattened));
+			for (const issue of found) issues.push(describeIssue(issue, content, flattened));
 		}
 		accounts.push({
 			connectionId: row.id,
@@ -227,7 +231,7 @@ export async function checkDraft(
 		});
 	}
 	const problems = accounts.flatMap((account) =>
-		account.issues.map((issue) => line(account.label, issue))
+		account.issues.map((issue) => issueLine(account.label, issue))
 	);
 	return { draftId, ok: problems.length === 0, accounts, problems };
 }
@@ -267,7 +271,7 @@ export async function refuseMediaProblems(
 		.filter((account) => account.issues.length > 0);
 	if (!accounts.length) return;
 	const problems = accounts.flatMap((account) =>
-		account.issues.map((issue) => line(account.label, issue))
+		account.issues.map((issue) => issueLine(account.label, issue))
 	);
 	const more = problems.length > 1 ? ` (and ${problems.length - 1} more)` : '';
 	throw new ApiOperationError(`${problems[0]}${more}`, 400, {

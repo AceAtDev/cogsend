@@ -171,7 +171,8 @@ export function satisfiedMigrations(state) {
 		['0017_app_settings.sql', tables.has('app_settings')],
 		['0018_draft_media_meta.sql', col('draft_media', 'meta_json')],
 		['0019_draft_shares.sql', tables.has('draft_shares')],
-		['0020_brands.sql', all(tables.has('brands'), col('connections', 'brand_id'))]
+		['0020_brands.sql', all(tables.has('brands'), col('connections', 'brand_id'))],
+		['0021_mcp_safety.sql', all(tables.has('mcp_confirmations'), tables.has('mcp_idempotency'))]
 	]
 		.filter(([, ok]) => ok)
 		.map(([name]) => String(name));

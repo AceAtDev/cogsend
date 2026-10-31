@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -229,6 +229,34 @@ CREATE TABLE IF NOT EXISTS \`api_keys\` (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS \`api_keys_hash_uq\` ON \`api_keys\` (\`key_hash\`);
 CREATE INDEX IF NOT EXISTS \`api_keys_user_idx\` ON \`api_keys\` (\`user_id\`);
+
+CREATE TABLE IF NOT EXISTS \`mcp_confirmations\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`token_hash\` text NOT NULL,
+	\`tool\` text NOT NULL,
+	\`payload_hash\` text NOT NULL,
+	\`expires_at\` integer NOT NULL,
+	\`used_at\` integer,
+	\`created_at\` integer NOT NULL,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_confirmations_token_uq\` ON \`mcp_confirmations\` (\`token_hash\`);
+CREATE INDEX IF NOT EXISTS \`mcp_confirmations_expires_idx\` ON \`mcp_confirmations\` (\`expires_at\`);
+
+CREATE TABLE IF NOT EXISTS \`mcp_idempotency\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`key\` text NOT NULL,
+	\`tool\` text NOT NULL,
+	\`request_hash\` text NOT NULL,
+	\`response_json\` text,
+	\`created_at\` integer NOT NULL,
+	\`expires_at\` integer NOT NULL,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_idempotency_user_key_uq\` ON \`mcp_idempotency\` (\`user_id\`, \`key\`);
+CREATE INDEX IF NOT EXISTS \`mcp_idempotency_expires_idx\` ON \`mcp_idempotency\` (\`expires_at\`);
 `;
 
 async function execStatements(d1: D1Database, sql: string) {
@@ -404,6 +432,33 @@ CREATE TABLE IF NOT EXISTS brands (
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS brands_user_slug_uq ON brands (user_id, slug);
+CREATE TABLE IF NOT EXISTS mcp_confirmations (
+	id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	token_hash text NOT NULL,
+	tool text NOT NULL,
+	payload_hash text NOT NULL,
+	expires_at integer NOT NULL,
+	used_at integer,
+	created_at integer NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS mcp_confirmations_token_uq ON mcp_confirmations (token_hash);
+CREATE INDEX IF NOT EXISTS mcp_confirmations_expires_idx ON mcp_confirmations (expires_at);
+
+CREATE TABLE IF NOT EXISTS mcp_idempotency (
+	id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	key text NOT NULL,
+	tool text NOT NULL,
+	request_hash text NOT NULL,
+	response_json text,
+	created_at integer NOT NULL,
+	expires_at integer NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS mcp_idempotency_user_key_uq ON mcp_idempotency (user_id, key);
+CREATE INDEX IF NOT EXISTS mcp_idempotency_expires_idx ON mcp_idempotency (expires_at);
 `;
 
 /**

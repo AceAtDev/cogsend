@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import type { InferSelectModel } from 'drizzle-orm';
 import { isLocalAppUrl } from '#lib/domain/app-url.js';
 import { safeHttpUrl } from '#lib/domain/links.js';
 import { LEASE_REFRESH_MS, STALE_CLAIM_MS } from '#lib/domain/due-jobs.js';
@@ -130,7 +131,26 @@ export async function buildNormalizedPost(
 	if (!draft) throw new Error('Draft not found');
 	const variants = await db.select().from(draftVariants).where(eq(draftVariants.draftId, draftId));
 	const media = await db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
-	media.sort((a, b) => a.sortOrder - b.sortOrder);
+	return normalizeDraftContent(draft, variants, media, platform);
+}
+
+type ContentMedia = Pick<
+	InferSelectModel<typeof draftMedia>,
+	'storageKey' | 'mime' | 'size' | 'altText' | 'width' | 'height' | 'metaJson' | 'sortOrder'
+> & { segmentIndex: number | null };
+
+/**
+ * The post one platform would get from a draft's rows, without reading them:
+ * the MCP preview builds what it is about to write in memory and checks it
+ * exactly as the publish will.
+ */
+export function normalizeDraftContent(
+	draft: { baseBody: string },
+	variants: Array<{ platform: string; body: string | null; optionsJson: string | null }>,
+	mediaRows: ContentMedia[],
+	platform: string
+): NormalizedPost {
+	const media = [...mediaRows].sort((a, b) => a.sortOrder - b.sortOrder);
 
 	const variant = variants.find((v) => v.platform === platform);
 	const body = variant?.body ?? draft.baseBody;

@@ -305,3 +305,46 @@ export const appSettings = sqliteTable('app_settings', {
 	value: text('value').notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 });
+
+/** A dry run's confirm token, bound to the plan it previewed (0021). */
+export const mcpConfirmations = sqliteTable(
+	'mcp_confirmations',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		tokenHash: text('token_hash').notNull(),
+		tool: text('tool').notNull(),
+		payloadHash: text('payload_hash').notNull(),
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+		usedAt: integer('used_at', { mode: 'timestamp_ms' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		uniqueIndex('mcp_confirmations_token_uq').on(t.tokenHash),
+		index('mcp_confirmations_expires_idx').on(t.expiresAt)
+	]
+);
+
+/** What an MCP write answered for an idempotency key (0021). A NULL response
+ *  is a call still running. */
+export const mcpIdempotency = sqliteTable(
+	'mcp_idempotency',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		key: text('key').notNull(),
+		tool: text('tool').notNull(),
+		requestHash: text('request_hash').notNull(),
+		responseJson: text('response_json'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		uniqueIndex('mcp_idempotency_user_key_uq').on(t.userId, t.key),
+		index('mcp_idempotency_expires_idx').on(t.expiresAt)
+	]
+);

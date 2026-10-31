@@ -77,8 +77,7 @@ import {
 } from '#lib/server/media.js';
 import { STALE_CLAIM_MS } from '#lib/domain/due-jobs.js';
 import { ApiOperationError } from '#lib/server/api/operation-error.js';
-import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT, loadQueueList } from '#lib/server/post-list.js';
-import { listConnections as loadConnectionList } from '#lib/server/connection-list.js';
+import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT } from '#lib/server/post-list.js';
 import { loadOwnedDraft } from '#lib/server/draft-record.js';
 
 export type OperationContext = Pick<App.Locals, 'db' | 'env' | 'media'> & {
@@ -1081,10 +1080,6 @@ export async function publishDraft(
 	};
 }
 
-export function listConnections(ctx: OperationContext, userId: string) {
-	return loadConnectionList(ctx.db, ctx.env, userId);
-}
-
 export async function getDraft(ctx: OperationContext, userId: string, draftId: string) {
 	const draft = await loadOwnedDraft(ctx.db, draftId, userId);
 	if (!draft) invalid('Not found', 404);
@@ -1114,8 +1109,4 @@ export async function deleteDraft(ctx: OperationContext, userId: string, draftId
 	);
 	await ctx.db.delete(drafts).where(eq(drafts.id, draftId));
 	return { ok: true as const };
-}
-
-export function listQueue(ctx: OperationContext, userId: string, limit: number) {
-	return loadQueueList(ctx.db, userId, limit);
 }

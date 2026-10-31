@@ -188,9 +188,11 @@ function refToKey(ref: ChannelRef, brands: BrandRef[]): string {
 		brands.find((b) => b.slug === wanted) ?? brands.find((b) => b.name.toLowerCase() === wanted);
 	const slug = brand?.slug ?? (wanted === UNBRANDED_SLUG ? UNBRANDED_SLUG : wanted);
 	const platform = ref.platform.trim().toLowerCase();
-	const handle = ref.handle ? `.${handleSlug(ref.handle, '')}` : '';
-	return `${slug}.${platform}${handle}`;
+	return `${slug}.${platform}`;
 }
+
+const bareHandle = (handle: string | null | undefined) =>
+	(handle ?? '').trim().replace(/^@+/, '').toLowerCase();
 
 /**
  * Resolve one reference to exactly one account. Unknown, ambiguous and
@@ -206,7 +208,29 @@ export function resolveChannelRef(
 	const label = describeRef(ref);
 	const byId = typeof ref === 'string' ? channels.find((c) => c.connectionId === ref.trim()) : null;
 	const key = refToKey(ref, brands);
-	const match = byId ?? channels.find((c) => c.keys.includes(key));
+	let match =
+		byId ??
+		(typeof ref === 'string' || !ref.handle
+			? channels.find((c) => c.keys.includes(key))
+			: undefined);
+	if (typeof ref !== 'string' && ref.handle) {
+		// The handle itself, not its slug: `pat.dev` and `pat-dev` slug alike,
+		// and picking the first of the two would post as the wrong account.
+		const pool = channels.filter((c) => `${c.brand.slug}.${c.platform}` === key);
+		const exact = pool.filter((c) => bareHandle(c.handle) === bareHandle(ref.handle));
+		if (exact.length === 1) match = exact[0];
+		else
+			return {
+				ok: false,
+				ref: label,
+				reason: exact.length > 1 ? 'ambiguous' : 'unknown',
+				message:
+					exact.length > 1
+						? `"${label}" matches ${exact.length} accounts with that handle; use a channel key.`
+						: `No ${key} channel has the handle ${displayAt(ref.handle)}.`,
+				candidates: pool.length ? pool : channels
+			};
+	}
 	if (match) {
 		if (requireActive && match.status !== 'active') {
 			return {

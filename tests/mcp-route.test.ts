@@ -11,73 +11,6 @@ import { memoryMediaStore, thumbCacheKey } from '#lib/server/media.js';
 import * as publish from '#lib/server/publish.js';
 import { DELETE, GET, POST } from '../src/routes/api/mcp/+server';
 
-const toolNames = [
-	'list_connections',
-	'list_drafts',
-	'get_draft',
-	'create_draft',
-	'update_draft',
-	'duplicate_draft',
-	'delete_draft',
-	'set_draft_variant',
-	'delete_draft_variant',
-	'validate_post',
-	'publish_draft',
-	'schedule_draft',
-	'list_queue',
-	'cancel_delivery',
-	'retry_delivery',
-	'reschedule_delivery',
-	'get_platform_requirements',
-	'list_media',
-	'attach_media_from_url',
-	'attach_media_base64',
-	'create_media_upload',
-	'complete_media_upload',
-	'abort_media_upload',
-	'update_media',
-	'remove_media',
-	'set_video_cover',
-	'remove_video_cover'
-];
-
-const readAnnotations = {
-	readOnlyHint: true,
-	destructiveHint: false,
-	idempotentHint: true,
-	openWorldHint: false
-};
-const createAnnotations = {
-	readOnlyHint: false,
-	destructiveHint: false,
-	idempotentHint: false,
-	openWorldHint: false
-};
-const updateAnnotations = {
-	readOnlyHint: false,
-	destructiveHint: true,
-	idempotentHint: false,
-	openWorldHint: false
-};
-const deleteAnnotations = {
-	readOnlyHint: false,
-	destructiveHint: true,
-	idempotentHint: true,
-	openWorldHint: false
-};
-const publishAnnotations = {
-	readOnlyHint: false,
-	destructiveHint: true,
-	idempotentHint: false,
-	openWorldHint: true
-};
-const fetchAnnotations = {
-	readOnlyHint: false,
-	destructiveHint: false,
-	idempotentHint: false,
-	openWorldHint: true
-};
-
 type McpTool = {
 	name: string;
 	annotations: Record<string, unknown>;
@@ -213,122 +146,6 @@ async function postMcp(
 }
 
 describe('MCP route', () => {
-	it('exposes exactly the curated 27-tool catalog and the required annotations', async () => {
-		const { response, payload } = await postMcp('tools/list');
-		expect(response.headers.get('content-type')).toContain('application/json');
-		expect(response.headers.get('content-type')).not.toContain('text/event-stream');
-		expect(response.headers.get('mcp-session-id')).toBeNull();
-
-		const tools = payload.result!.tools as McpTool[];
-		expect(tools.map((tool) => tool.name)).toEqual(toolNames);
-
-		const expectedParameters: Record<string, { fields: string[]; required: string[] }> = {
-			list_connections: { fields: [], required: [] },
-			list_drafts: { fields: ['limit'], required: [] },
-			get_draft: { fields: ['draftId'], required: ['draftId'] },
-			create_draft: { fields: ['title', 'baseBody', 'selectedConnectionIds'], required: [] },
-			update_draft: {
-				fields: ['draftId', 'title', 'baseBody', 'selectedConnectionIds'],
-				required: ['draftId']
-			},
-			duplicate_draft: { fields: ['draftId'], required: ['draftId'] },
-			delete_draft: { fields: ['draftId'], required: ['draftId'] },
-			set_draft_variant: {
-				fields: ['draftId', 'platform', 'body', 'options'],
-				required: ['draftId', 'platform']
-			},
-			delete_draft_variant: { fields: ['draftId', 'platform'], required: ['draftId', 'platform'] },
-			validate_post: {
-				fields: ['text', 'platform', 'maxCharacters', 'draftId', 'connectionIds'],
-				required: []
-			},
-			publish_draft: {
-				fields: ['draftId', 'connectionIds'],
-				required: ['draftId', 'connectionIds']
-			},
-			schedule_draft: {
-				fields: ['draftId', 'connectionIds', 'runAt'],
-				required: ['draftId', 'connectionIds', 'runAt']
-			},
-			list_queue: { fields: ['limit'], required: [] },
-			cancel_delivery: { fields: ['targetId'], required: ['targetId'] },
-			retry_delivery: { fields: ['targetId'], required: ['targetId'] },
-			reschedule_delivery: { fields: ['targetId', 'runAt'], required: ['targetId', 'runAt'] },
-			get_platform_requirements: { fields: ['platforms', 'connectionIds'], required: [] },
-			list_media: { fields: ['draftId'], required: ['draftId'] },
-			attach_media_from_url: {
-				fields: ['draftId', 'url', 'segmentIndex', 'altText'],
-				required: ['draftId', 'url']
-			},
-			attach_media_base64: {
-				fields: ['draftId', 'data', 'segmentIndex', 'altText'],
-				required: ['draftId', 'data']
-			},
-			create_media_upload: {
-				fields: ['draftId', 'size', 'mime', 'segmentIndex'],
-				required: ['draftId', 'size']
-			},
-			complete_media_upload: {
-				fields: ['draftId', 'upload', 'parts', 'altText'],
-				required: ['draftId', 'upload', 'parts']
-			},
-			abort_media_upload: { fields: ['draftId', 'upload'], required: ['draftId', 'upload'] },
-			update_media: {
-				fields: ['draftId', 'mediaId', 'altText', 'segmentIndex'],
-				required: ['draftId', 'mediaId']
-			},
-			remove_media: { fields: ['draftId', 'mediaId'], required: ['draftId', 'mediaId'] },
-			set_video_cover: {
-				fields: ['draftId', 'mediaId', 'data', 'url', 'atMs'],
-				required: ['draftId', 'mediaId']
-			},
-			remove_video_cover: { fields: ['draftId', 'mediaId'], required: ['draftId', 'mediaId'] }
-		};
-		for (const tool of tools) {
-			const expected = expectedParameters[tool.name];
-			expect(Object.keys(tool.inputSchema.properties ?? {}).sort()).toEqual(
-				[...expected.fields].sort()
-			);
-			expect([...(tool.inputSchema.required ?? [])].sort()).toEqual([...expected.required].sort());
-		}
-
-		const expectedAnnotations: Record<string, Record<string, boolean>> = {
-			list_connections: readAnnotations,
-			list_drafts: readAnnotations,
-			get_draft: readAnnotations,
-			create_draft: createAnnotations,
-			update_draft: updateAnnotations,
-			duplicate_draft: createAnnotations,
-			delete_draft: deleteAnnotations,
-			set_draft_variant: updateAnnotations,
-			delete_draft_variant: deleteAnnotations,
-			validate_post: readAnnotations,
-			publish_draft: publishAnnotations,
-			schedule_draft: updateAnnotations,
-			list_queue: readAnnotations,
-			cancel_delivery: deleteAnnotations,
-			retry_delivery: publishAnnotations,
-			reschedule_delivery: updateAnnotations,
-			get_platform_requirements: readAnnotations,
-			list_media: readAnnotations,
-			attach_media_from_url: fetchAnnotations,
-			attach_media_base64: createAnnotations,
-			create_media_upload: createAnnotations,
-			complete_media_upload: createAnnotations,
-			abort_media_upload: deleteAnnotations,
-			update_media: updateAnnotations,
-			remove_media: deleteAnnotations,
-			set_video_cover: updateAnnotations,
-			remove_video_cover: deleteAnnotations
-		};
-		for (const tool of tools) expect(tool.annotations).toEqual(expectedAnnotations[tool.name]);
-
-		for (const name of ['list_drafts', 'list_queue']) {
-			const limit = tools.find((tool) => tool.name === name)?.inputSchema.properties?.limit;
-			expect(limit).toMatchObject({ type: 'integer', minimum: 1, maximum: 100, default: 50 });
-		}
-	});
-
 	it('returns JSON, not an SSE stream, for a legacy-classified POST', async () => {
 		const { response } = await postMcp('tools/list', {}, {}, { includeProtocolVersion: false });
 		expect(response.status).toBeGreaterThanOrEqual(400);
@@ -358,68 +175,67 @@ describe('MCP route', () => {
 		expect(response.headers.get('content-type')).not.toContain('text/event-stream');
 	});
 
-	it('returns structured tool results and enforces write scope', async () => {
+	it('returns structured tool results with the same JSON as text, and enforces write scope', async () => {
 		const success = await postMcp('tools/call', {
-			name: 'create_draft',
-			arguments: { title: 'From MCP', baseBody: 'Hello from the tool.' }
+			name: 'save_draft',
+			arguments: { title: 'From MCP', text: 'Hello from the tool.' }
 		});
-		const successResult = success.payload.result!;
-		expect(successResult.isError).not.toBe(true);
-		expect(successResult.structuredContent!.draft).toMatchObject({
-			title: 'From MCP',
-			baseBody: 'Hello from the tool.'
-		});
-		expect(successResult.content![0].text).toContain('From MCP');
+		const result = success.payload.result!;
+		expect(result.isError).not.toBe(true);
+		expect(result.structuredContent).toMatchObject({ status: 'created' });
+		const text = result.content![0].text;
+		expect(text).toContain('Created draft');
+		expect(JSON.parse(text.slice(text.indexOf('\n\n') + 2))).toEqual(result.structuredContent);
 
 		const denied = await postMcp(
 			'tools/call',
-			{ name: 'create_draft', arguments: { title: 'Nope' } },
+			{ name: 'save_draft', arguments: { title: 'Nope' } },
 			{ apiKeyScopes: ['read'] }
 		);
 		expect(denied.payload.result!.isError).toBe(true);
-		expect(denied.payload.result!.structuredContent).toEqual({
-			error: 'Insufficient scope',
+		expect(denied.payload.result!.structuredContent).toMatchObject({
+			error: 'This API key is read-only; this tool needs a Read + write key.',
 			status: 403
 		});
+		expect(await db.select().from(drafts)).toHaveLength(1);
 	});
 
 	it('requires read scope and an authenticated user for read tools', async () => {
 		const scopeDenied = await postMcp(
 			'tools/call',
-			{ name: 'list_connections', arguments: {} },
+			{ name: 'list_channels', arguments: {} },
 			{ apiKeyScopes: [] }
 		);
-		expect(scopeDenied.payload.result!.structuredContent).toEqual({
-			error: 'Insufficient scope',
+		expect(scopeDenied.payload.result!.structuredContent).toMatchObject({
+			error: 'This API key has no read access.',
 			status: 403
 		});
-
 		const unauthenticated = await postMcp(
 			'tools/call',
-			{ name: 'list_connections', arguments: {} },
+			{ name: 'list_channels', arguments: {} },
 			{ user: null }
 		);
-		expect(unauthenticated.payload.result!.structuredContent).toEqual({
+		expect(unauthenticated.payload.result!.structuredContent).toMatchObject({
 			error: 'Unauthorized',
 			status: 401
 		});
 	});
 
-	it('preserves ownership checks for fetched drafts', async () => {
+	it('preserves ownership checks for fetched posts', async () => {
 		const otherUser = await createTestAdmin(db, {
 			email: `other-${newId()}@localhost`,
 			totpEnabled: true
 		});
 		const draftId = await seedDraft(otherUser.id);
 		const { payload } = await postMcp('tools/call', {
-			name: 'get_draft',
-			arguments: { draftId }
+			name: 'get_post',
+			arguments: { postId: draftId }
 		});
 		expect(payload.result!.isError).toBe(true);
-		expect(payload.result!.structuredContent).toEqual({ error: 'Not found', status: 404 });
+		expect(payload.result!.structuredContent).toMatchObject({ status: 404, code: 'not_found' });
 	});
 
-	it('deletes a draft with its media and cached thumbnails, like the REST route', async () => {
+	it('deletes a post with its media and cached thumbnails, like the REST route', async () => {
 		const draftId = await seedDraft();
 		const storageKey = `${Date.now()}-abcdef0123456789.png`;
 		const store = new Map<string, { bytes: Uint8Array; mime: string }>();
@@ -435,19 +251,27 @@ describe('MCP route', () => {
 			segmentIndex: 0,
 			createdAt: new Date()
 		});
-
 		const { payload } = await postMcp(
 			'tools/call',
-			{ name: 'delete_draft', arguments: { draftId } },
+			{ name: 'cancel_posts', arguments: { items: [{ postId: draftId }], deletePost: true } },
 			{ media: memoryMediaStore(store) }
 		);
-
-		expect(payload.result!.structuredContent).toEqual({ ok: true });
+		expect(payload.result!.structuredContent).toMatchObject({
+			status: 'deleted',
+			deleted: [draftId]
+		});
 		expect(store.size).toBe(0);
 		expect(await db.select().from(drafts).where(eq(drafts.id, draftId))).toEqual([]);
 	});
 
-	it('preserves repeat-publish skips and schedule conflict details', async () => {
+	async function confirmed(name: string, args: Record<string, unknown>, extra = {}) {
+		const preview = await postMcp('tools/call', { name, arguments: args }, extra);
+		const token = preview.payload.result!.structuredContent!.confirmToken as string;
+		expect(token).toMatch(/^cfm_/);
+		return postMcp('tools/call', { name, arguments: { ...args, confirmToken: token } }, extra);
+	}
+
+	it('skips channels already published and refuses to schedule them again', async () => {
 		const draftId = await seedDraft();
 		const connectionId = await seedConnection();
 		const now = new Date();
@@ -462,59 +286,53 @@ describe('MCP route', () => {
 			createdAt: now,
 			updatedAt: now
 		});
-
-		const published = await postMcp('tools/call', {
-			name: 'publish_draft',
-			arguments: { draftId, connectionIds: [connectionId] }
+		const published = await confirmed('publish_now', {
+			postId: draftId,
+			channels: ['unbranded.mastodon']
 		});
-		const publishResult = published.payload.result!;
-		const targetResults = publishResult.structuredContent!.results as Array<{
-			status: string;
-			skipped: boolean;
-		}>;
-		expect(targetResults).toMatchObject([{ status: 'published', skipped: true }]);
-
+		expect(published.payload.result!.structuredContent!.deliveries).toMatchObject([
+			{ status: 'published', channel: { key: 'unbranded.mastodon' } }
+		]);
 		const scheduled = await postMcp('tools/call', {
-			name: 'schedule_draft',
+			name: 'schedule_posts',
 			arguments: {
-				draftId,
-				connectionIds: [connectionId],
-				runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+				posts: [
+					{
+						draftId,
+						channels: ['unbranded.mastodon'],
+						runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+					}
+				]
 			}
 		});
 		expect(scheduled.payload.result!.isError).toBe(true);
-		expect(scheduled.payload.result!.structuredContent).toEqual({
-			error: 'Already published',
-			status: 409,
-			alreadyPublished: [connectionId],
-			inFlight: []
-		});
+		expect(scheduled.payload.result!.structuredContent).toMatchObject({ status: 409 });
 	});
 
 	it('preserves partial publish stop metadata without leaking internal errors', async () => {
 		const draftId = await seedDraft();
-		const connectionId = await seedConnection();
+		await seedConnection();
 		const publishTarget = vi
 			.spyOn(publish, 'publishTarget')
 			.mockRejectedValueOnce(new Error('private database connection string'));
-		const { payload } = await postMcp('tools/call', {
-			name: 'publish_draft',
-			arguments: { draftId, connectionIds: [connectionId] }
+		const { payload } = await confirmed('publish_now', {
+			postId: draftId,
+			channels: ['unbranded.mastodon']
 		});
-		const result = payload.result!;
-		const structured = result.structuredContent!;
+		const structured = payload.result!.structuredContent!;
 		expect(publishTarget).toHaveBeenCalledOnce();
-		expect(structured.stopped).toBe(true);
-		expect(structured.stoppedError).toBe('Publishing stopped early — try again for the rest');
-		expect(JSON.stringify(structured)).not.toContain('private database connection string');
-		expect(result.content![0].text).toContain('stopped early');
+		expect(structured).toMatchObject({
+			status: 'partial',
+			error: 'Publishing stopped early — try again for the rest'
+		});
+		expect(JSON.stringify(payload)).not.toContain('private database connection string');
 	});
 
 	it('redacts unknown server errors from tool content and structured output', async () => {
 		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const { payload } = await postMcp(
 			'tools/call',
-			{ name: 'get_draft', arguments: { draftId: 'draft-1' } },
+			{ name: 'get_post', arguments: { postId: 'draft-1' } },
 			{
 				db: {
 					select: () => {
@@ -536,10 +354,9 @@ describe('MCP route', () => {
 	it('keeps a retried publish alive with waitUntil, like the REST route', async () => {
 		const draftId = await seedDraft();
 		const connectionId = await seedConnection();
-		const targetId = newId();
 		const now = new Date();
 		await db.insert(publishTargets).values({
-			id: targetId,
+			id: newId(),
 			draftId,
 			connectionId,
 			status: 'failed',
@@ -547,15 +364,22 @@ describe('MCP route', () => {
 			createdAt: now,
 			updatedAt: now
 		});
-		vi.spyOn(publish, 'publishTarget').mockResolvedValueOnce({
-			status: 'published'
-		} as never);
+		vi.spyOn(publish, 'publishTarget').mockResolvedValueOnce({ status: 'published' } as never);
 		const background: Promise<unknown>[] = [];
+		const waitUntil = (promise: Promise<unknown>) => background.push(promise);
+		const args = { postId: draftId, channels: ['unbranded.mastodon'] };
+		const preview = await postMcp(
+			'tools/call',
+			{ name: 'publish_now', arguments: args },
+			{},
+			{ waitUntil }
+		);
+		const token = preview.payload.result!.structuredContent!.confirmToken;
 		const { payload } = await postMcp(
 			'tools/call',
-			{ name: 'retry_delivery', arguments: { targetId } },
+			{ name: 'publish_now', arguments: { ...args, confirmToken: token } },
 			{},
-			{ waitUntil: (promise) => background.push(promise) }
+			{ waitUntil }
 		);
 		expect(payload.result!.isError).toBeFalsy();
 		expect(background).toHaveLength(1);

@@ -299,14 +299,6 @@ export async function removeMedia(
 	return { ok: true as const };
 }
 
-export async function listMedia(ctx: OperationContext, userId: string, draftId: string) {
-	const draft = await ownDraft(ctx, draftId, userId);
-	if (!draft) invalid('Not found', 404);
-	const rows = await ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
-	rows.sort((a, b) => a.segmentIndex - b.segmentIndex || a.sortOrder - b.sortOrder);
-	return { media: rows.map(serializeMedia) };
-}
-
 async function videoRow(ctx: OperationContext, draftId: string, mediaId: string | null) {
 	if (!mediaId) return null;
 	const row = await first(
@@ -550,13 +542,13 @@ export async function attachBase64Image(
 	const bytes = base64Payload(
 		input.data,
 		BASE64_MAX_BYTES,
-		`Inline images are limited to ${BASE64_MAX_BYTES / 1_000_000}MB; use attach_media_from_url or create_media_upload for larger files`
+		`Inline images are limited to ${BASE64_MAX_BYTES / 1_000_000}MB; use attach_media with a url, or media_upload, for larger files`
 	);
 	const mime = detectImageMime(bytes);
 	if (!mime) {
 		invalid(
 			isMp4(bytes)
-				? 'Videos cannot be sent inline; use attach_media_from_url or create_media_upload'
+				? 'Videos cannot be sent inline; use attach_media with a url, or media_upload'
 				: 'data is not a PNG, JPEG, WebP or GIF image'
 		);
 	}
@@ -657,7 +649,7 @@ export async function coverBytes(
 
 function tooLargeForUrl(limit: number): never {
 	invalid(
-		`This file is larger than ${Math.floor(limit / 1_000_000)}MB, the most one request can fetch here; upload it with create_media_upload instead`,
+		`This file is larger than ${Math.floor(limit / 1_000_000)}MB, the most one request can fetch here; upload it with media_upload (action start) instead`,
 		413,
 		{ useUploadSession: true, maxBytes: limit }
 	);
@@ -880,7 +872,7 @@ export async function createMediaUpload(
 			response: '{ "partNumber": n, "etag": "…" }'
 		},
 		complete: {
-			tool: 'complete_media_upload',
+			tool: 'media_upload (action complete)',
 			method: 'POST',
 			url: `${base}/complete`,
 			body: { ...upload, parts: '[{ "partNumber": 1, "etag": "…" }, …] in order' }

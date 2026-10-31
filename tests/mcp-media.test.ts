@@ -202,7 +202,7 @@ describe('get_platform_requirements', () => {
 		const one = data(
 			await client.callTool({
 				name: 'get_platform_requirements',
-				arguments: { connectionIds: [mastodon] }
+				arguments: { channels: [mastodon] }
 			})
 		);
 		expect((one.platforms as unknown[]).length).toBe(1);
@@ -225,7 +225,7 @@ describe('get_platform_requirements', () => {
 	});
 });
 
-describe('attach_media_from_url', () => {
+describe('attach_media by URL', () => {
 	it('fetches an image, trusts its bytes over its Content-Type, and attaches it with alt text', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft();
@@ -235,7 +235,7 @@ describe('attach_media_from_url', () => {
 				new Response(new Response(png).body, { headers: { 'content-type': 'text/plain' } })
 		});
 		const result = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/photo', altText: 'A harbour' }
 		});
 		expect(result.isError).toBeFalsy();
@@ -247,8 +247,7 @@ describe('attach_media_from_url', () => {
 			segmentIndex: 0
 		});
 		expect(calls).toEqual(['https://cdn.example.com/photo']);
-		const listed = data(await client.callTool({ name: 'list_media', arguments: { draftId } }));
-		const [item] = listed.media as Array<{ storageKey: string }>;
+		const [item] = await db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
 		expect(await media.get(item.storageKey)).toEqual(png);
 	});
 
@@ -279,7 +278,7 @@ describe('attach_media_from_url', () => {
 				)
 		});
 		const result = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/clip.mp4' }
 		});
 		expect(result.isError).toBeFalsy();
@@ -311,29 +310,28 @@ describe('attach_media_from_url', () => {
 			'http://localhost/a.png'
 		]) {
 			const refused = await client.callTool({
-				name: 'attach_media_from_url',
+				name: 'attach_media',
 				arguments: { draftId, url }
 			});
 			expect(refused.isError, url).toBe(true);
 			expect(data(refused)).toMatchObject({ status: 400, error: 'URL host not allowed' });
 		}
 		const notHttp = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'ftp://public.example/a.png' }
 		});
 		expect(data(notHttp)).toMatchObject({ error: 'Only http(s) URLs are supported' });
 		expect(calls).toEqual([]);
 		for (const url of ['https://public.example/a.png', 'https://public.example/b.png']) {
 			const redirected = await client.callTool({
-				name: 'attach_media_from_url',
+				name: 'attach_media',
 				arguments: { draftId, url }
 			});
 			expect(data(redirected)).toMatchObject({ status: 400, error: 'URL host not allowed' });
 		}
 		// Each redirect was refused before the server followed it.
 		expect(calls).toEqual(['https://public.example/a.png', 'https://public.example/b.png']);
-		const listed = data(await client.callTool({ name: 'list_media', arguments: { draftId } }));
-		expect(listed.media).toEqual([]);
+		expect(await db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId))).toEqual([]);
 	});
 
 	it('refuses an oversized image by its header or while it streams, and a file of the wrong type', async () => {
@@ -359,19 +357,19 @@ describe('attach_media_from_url', () => {
 				new Response('<!doctype html><html></html>', { headers: { 'content-type': 'text/html' } })
 		});
 		const declared = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/declared.png' }
 		});
 		expect(data(declared)).toMatchObject({ status: 413, error: 'Image must be 16MB or smaller' });
 		const endless = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/endless.png' }
 		});
 		expect(data(endless)).toMatchObject({ status: 413, error: 'Image must be 16MB or smaller' });
 		// Cut off just past the cap, not read to the end.
 		expect(pulled).toBeLessThan(20);
 		const html = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/page' }
 		});
 		expect(data(html).status).toBe(400);
@@ -392,24 +390,24 @@ describe('attach_media_from_url', () => {
 				})
 		});
 		const result = await client.callTool({
-			name: 'attach_media_from_url',
+			name: 'attach_media',
 			arguments: { draftId, url: 'https://cdn.example.com/long.mp4' }
 		});
 		expect(result.isError).toBe(true);
 		expect(data(result)).toMatchObject({ status: 413, useUploadSession: true });
-		expect(String(data(result).error)).toContain('create_media_upload');
+		expect(String(data(result).error)).toContain('media_upload');
 	});
 });
 
-describe('attach_media_base64', () => {
+describe('attach_media inline', () => {
 	it('attaches a small image to a thread segment and refuses what does not belong inline', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft('first\n---\nsecond');
 		const ok = await client.callTool({
-			name: 'attach_media_base64',
+			name: 'attach_media',
 			arguments: {
 				draftId,
-				data: `data:image/png;base64,${base64(pngBytes(800, 600))}`,
+				base64: `data:image/png;base64,${base64(pngBytes(800, 600))}`,
 				segmentIndex: 1,
 				altText: 'Second card'
 			}
@@ -421,25 +419,25 @@ describe('attach_media_base64', () => {
 		});
 
 		const big = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: base64(pngBytes(10, 10, 3_100_000)) }
+			name: 'attach_media',
+			arguments: { draftId, base64: base64(pngBytes(10, 10, 3_100_000)) }
 		});
 		expect(data(big)).toMatchObject({ status: 413 });
-		expect(String(data(big).error)).toMatch(/3MB.*attach_media_from_url or create_media_upload/);
+		expect(String(data(big).error)).toMatch(/3MB.*attach_media with a url, or media_upload/);
 
 		const video = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: base64(buildMp4()) }
+			name: 'attach_media',
+			arguments: { draftId, base64: base64(buildMp4()) }
 		});
 		expect(String(data(video).error)).toMatch(/Videos cannot be sent inline/);
 		const junk = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: '%%%' }
+			name: 'attach_media',
+			arguments: { draftId, base64: '%%%' }
 		});
-		expect(data(junk)).toMatchObject({ error: 'data is not valid base64' });
+		expect(String(data(junk).error)).toMatch(/not valid base64/);
 		const pastEnd = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: base64(pngBytes()), segmentIndex: 5 }
+			name: 'attach_media',
+			arguments: { draftId, base64: base64(pngBytes()), segmentIndex: 5 }
 		});
 		expect(String(data(pastEnd).error)).toMatch(/past the last segment/);
 	});
@@ -449,18 +447,19 @@ describe('attach_media_base64', () => {
 		const draftId = await seedDraft();
 		for (let i = 0; i < 4; i++) {
 			const r = await client.callTool({
-				name: 'attach_media_base64',
-				arguments: { draftId, data: base64(pngBytes()) }
+				name: 'attach_media',
+				arguments: { draftId, base64: base64(pngBytes()) }
 			});
 			expect(r.isError).toBeFalsy();
 		}
 		const fifth = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: base64(pngBytes()) }
+			name: 'attach_media',
+			arguments: { draftId, base64: base64(pngBytes()) }
 		});
 		expect(data(fifth)).toMatchObject({ error: 'Max 4 images per post' });
-		const listed = data(await client.callTool({ name: 'list_media', arguments: { draftId } }));
-		expect(listed.media).toHaveLength(4);
+		const post = data(await client.callTool({ name: 'get_post', arguments: { postId: draftId } }))
+			.post as { media: unknown[] };
+		expect(post.media).toHaveLength(4);
 	});
 });
 
@@ -470,8 +469,8 @@ describe('upload session', () => {
 		const draftId = await seedDraft();
 		const video = buildMp4({ durationMs: 20_000, mdatBytes: UPLOAD_PART_BYTES + 5000 });
 		const created = await client.callTool({
-			name: 'create_media_upload',
-			arguments: { draftId, size: video.length }
+			name: 'media_upload',
+			arguments: { action: 'start', draftId, size: video.length }
 		});
 		expect(created.isError).toBeFalsy();
 		const session = data(created) as {
@@ -505,35 +504,52 @@ describe('upload session', () => {
 			etags.push(await response.json());
 		}
 		const done = await client.callTool({
-			name: 'complete_media_upload',
-			arguments: { draftId, upload: session.upload, parts: etags, altText: 'Clip' }
+			name: 'media_upload',
+			arguments: {
+				action: 'complete',
+				draftId,
+				upload: session.upload,
+				parts: etags,
+				altText: 'Clip'
+			}
 		});
 		expect(done.isError).toBeFalsy();
-		const stored = data(done).media as { id: string; size: number; altText: string };
+		const stored = data(done).media as { mediaId: string; size: number; altText: string };
 		expect(stored).toMatchObject({ size: video.length, altText: 'Clip' });
 
 		const cover = await client.callTool({
-			name: 'set_video_cover',
-			arguments: { draftId, mediaId: stored.id, data: base64(jpegBytes()), atMs: 1500 }
+			name: 'edit_media',
+			arguments: {
+				draftId,
+				mediaId: stored.mediaId,
+				action: 'set_cover',
+				coverBase64: base64(jpegBytes()),
+				atMs: 1500
+			}
 		});
 		expect(data(cover).media).toMatchObject({
 			meta: expect.objectContaining({ cover: expect.objectContaining({ atMs: 1500 }) })
 		});
 		const notJpeg = await client.callTool({
-			name: 'set_video_cover',
-			arguments: { draftId, mediaId: stored.id, data: base64(pngBytes()) }
+			name: 'edit_media',
+			arguments: {
+				draftId,
+				mediaId: stored.mediaId,
+				action: 'set_cover',
+				coverBase64: base64(pngBytes())
+			}
 		});
 		expect(data(notJpeg)).toMatchObject({ error: 'Cover must be a JPEG' });
 		const uncovered = await client.callTool({
-			name: 'remove_video_cover',
-			arguments: { draftId, mediaId: stored.id }
+			name: 'edit_media',
+			arguments: { draftId, mediaId: stored.mediaId, action: 'remove_cover' }
 		});
 		expect((data(uncovered).media as { meta: Record<string, unknown> }).meta.cover).toBeUndefined();
 
 		// The card now holds a video, so nothing else can join it.
 		const image = await client.callTool({
-			name: 'attach_media_base64',
-			arguments: { draftId, data: base64(pngBytes()) }
+			name: 'attach_media',
+			arguments: { draftId, base64: base64(pngBytes()) }
 		});
 		expect(data(image)).toMatchObject({ error: 'Videos cannot mix with images on the same post' });
 	});
@@ -542,56 +558,66 @@ describe('upload session', () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft();
 		const big = await client.callTool({
-			name: 'create_media_upload',
-			arguments: { draftId, size: 300_000_001 }
+			name: 'media_upload',
+			arguments: { action: 'start', draftId, size: 300_000_001 }
 		});
 		expect(data(big)).toMatchObject({ status: 413 });
 		const created = data(
-			await client.callTool({ name: 'create_media_upload', arguments: { draftId, size: 1000 } })
+			await client.callTool({
+				name: 'media_upload',
+				arguments: { action: 'start', draftId, size: 1000 }
+			})
 		);
 		const upload = { ...(created.upload as Record<string, unknown>), token: 'f'.repeat(64) };
 		const forged = await client.callTool({
-			name: 'complete_media_upload',
-			arguments: { draftId, upload, parts: [{ partNumber: 1, etag: 'x' }] }
+			name: 'media_upload',
+			arguments: { action: 'complete', draftId, upload, parts: [{ partNumber: 1, etag: 'x' }] }
 		});
 		expect(data(forged)).toMatchObject({ status: 403, error: 'Bad upload token' });
 		const aborted = await client.callTool({
-			name: 'abort_media_upload',
-			arguments: { draftId, upload: created.upload }
+			name: 'media_upload',
+			arguments: { action: 'abort', draftId, upload: created.upload }
 		});
-		expect(data(aborted)).toEqual({ ok: true });
+		expect(data(aborted)).toMatchObject({ status: 'aborted' });
 	});
 });
 
-describe('update_media and remove_media', () => {
+describe('edit_media', () => {
 	it('changes alt text, moves an image between segments, and removes it with its file', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft('one\n---\ntwo');
 		const attached = data(
 			await client.callTool({
-				name: 'attach_media_base64',
-				arguments: { draftId, data: base64(pngBytes()) }
+				name: 'attach_media',
+				arguments: { draftId, base64: base64(pngBytes()) }
 			})
-		).media as { id: string; storageKey: string };
+		).media as { mediaId: string };
+		const [row] = await db.select().from(draftMedia).where(eq(draftMedia.id, attached.mediaId));
 		const updated = await client.callTool({
-			name: 'update_media',
-			arguments: { draftId, mediaId: attached.id, altText: 'Now described', segmentIndex: 1 }
+			name: 'edit_media',
+			arguments: {
+				draftId,
+				mediaId: attached.mediaId,
+				action: 'update',
+				altText: 'Now described',
+				segmentIndex: 1
+			}
 		});
 		expect(data(updated).media).toMatchObject({ altText: 'Now described', segmentIndex: 1 });
 		const nothing = await client.callTool({
-			name: 'update_media',
-			arguments: { draftId, mediaId: attached.id }
+			name: 'edit_media',
+			arguments: { draftId, mediaId: attached.mediaId, action: 'update' }
 		});
 		expect(data(nothing)).toMatchObject({ error: 'Nothing to update' });
 		expect(
 			data(
 				await client.callTool({
-					name: 'remove_media',
-					arguments: { draftId, mediaId: attached.id }
+					name: 'edit_media',
+					arguments: { draftId, mediaId: attached.mediaId, action: 'remove' }
 				})
 			)
-		).toEqual({ ok: true });
-		expect(await media.get(attached.storageKey)).toBeNull();
+		).toMatchObject({ status: 'removed' });
+		expect(await media.get(row.storageKey)).toBeNull();
 	});
 });
 
@@ -601,19 +627,23 @@ describe('scopes', () => {
 		const draftId = await seedDraft();
 		const fetchSpy = stubFetch({});
 		expect(
-			(await client.callTool({ name: 'list_media', arguments: { draftId } })).isError
+			(await client.callTool({ name: 'get_post', arguments: { postId: draftId } })).isError
 		).toBeFalsy();
 		for (const [name, args] of [
-			['attach_media_from_url', { draftId, url: 'https://cdn.example.com/a.png' }],
-			['attach_media_base64', { draftId, data: base64(pngBytes()) }],
-			['create_media_upload', { draftId, size: 1000 }],
-			['update_media', { draftId, mediaId: 'm', altText: 'x' }],
-			['remove_media', { draftId, mediaId: 'm' }],
-			['set_video_cover', { draftId, mediaId: 'm', data: base64(jpegBytes()) }]
+			['attach_media', { draftId, url: 'https://cdn.example.com/a.png' }],
+			['attach_media', { draftId, base64: base64(pngBytes()) }],
+			['media_upload', { action: 'start', draftId, size: 1000 }],
+			['edit_media', { draftId, mediaId: 'm', action: 'update', altText: 'x' }],
+			['edit_media', { draftId, mediaId: 'm', action: 'remove' }],
+			[
+				'edit_media',
+				{ draftId, mediaId: 'm', action: 'set_cover', coverBase64: base64(jpegBytes()) }
+			]
 		] as const) {
 			const refused = await client.callTool({ name, arguments: args });
 			expect(refused.isError, name).toBe(true);
-			expect(data(refused), name).toMatchObject({ status: 403, error: 'Insufficient scope' });
+			expect(data(refused), name).toMatchObject({ status: 403 });
+			expect(text(refused), name).toContain('read-only');
 		}
 		expect(fetchSpy).toEqual([]);
 		expect(await db.select().from(draftMedia)).toEqual([]);
@@ -621,7 +651,7 @@ describe('scopes', () => {
 });
 
 describe('validation that explains', () => {
-	it('reports each account’s media problems, with counts, through validate_post', async () => {
+	it('reports each channel’s media problems, with counts, through validate_post', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft('one\n---\ntwo');
 		const instagram = await seedConnection('instagram', 'shop');
@@ -637,14 +667,17 @@ describe('validation that explains', () => {
 			await seedMedia(draftId, { mime: 'image/png', size: 100_000, segmentIndex: 1 });
 		const result = await client.callTool({
 			name: 'validate_post',
-			arguments: { draftId, connectionIds: [instagram, linkedin, bluesky] }
+			arguments: {
+				draftId,
+				channels: ['unbranded.instagram', 'unbranded.linkedin', bluesky]
+			}
 		});
 		expect(result.isError).toBeFalsy();
-		const check = data(result).draft as {
+		const check = data(result) as {
 			ok: boolean;
 			problems: string[];
-			accounts: Array<{
-				connectionId: string;
+			channels: Array<{
+				channel: { connectionId: string; key: string };
 				ok: boolean;
 				issues: Array<Record<string, unknown>>;
 			}>;
@@ -657,7 +690,7 @@ describe('validation that explains', () => {
 				'Bluesky @pat.bsky.social (post 1): Bluesky allows max 2MB per image'
 			])
 		);
-		const linkedinIssues = check.accounts.find((a) => a.connectionId === linkedin)!.issues;
+		const linkedinIssues = check.channels.find((a) => a.channel.connectionId === linkedin)!.issues;
 		expect(linkedinIssues).toContainEqual(
 			expect.objectContaining({
 				kind: 'media',
@@ -673,46 +706,50 @@ describe('validation that explains', () => {
 		const videoCheck = data(
 			await client.callTool({
 				name: 'validate_post',
-				arguments: { draftId: videoDraft, connectionIds: [mastodon] }
+				arguments: { draftId: videoDraft, channels: [mastodon] }
 			})
-		).draft as { problems: string[] };
+		) as { problems: string[] };
 		expect(videoCheck.problems).toEqual([
 			'Mastodon @pat@tiny.example: Mastodon takes videos up to 40 MB — this one is 50 MB'
 		]);
 		const emptyCheck = data(
 			await client.callTool({
 				name: 'validate_post',
-				arguments: { draftId: empty, connectionIds: [instagram] }
+				arguments: { draftId: empty, channels: [instagram] }
 			})
-		).draft as { problems: string[] };
+		) as { problems: string[] };
 		expect(emptyCheck.problems).toEqual(['Instagram @shop: Instagram needs a photo or video']);
 		const fits = data(
 			await client.callTool({
 				name: 'validate_post',
-				arguments: { draftId: empty, connectionIds: [mastodon] }
+				arguments: { draftId: empty, channels: [mastodon] }
 			})
 		);
-		expect(fits.draft).toMatchObject({ ok: true, problems: [] });
-		expect(fits.graphemes).toBe('No media at all'.length);
+		expect(fits).toMatchObject({ ok: true, problems: [] });
+		const textOnly = data(
+			await client.callTool({
+				name: 'validate_post',
+				arguments: { text: 'No media at all', channels: ['unbranded.instagram'] }
+			})
+		) as { problems: string[] };
+		expect(textOnly.problems).toEqual(['unbranded.instagram: Instagram needs a photo or video']);
 	});
 
 	it('refuses publish and schedule before anything is sent, listing every problem', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft('A clip');
-		const mastodon = await seedConnection('mastodon', 'pat@tiny.example', {
-			videoSizeLimit: 40_000_000
-		});
-		const instagram = await seedConnection('instagram', 'shop');
+		await seedConnection('mastodon', 'pat@tiny.example', { videoSizeLimit: 40_000_000 });
+		await seedConnection('instagram', 'shop');
 		await seedMedia(draftId, { mime: 'video/mp4', size: 50_000_000, width: 1920, height: 1080 });
 		await seedMedia(draftId, { mime: 'video/mp4', size: 1_000_000, segmentIndex: 0 });
 		const publishSpy = vi.fn();
 		vi.stubGlobal('fetch', publishSpy);
 		const published = await client.callTool({
-			name: 'publish_draft',
-			arguments: { draftId, connectionIds: [mastodon, instagram] }
+			name: 'publish_now',
+			arguments: { postId: draftId, channels: ['unbranded.mastodon', 'unbranded.instagram'] }
 		});
 		expect(published.isError).toBe(true);
-		const refusal = data(published) as { status: number; problems: string[]; accounts: unknown[] };
+		const refusal = data(published) as { status: number; problems: string[] };
 		expect(refusal.status).toBe(400);
 		expect(refusal.problems).toEqual(
 			expect.arrayContaining([
@@ -720,19 +757,24 @@ describe('validation that explains', () => {
 				'Instagram @shop: Instagram posts a video on its own, as a Reel'
 			])
 		);
-		expect(refusal.accounts).toHaveLength(2);
-		expect(text(published).split('\n')).toEqual(refusal.problems);
+		expect(text(published)).toContain(refusal.problems.join('\n'));
 		const scheduled = await client.callTool({
-			name: 'schedule_draft',
+			name: 'schedule_posts',
 			arguments: {
-				draftId,
-				connectionIds: [mastodon],
-				runAt: new Date(Date.now() + 3_600_000).toISOString()
+				posts: [
+					{
+						draftId,
+						channels: ['unbranded.mastodon'],
+						runAt: new Date(Date.now() + 3_600_000).toISOString()
+					}
+				]
 			}
 		});
 		expect(data(scheduled)).toMatchObject({
 			status: 400,
-			problems: ['Mastodon @pat@tiny.example: Only one video per post']
+			problems: [
+				'posts[0] unbranded.mastodon (Mastodon @pat@tiny.example): Only one video per post'
+			]
 		});
 		expect(publishSpy).not.toHaveBeenCalled();
 		expect(
