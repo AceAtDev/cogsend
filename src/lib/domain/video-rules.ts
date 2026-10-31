@@ -84,7 +84,13 @@ function megabytes(bytes: number): string {
 	return `${Math.round(bytes / 1_000_000)} MB`;
 }
 
-const CODEC_NAMES: Record<string, string> = { avc: 'H.264', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' };
+const CODEC_NAMES: Record<string, string> = {
+	avc: 'H.264',
+	hevc: 'HEVC',
+	av1: 'AV1',
+	vp8: 'VP8',
+	vp9: 'VP9'
+};
 
 export function codecName(codec: string): string {
 	return CODEC_NAMES[codec] ?? codec;
