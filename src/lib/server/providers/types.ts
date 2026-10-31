@@ -1,5 +1,6 @@
 import type { PlatformId } from '#lib/domain/platforms.js';
 import { PROCESSING_MARK } from '#lib/domain/video-rules.js';
+import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
 import type { PublicMediaVariant } from '../public-media';
 export type { PlatformId } from '#lib/domain/platforms.js';
 export { PLATFORM_IDS, isPlatformId } from '#lib/domain/platforms.js';
@@ -47,6 +48,8 @@ export interface NormalizedPost {
 			multiple?: boolean;
 			hideTotals?: boolean;
 		};
+		/** TikTok: what the creator chose for this post to this account. */
+		tiktok?: TiktokPostChoice;
 	};
 }
 
@@ -118,16 +121,8 @@ export interface ConnectionMeta {
 	/** Instagram: `Business` or `Media_Creator`, the only kinds that can post. */
 	igAccountType?: string;
 	tiktokOpenId?: string;
-	/** TikTok: who may see a post, chosen on the Accounts page. Absent means
-	 *  SELF_ONLY: TikTok's guidelines leave the choice to the creator, so
-	 *  nothing goes out publicly unless they picked it. */
-	tiktokPrivacy?: string;
-	/** TikTok: what the operator allows on posts. Absent is false, as TikTok's
-	 *  guidelines want these unticked until the creator ticks them. */
-	tiktokAllowComment?: boolean;
-	tiktokAllowDuet?: boolean;
-	tiktokAllowStitch?: boolean;
-	/** TikTok: what creator_info last reported for the account. */
+	/** TikTok: what creator_info last reported for the account. Who may see a
+	 *  post, and what it allows, are chosen per post (NormalizedPost.options). */
 	tiktokPrivacyOptions?: string[];
 	tiktokMaxVideoSec?: number;
 	tiktokCommentDisabled?: boolean;
@@ -398,6 +393,10 @@ export interface PlatformProvider {
 			/** A public URL for the stored object, or for the JPEG kept beside
 			 *  it (`jpeg`: an image's JPEG copy; `cover`: a video's cover). */
 			mediaUrlFor?: (storageKey: string, variant?: PublicMediaVariant) => Promise<string> | string;
+			/** A URL for the stored object on an address the operator verified
+			 *  with the platform (TikTok's URL properties), or null when there
+			 *  is none and the bytes have to be sent instead. */
+			verifiedMediaUrlFor?: (storageKey: string) => Promise<string | null> | string | null;
 			checkpoint?: (state: PublishCheckpoint) => Promise<void> | void;
 			/** Videos are read through this; they are never in `media[].bytes`. */
 			mediaReader?: MediaReader;

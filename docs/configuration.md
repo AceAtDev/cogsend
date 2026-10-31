@@ -22,17 +22,20 @@ cannot reach anything except the tick (see [Scheduling](scheduling.md)).
 
 **Optional.**
 
-| Secret                                          | What it enables                                               |
-| ----------------------------------------------- | ------------------------------------------------------------- |
-| `API_TOKEN`                                     | a machine bearer for the API — prefer a personal key instead  |
-| `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | LinkedIn ([OAuth apps](oauth-apps.md))                        |
-| `THREADS_APP_ID` / `THREADS_APP_SECRET`         | Threads                                                       |
-| `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET`     | Instagram                                                     |
-| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`    | TikTok                                                        |
-| `X_CLIENT_ID` / `X_CLIENT_SECRET`               | X                                                             |
-| `RESEND_API_KEY`, `NOTIFY_EMAIL`, `NOTIFY_FROM` | failure digests by email                                      |
-| `MEDIA_PUBLIC_BASE_URL`                         | serving Meta's crawler from a public media origin (see below) |
-| `SUBREQUEST_LIMIT`                              | publishing more per tick on a paid Workers plan (see below)   |
+| Secret                                          | What it enables                                                                   |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| `API_TOKEN`                                     | a machine bearer for the API — prefer a personal key instead                      |
+| `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | LinkedIn ([OAuth apps](oauth-apps.md))                                            |
+| `THREADS_APP_ID` / `THREADS_APP_SECRET`         | Threads                                                                           |
+| `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET`     | Instagram                                                                         |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`    | TikTok                                                                            |
+| `TIKTOK_SITE_VERIFICATION`                      | TikTok's URL verification ([OAuth apps](oauth-apps.md#tiktok))                    |
+| `LEGAL_CONTACT_EMAIL`                           | the contact address on the [legal pages](oauth-apps.md#tiktok)                    |
+| `PUBLIC_HOMEPAGE`                               | a public page at `/` for signed-out visitors ([OAuth apps](oauth-apps.md#tiktok)) |
+| `X_CLIENT_ID` / `X_CLIENT_SECRET`               | X                                                                                 |
+| `RESEND_API_KEY`, `NOTIFY_EMAIL`, `NOTIFY_FROM` | failure digests by email                                                          |
+| `MEDIA_PUBLIC_BASE_URL`                         | serving Meta's crawler from a public media origin (see below)                     |
+| `SUBREQUEST_LIMIT`                              | publishing more per tick on a paid Workers plan (see below)                       |
 
 The OAuth client ids and secrets can also be entered in the accounts dialog instead, where they are stored in D1, encrypted with `APP_ENCRYPTION_KEY`; a Worker secret, when set, takes precedence over the dialog's value ([OAuth apps](oauth-apps.md)).
 

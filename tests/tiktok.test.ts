@@ -21,7 +21,7 @@ import {
 	type PlatformProvider,
 	type PublishPending
 } from '#lib/server/providers/types.js';
-import { tiktokPrivacyChoices, tiktokPrivacyOf } from '#lib/domain/tiktok.js';
+import { EMPTY_TIKTOK_CHOICE, type TiktokPostChoice } from '#lib/domain/tiktok.js';
 
 type Opts = NonNullable<Parameters<PlatformProvider['publish']>[4]>;
 
@@ -167,10 +167,20 @@ function publish(
 	video: MediaAttachment,
 	store: ReturnType<typeof createTestMedia>,
 	n: ReturnType<typeof tiktokNetwork>,
-	extra: Partial<Opts> & { meta?: ConnectionMeta; text?: string } = {}
+	extra: Partial<Opts> & {
+		meta?: ConnectionMeta;
+		text?: string;
+		choice?: Partial<TiktokPostChoice> | null;
+	} = {}
 ) {
-	const { meta, text = 'Behind the scenes #studio', ...opts } = extra;
-	return tiktokProvider.publish({ text, media: [video] }, creds, meta, n.fetchImpl, {
+	const { meta, text = 'Behind the scenes #studio', choice = {}, ...opts } = extra;
+	// Every post carries the creator's own choice; SELF_ONLY stands in for one.
+	const tiktok =
+		choice === null
+			? undefined
+			: { ...EMPTY_TIKTOK_CHOICE, privacy: 'SELF_ONLY' as const, ...choice };
+	const content = { text, media: [video], options: tiktok ? { tiktok } : undefined };
+	return tiktokProvider.publish(content, creds, meta, n.fetchImpl, {
 		mediaReader: store as never,
 		callsLeft: n.callsLeft,
 		...opts
@@ -413,23 +423,6 @@ describe('TikTok validation', () => {
 	});
 });
 
-describe('TikTok privacy settings', () => {
-	it('posts as Only me until the creator picks otherwise', () => {
-		expect(tiktokPrivacyOf(undefined)).toBe('SELF_ONLY');
-		expect(tiktokPrivacyOf({ tiktokPrivacy: 'nonsense' })).toBe('SELF_ONLY');
-		expect(tiktokPrivacyOf({ tiktokPrivacy: 'PUBLIC_TO_EVERYONE' })).toBe('PUBLIC_TO_EVERYONE');
-	});
-
-	it('offers what creator_info reported, or every level before it was read', () => {
-		expect(tiktokPrivacyChoices({})).toHaveLength(4);
-		expect(
-			tiktokPrivacyChoices({
-				tiktokPrivacyOptions: ['FOLLOWER_OF_CREATOR', 'MUTUAL_FOLLOW_FRIENDS', 'SELF_ONLY']
-			})
-		).toEqual(['SELF_ONLY', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR']);
-	});
-});
-
 describe('TikTok chunk plan', () => {
 	const MB = 1_000_000;
 
@@ -479,11 +472,7 @@ describe('TikTok publish', () => {
 		});
 		const checkpoints: string[][] = [];
 		const result = await publish(video, store, n, {
-			meta: {
-				tiktokPrivacy: 'PUBLIC_TO_EVERYONE',
-				tiktokAllowComment: true,
-				tiktokAllowStitch: true
-			},
+			choice: { privacy: 'PUBLIC_TO_EVERYONE', allowComment: true, allowStitch: true },
 			checkpoint: (c) => {
 				checkpoints.push(c.segmentIds);
 			}
@@ -497,6 +486,8 @@ describe('TikTok publish', () => {
 					disable_duet: true,
 					// Ticked here, but turned off in TikTok: it stays off.
 					disable_stitch: true,
+					brand_content_toggle: false,
+					brand_organic_toggle: false,
 					title: 'Behind the scenes #studio'
 				},
 				source_info: {
@@ -521,7 +512,7 @@ describe('TikTok publish', () => {
 		expect(checkpoints).toEqual([['7301234567890123456']]);
 	});
 
-	it('posts as Only me, with interactions off, when nothing was chosen', async () => {
+	it('keeps interactions off unless they were ticked', async () => {
 		const { store, video } = await storedVideo(100);
 		const n = tiktokNetwork();
 		const result = await publish(video, store, n, { text: '' });
@@ -529,7 +520,9 @@ describe('TikTok publish', () => {
 			privacy_level: 'SELF_ONLY',
 			disable_comment: true,
 			disable_duet: true,
-			disable_stitch: true
+			disable_stitch: true,
+			brand_content_toggle: false,
+			brand_organic_toggle: false
 		});
 		// A private post gets no public id: TikTok's publish id stands in, with no link.
 		expect(result).toEqual({ remotePostId: 'v_pub_file~v2.1', remoteUrl: undefined });
@@ -745,7 +738,7 @@ describe('TikTok publish', () => {
 			})
 		});
 		const err = await failure(
-			publish(video, store, n, { meta: { tiktokPrivacy: 'PUBLIC_TO_EVERYONE' } })
+			publish(video, store, n, { choice: { privacy: 'PUBLIC_TO_EVERYONE' } })
 		);
 		expect(err.code).toBe('forbidden');
 		expect(err.message).toMatch(/does not offer “Everyone”/);
@@ -764,7 +757,9 @@ describe('TikTok publish', () => {
 			creator: Response.json({ data: { ...CREATOR, max_video_post_duration_sec: 180 }, error: OK })
 		});
 		const err = await failure(publish(video, store, n));
-		expect(err.message).toBe('TikTok lets this account post videos up to 3:00 — this one is 3:20');
+		expect(err.message).toBe(
+			'TikTok lets this account post videos up to 3:00, and this one is 3:20'
+		);
 		expect(n.record.inits).toHaveLength(0);
 	});
 

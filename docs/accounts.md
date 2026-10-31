@@ -44,12 +44,7 @@ X accounts connected through [Zernio](zernio.md) stay at 280, since Zernio's X r
 
 ## TikTok post settings
 
-A TikTok account connected directly shows its post settings under its name. TikTok's guidelines leave these to the creator, so CogSend picks nothing wider on its own:
-
-- **Who can see posts**: **Only me**, **Friends**, **Followers** or **Everyone**, as TikTok offers them for the account (a private account has no Everyone, a public one no Followers). It starts at **Only me**.
-- **Comments**, **Duet** and **Stitch**: off until you tick them. One the creator turned off in the TikTok app is greyed out and stays off.
-
-The settings apply to every post to that account, and a reconnect keeps them. CogSend reads the account's options from TikTok when you connect it and when you press **Verify**, and checks them again before each upload, so a choice TikTok no longer offers fails with a message rather than going out differently. Posting means agreeing to TikTok's [Music Usage Confirmation](https://www.tiktok.com/legal/page/global/music-usage-confirmation/en), which the settings line links to.
+TikTok's guidelines want who can see a video, its comments, Duets and Stitches, and whether it is promotional chosen for each post, with nothing picked in advance, so a TikTok account has no settings here: the composer asks for them on every post ([Composer → TikTok](composer.md#tiktok)). A reconnect brings no defaults with it either.
 
 ## When an account needs reconnecting
 

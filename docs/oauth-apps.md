@@ -100,22 +100,89 @@ Posting to an account you own needs no App Review. The token lasts 60 days and C
 
 ### TikTok
 
-CogSend posts videos to TikTok through the Content Posting API's Direct Post, uploading the file from storage. Photo posts are not supported: TikTok pulls photos from a URL on a domain the app has verified with it, which an instance on `workers.dev` cannot do.
+CogSend posts videos to TikTok through the Content Posting API's Direct Post. Once TikTok has verified the instance's address (step 2), TikTok pulls the video from the instance, as its guidelines ask of a video already on a server; until then, or if TikTok says the address is not verified, CogSend uploads the file from storage instead. Photo posts are not supported.
 
-1. Sign in at [TikTok for Developers](https://developers.tiktok.com/apps/) and create an app under **Manage apps**. TikTok asks for an icon, a description, and the app's terms of service and privacy policy URLs; for apps created after 9 September 2024 it also asks you to verify those URLs.
-2. Add the **Login Kit** product, choose **Web**, and enter the redirect URI as the **Redirect URI**. It must be `https`.
-3. Add the **Content Posting API** product and turn on **Direct Post** in its configuration.
-4. Under scopes, add `user.info.basic` and `video.publish`. `video.publish` also covers the creator info and post status CogSend reads, so `video.upload` is not needed.
-5. Copy the **Client key** and **Client secret** from the app's page.
-6. Give CogSend the credentials in the accounts dialog, or set the secrets:
+1. Sign in at [TikTok for Developers](https://developers.tiktok.com/apps/) and create an app under **Manage apps**. TikTok asks for an icon, a name, a description, a website, and terms of service and privacy policy URLs; the instance serves all three (see [Website, terms and privacy policy](#website-terms-and-privacy-policy)).
+2. Verify the URLs: TikTok requires it for the terms, privacy policy and website of apps created after 9 September 2024, and for the address it pulls videos from. Click **URL properties**, then **Verify properties** in Production mode, choose **URL prefix**, and enter `{APP_URL}/` (the root, with the trailing slash, so it covers every URL above). Download the signature file, a `tiktok…txt` file, and give CogSend its name or contents as `TIKTOK_SITE_VERIFICATION`; the instance then serves it at `{APP_URL}/tiktok….txt`. Press **Verify** once it is set.
+
+   ```sh
+   npm run secrets:put TIKTOK_SITE_VERIFICATION
+   ```
+
+3. Add the **Login Kit** product, choose **Web**, and enter the redirect URI as the **Redirect URI**. It must be `https`.
+4. Add the **Content Posting API** product and turn on **Direct Post** in its configuration.
+5. Under scopes, add `user.info.basic` and `video.publish`, and nothing else. `video.publish` also covers the creator info and post status CogSend reads, so `video.upload` is not needed.
+6. Copy the **Client key** and **Client secret** from the app's page.
+7. Give CogSend the credentials in the accounts dialog, or set the secrets:
 
    ```sh
    npm run secrets:put TIKTOK_CLIENT_KEY TIKTOK_CLIENT_SECRET
    ```
 
+Verification by **Domain** works too, with a DNS TXT record TikTok shows you, but only for a domain whose DNS you control, such as a [custom domain](domains.md) on Cloudflare. A `*.workers.dev` address cannot be verified by domain, since nobody but Cloudflare controls that zone; verify it by URL prefix as above. TikTok's documentation does not mention `workers.dev`, so a prefix that will not verify there is reason to move to a custom domain.
+
 Until TikTok audits the app, it can post only to accounts set to private in TikTok, every post is visible to the creator alone (**Only me**), and at most five accounts can post through it in a day. A public account gets an error explaining this instead of a post. To post publicly, submit the app for TikTok's [Content Posting API audit](https://developers.tiktok.com/application/content-posting-api), which reviews how the app follows TikTok's [Content Sharing Guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines).
 
 The access token lasts a day and CogSend renews it before each publish and when you press **Verify**; the sign-in itself lasts a year, after which the account needs **Reconnect**.
+
+#### Website, terms and privacy policy
+
+TikTok's app review wants a website that is not a login page, with the terms of service and privacy policy linked on it in plain sight. The instance serves them:
+
+| TikTok field         | URL                       |
+| -------------------- | ------------------------- |
+| Website URL          | `{APP_URL}/`              |
+| Terms of Service URL | `{APP_URL}/legal/terms`   |
+| Privacy Policy URL   | `{APP_URL}/legal/privacy` |
+
+`/legal/terms` and `/legal/privacy` are always public. The website is opt-in, because it changes what a signed-out visitor sees at `/`: set `PUBLIC_HOMEPAGE=1` and `/` shows a page about the instance (what it does, how accounts connect and how TikTok is used), with links to both documents and an **Operator sign in** link, instead of sending visitors to the sign-in page; signed-in users still land on the dashboard. The pages take the instance name from **Settings → Instance**, the address from `APP_URL`, and the contact from `LEGAL_CONTACT_EMAIL`, a public address. Without one they say to contact the operator.
+
+```sh
+npm run secrets:put PUBLIC_HOMEPAGE LEGAL_CONTACT_EMAIL
+```
+
+The documents describe what CogSend stores and does; they are a factual starting point, not legal advice. If your use or your jurisdiction needs more, put your own documents elsewhere and give TikTok those URLs.
+
+#### The audit
+
+TikTok reviews the app from a demo video recorded in the sandbox, so set up a **Sandbox** for the app, add the TikTok account you will record with as a target user, and connect it from **Accounts**. The domain in the video must match the website URL. Every item of the guidelines' Required UX, and where CogSend meets it:
+
+| TikTok requirement                                                                                                                                         | In CogSend                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "API Clients must retrieve the latest creator info when rendering the Post to TikTok page."                                                                | The composer's TikTok panel reads `creator_info` each time it opens for an account.                                                                       |
+| "The upload page must display the creator's nickname"                                                                                                      | "Posting to _nickname_ @username", with the avatar.                                                                                                       |
+| "When the creator_info API returns that the creator can not make more posts … stop the current publishing attempt"                                         | The panel shows TikTok's reason and _Try again later_, and Publish and Schedule stay disabled.                                                            |
+| "check if the duration of the to-be-posted video follows the max_video_post_duration_sec"                                                                  | Checked in the panel, at schedule time and again before the upload.                                                                                       |
+| Title                                                                                                                                                      | The caption is the post's text, editable as any other.                                                                                                    |
+| "Users must manually select the privacy status from a dropdown and there should be no default value."                                                      | **Who can see this video** starts empty, offers only `privacy_level_options`, and blocks posting until chosen.                                            |
+| Interaction ability: "none should be checked by default", greyed out when disabled in the creator's settings                                               | **Allow comments / Duet / Stitch**, off, greyed out with the reason when `creator_info` says so.                                                          |
+| "there should be a declaration … before the publish button … 'By posting, you agree to TikTok's Music Usage Confirmation'"                                 | In the panel and in the publish and schedule confirmations, linked.                                                                                       |
+| Content Disclosure Setting, "turned off by default", with "Your brand" and "Branded content"                                                               | **Disclose video content**, off; the two choices appear when it is on.                                                                                    |
+| "Your photo/video will be labeled as 'Promotional content'" / "'Paid partnership'"                                                                         | Shown under the choices (CogSend posts videos only, so it says "Your video").                                                                             |
+| "If the commercial content disclosure toggle is turned on but no options are selected, the publish button should be disabled."                             | Publish and Schedule disabled, hover text _You need to indicate if your content promotes yourself, a third party, or both._                               |
+| Branded content "can only be configured with visibility as public/friends"; "only me" disabled with "Branded content visibility cannot be set to private." | Only me is disabled while Branded content is ticked, and Branded content while Only me is chosen, with that text. The server refuses the combination too. |
+| "By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation." when branded content is checked                                   | The declaration switches when any TikTok account's post is branded content.                                                                               |
+| "API Clients should display a preview of the to-be-posted content."                                                                                        | The panel previews the video and the caption.                                                                                                             |
+| No watermarks; preset text editable                                                                                                                        | CogSend adds nothing to the video or caption.                                                                                                             |
+| "only start sending content materials to TikTok after the user has expressly consent to the upload"                                                        | Nothing is sent until **Publish Now** or **Confirm Schedule**.                                                                                            |
+| "it may take a few minutes for the content to process and be visible on their profile"                                                                     | Said in the panel and in the result after publishing.                                                                                                     |
+| "API clients should poll the publish/status/fetch API"                                                                                                     | CogSend polls it and shows **Processing**, then the post and its link, in **Posts**.                                                                      |
+
+A script for the demo video, one take:
+
+1. Open the website URL signed out: the page about the instance, with the Terms of Service and Privacy Policy links. Open both.
+2. Sign in, open **Accounts**, add TikTok, and go through TikTok's authorization page with the sandbox account, showing the two permissions it asks for. The account appears in the list.
+3. Open the composer, write a caption, attach a video, and select the TikTok account. Show the panel: the preview, "Posting to" with the account's nickname, the privacy menu empty, and the options in it.
+4. Try **Publish**: it is disabled, and hovering says to choose who can see the post. Pick a privacy level.
+5. Show the three interaction boxes unticked, and tick one.
+6. Turn on **Disclose video content**: Publish is disabled again until a choice is made. Tick **Your brand** and show the _Promotional content_ notice; tick **Branded content** and show _Paid partnership_, the Only me option greyed out, and the declaration now naming the Branded Content Policy. Untick both and turn disclosure off again.
+7. Show the declaration above the button, press **Publish**, and confirm.
+8. Show the result saying TikTok can take a few minutes, then **Posts** with the post processing and then published, and the video on the TikTok account (private, while the app is unaudited).
+9. Optionally schedule a second post the same way, to show a scheduled post carries its choices.
+
+Scopes to request, and why: `user.info.basic` to show which account a post goes to (avatar and display name), and `video.publish` to read creator info, post with Direct Post and read the post's status. A suggested description, to adjust to your use: _{instance name} is a publishing service for social media accounts. Its operator schedules and publishes videos to the TikTok accounts of their own brands and of creators and partner businesses who connect their accounts through Login Kit. Each post is previewed and gets its own privacy, interaction and content-disclosure settings before it is sent._
+
+TikTok's guidelines also say an app must be "intended for a wide audience, not limited to internal groups/private use", and give "a utility tool to help upload contents to the account(s) you or your team manages" as not acceptable. An instance used only for its operator's own accounts may be refused on that ground, whatever the app does; describe the accounts you actually publish for.
 
 ### X
 
@@ -158,7 +225,7 @@ LinkedIn rejects WebP at publish time — upload JPEG, PNG or GIF.
 
 Instagram takes nothing but JPEG, and refuses a post with no photo or video. When you attach a PNG or WebP, the composer also stores a JPEG copy of it for Instagram; an image attached before 1.21, uploaded through the API without a copy, or too large for the copy to fit Instagram's 8 MB has to be attached again, or as a JPEG, before it can go there — unless the deployment has the [Images binding](configuration.md#faster-post-thumbnails), which makes the missing copy when the post is scheduled or published. GIFs cannot go to Instagram, and photos must be between 4:5 tall and 1.91:1 wide. Up to 10 photos go out as one carousel: Instagram allows 20, but more would not fit one run's calls on the Workers Free plan. A video goes out as a Reel, on its own. Posting is limited to 100 posts a day per account.
 
-TikTok takes one video per post and nothing else. Who can see it is set per account on the Accounts page and starts at **Only me**, so nothing is posted publicly until you choose it; comments, Duets and Stitches stay off until you allow them, and any the creator turned off in TikTok stay off. CogSend asks TikTok for the account's options before each upload, so a privacy level TikTok no longer offers, or a video longer than the account may post, fails before anything is sent. TikTok usually takes a minute or so to process a post and may hold it for moderation; a public post's link appears only once it passes. TikTok also limits how many posts an account makes in a day, about 15 across all apps.
+TikTok takes one video per post and nothing else. Who can see it, its comments, Duets and Stitches, and whether it is promotional are chosen for each post in the composer, with nothing chosen in advance ([Composer → TikTok](composer.md#tiktok)); any interaction the creator turned off in TikTok stays off. CogSend asks TikTok for the account's options again before each upload, so a privacy level TikTok no longer offers, or a video longer than the account may post, fails before anything is sent. TikTok usually takes a minute or so to process a post and may hold it for moderation; a public post's link appears only once it passes. TikTok also limits how many posts an account makes in a day, about 15 across all apps.
 
 Threads and Instagram media are served to Meta through short-lived signed URLs (2h expiry,
 never linked publicly). Meta's crawler intermittently fails to fetch a URL that

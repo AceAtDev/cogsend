@@ -105,6 +105,9 @@ interface Env {
 	INSTAGRAM_APP_SECRET?: string;
 	TIKTOK_CLIENT_KEY?: string;
 	TIKTOK_CLIENT_SECRET?: string;
+	TIKTOK_SITE_VERIFICATION?: string;
+	LEGAL_CONTACT_EMAIL?: string;
+	PUBLIC_HOMEPAGE?: string;
 	X_CLIENT_ID?: string;
 	X_CLIENT_SECRET?: string;
 	/** Local-dev only: skips 2FA. Honored only while the resolved URL is a
