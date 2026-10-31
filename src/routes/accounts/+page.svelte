@@ -29,6 +29,7 @@
 	import { zernioLink } from '#lib/domain/zernio-links.js';
 	import { isPaidXSubscription } from '#lib/domain/x-limits.js';
 	import { tiktokPrivacyChoices, tiktokPrivacyLabel, tiktokPrivacyOf } from '#lib/domain/tiktok.js';
+	import { BRAND_COLORS, UNBRANDED_COLOR } from '#lib/domain/channel-keys.js';
 
 	let { data } = $props();
 
@@ -40,6 +41,8 @@
 		avatarUrl?: string | null;
 		instanceUrl: string | null;
 		status: string;
+		brandId?: string | null;
+		channelKey?: string | null;
 		metaJson?: {
 			provider?: string;
 			zernioProfileId?: string;
@@ -56,6 +59,7 @@
 			tiktokStitchDisabled?: boolean;
 		} | null;
 	};
+	type Brand = { id: string; name: string; slug: string; color: string };
 	type ZernioAccount = {
 		id: string;
 		platform: string;
@@ -90,6 +94,24 @@
 			(a: Connection, b: Connection) => platformRank(a.platform) - platformRank(b.platform)
 		)
 	);
+	// svelte-ignore state_referenced_locally
+	let brands = $state<Brand[]>(data.brands ?? []);
+	let newBrandName = $state('');
+	let newBrandColor = $state<string>(BRAND_COLORS[0]);
+	let brandBusy = $state(false);
+	let pendingBrandDelete = $state<Brand | null>(null);
+
+	/** One section per brand, then the accounts with none. */
+	const groups = $derived.by(() => {
+		const sections: Array<{ brand: Brand | null; accounts: Connection[] }> = brands.map(
+			(brand) => ({ brand, accounts: connections.filter((c) => c.brandId === brand.id) })
+		);
+		const known = new Set(brands.map((b) => b.id));
+		const unbranded = connections.filter((c) => !c.brandId || !known.has(c.brandId));
+		if (unbranded.length || !brands.length) sections.push({ brand: null, accounts: unbranded });
+		return sections.filter((section) => section.accounts.length || section.brand);
+	});
+
 	// svelte-ignore state_referenced_locally
 	let configured = $state<Record<OAuthPlatformId, boolean>>(
 		data.configured ?? {
@@ -224,6 +246,7 @@
 				(a: Connection, b: Connection) => platformRank(a.platform) - platformRank(b.platform)
 			);
 			zernioHasStoredKey = connections.some(viaZernio);
+			if (Array.isArray(payload.brands)) brands = payload.brands;
 			if (typeof payload.appUrl === 'string') appUrl = payload.appUrl;
 			if (payload.configured && typeof payload.configured === 'object') {
 				configured = {
@@ -595,6 +618,65 @@
 		}
 	}
 
+	async function brandRequest(url: string, method: string, body?: unknown): Promise<boolean> {
+		brandBusy = true;
+		err = null;
+		try {
+			const res = await fetch(url, {
+				method,
+				headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+				body: body === undefined ? undefined : JSON.stringify(body)
+			});
+			if (sessionExpiredIfUnauthorized(res)) return false;
+			const payload = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(payload.error || 'Could not save the brand');
+			await load();
+			return true;
+		} catch (e) {
+			err = humanizeError(e instanceof Error ? e.message : 'Could not save the brand');
+			return false;
+		} finally {
+			brandBusy = false;
+		}
+	}
+
+	async function createBrand(e: Event) {
+		e.preventDefault();
+		const name = newBrandName.trim();
+		if (!name) return;
+		if (await brandRequest('/api/brands', 'POST', { name, color: newBrandColor })) {
+			msg = `Added brand ${name}`;
+			newBrandName = '';
+			newBrandColor = BRAND_COLORS[(brands.length + 1) % BRAND_COLORS.length];
+		}
+	}
+
+	async function renameBrand(brand: Brand, name: string) {
+		const trimmed = name.trim();
+		if (!trimmed || trimmed === brand.name) return;
+		await brandRequest(`/api/brands/${brand.id}`, 'PATCH', { name: trimmed });
+	}
+
+	async function recolorBrand(brand: Brand, color: string) {
+		if (color.toLowerCase() === brand.color) return;
+		await brandRequest(`/api/brands/${brand.id}`, 'PATCH', { color });
+	}
+
+	async function confirmBrandDelete() {
+		const brand = pendingBrandDelete;
+		if (!brand) return;
+		if (await brandRequest(`/api/brands/${brand.id}`, 'DELETE')) {
+			msg = `Deleted brand ${brand.name} — its accounts are now unbranded`;
+		}
+		pendingBrandDelete = null;
+	}
+
+	async function assignBrand(account: Connection, brandId: string) {
+		await brandRequest(`/api/connections/${account.id}`, 'PATCH', {
+			brandId: brandId || null
+		});
+	}
+
 	let savingLongPosts = $state<string | null>(null);
 
 	/** `null` hands the decision back to what X reports. */
@@ -728,175 +810,295 @@
 		{:else if connections.length === 0}
 			<p class="p-6 text-sm font-medium text-stone-500">{emptyStateSentence(configured)}</p>
 		{:else}
-			{#each connections as account, index (account.id)}
-				{@const needsReconnect = account.status !== 'active'}
+			{#each groups as section (section.brand?.id ?? 'unbranded')}
 				<div
-					class="group flex flex-col justify-between gap-4 p-4 transition-colors hover:bg-stone-50/50 sm:flex-row sm:items-center sm:px-6 sm:py-4 {index !==
-					connections.length - 1
-						? 'border-b border-stone-100'
-						: ''}"
+					class="flex items-center gap-2 border-b border-stone-100 bg-stone-50/60 px-4 py-2 sm:px-6"
+					data-testid="brand-section-{section.brand?.slug ?? 'unbranded'}"
 				>
-					<div class="flex items-center gap-4">
-						<AccountAvatar
-							platform={account.platform}
-							handle={account.handle}
-							displayName={account.displayName}
-							avatarUrl={account.avatarUrl}
-							size={44}
-							title={accountLabel(account.displayName, account.handle, account.instanceUrl) ||
-								undefined}
-						/>
-						<div>
-							<h3 class="text-[15px] leading-tight font-extrabold tracking-tight text-stone-900">
-								{platformName(account.platform)}
-								{#if viaZernio(account)}
-									<span
-										class="ml-1 rounded bg-stone-100 px-1.5 py-0.5 align-middle text-[10px] font-bold tracking-widest text-stone-500 uppercase"
-										>via Zernio</span
-									>
-								{/if}
-							</h3>
-							<p
-								class="mt-0.5 text-[13px] font-medium text-stone-500"
+					<span
+						class="h-2.5 w-2.5 shrink-0 rounded-full"
+						style="background-color: {section.brand?.color ?? UNBRANDED_COLOR}"
+						aria-hidden="true"
+					></span>
+					<h2 class="text-[11px] font-bold tracking-widest text-stone-500 uppercase">
+						{section.brand?.name ?? 'Unbranded'}
+					</h2>
+					<span class="text-[11px] font-medium text-stone-400">{section.accounts.length}</span>
+				</div>
+				{#if !section.accounts.length}
+					<p class="border-b border-stone-100 px-4 py-3 text-xs font-medium text-stone-400 sm:px-6">
+						No accounts yet. Pick this brand on an account to add it.
+					</p>
+				{/if}
+				{#each section.accounts as account (account.id)}
+					{@const needsReconnect = account.status !== 'active'}
+					<div
+						class="group flex flex-col justify-between gap-4 border-b border-stone-100 p-4 transition-colors hover:bg-stone-50/50 sm:flex-row sm:items-center sm:px-6 sm:py-4"
+					>
+						<div class="flex items-center gap-4">
+							<AccountAvatar
+								platform={account.platform}
+								handle={account.handle}
+								displayName={account.displayName}
+								avatarUrl={account.avatarUrl}
+								size={44}
 								title={accountLabel(account.displayName, account.handle, account.instanceUrl) ||
 									undefined}
-							>
-								{#if account.platform === 'linkedin' && account.displayName}
-									{account.displayName}
-								{:else}
-									{accountLabel(account.displayName, account.handle)}
-								{/if}
-								{account.instanceUrl ? ` · ${displayHost(account.instanceUrl)}` : ''}
-							</p>
-							{#if account.platform === 'x' && !viaZernio(account) && !needsReconnect}
-								{@const long = (account.metaJson?.maxCharacters ?? 280) > 280}
-								<p
-									class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium text-stone-500"
-									data-testid="x-long-posts-{account.id}"
-								>
-									<span>
-										Long posts {long ? 'on, up to 25,000 characters' : 'off, 280 characters'} ·
-										{longPostSource(account)}
-									</span>
-									<button
-										type="button"
-										onclick={() => setLongPosts(account, !long)}
-										disabled={savingLongPosts === account.id}
-										class="font-bold text-stone-900 underline"
-										>{long ? 'Turn off' : 'Turn on'}</button
-									>
-									{#if typeof account.metaJson?.longPosts === 'boolean'}
-										<button
-											type="button"
-											onclick={() => setLongPosts(account, null)}
-											disabled={savingLongPosts === account.id}
-											class="font-bold text-stone-500 underline">Use what X reports</button
+							/>
+							<div>
+								<h3 class="text-[15px] leading-tight font-extrabold tracking-tight text-stone-900">
+									{platformName(account.platform)}
+									{#if viaZernio(account)}
+										<span
+											class="ml-1 rounded bg-stone-100 px-1.5 py-0.5 align-middle text-[10px] font-bold tracking-widest text-stone-500 uppercase"
+											>via Zernio</span
 										>
 									{/if}
-									<button
-										type="button"
-										onclick={() => verify(account.id, 'Checked with X')}
-										disabled={verifying === account.id}
-										class="font-bold text-stone-500 underline"
-										>{verifying === account.id ? 'Checking…' : 'Check plan'}</button
-									>
-								</p>
-							{/if}
-							{#if account.platform === 'tiktok' && !viaZernio(account) && !needsReconnect}
-								{@const meta = account.metaJson ?? {}}
-								<div
-									class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] font-medium text-stone-500"
-									data-testid="tiktok-settings-{account.id}"
+								</h3>
+								<p
+									class="mt-0.5 text-[13px] font-medium text-stone-500"
+									title={accountLabel(account.displayName, account.handle, account.instanceUrl) ||
+										undefined}
 								>
+									{#if account.platform === 'linkedin' && account.displayName}
+										{account.displayName}
+									{:else}
+										{accountLabel(account.displayName, account.handle)}
+									{/if}
+									{account.instanceUrl ? ` · ${displayHost(account.instanceUrl)}` : ''}
+								</p>
+								<p
+									class="mt-1 flex flex-wrap items-center gap-2 text-[12px] font-medium text-stone-500"
+								>
+									{#if account.channelKey}
+										<code
+											class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] text-stone-700"
+											title="The channel key agents use to post here"
+											data-testid="channel-key-{account.id}">{account.channelKey}</code
+										>
+									{/if}
 									<label class="flex items-center gap-1">
-										<span>Who can see posts</span>
+										<span>Brand</span>
 										<select
-											value={tiktokPrivacyOf(meta)}
-											onchange={(e) => setTiktok(account, { privacy: e.currentTarget.value })}
-											disabled={savingTiktok === account.id}
+											value={account.brandId ?? ''}
+											onchange={(e) => assignBrand(account, e.currentTarget.value)}
+											disabled={brandBusy}
+											data-testid="brand-select-{account.id}"
 											class="rounded border border-stone-300 bg-white px-1 py-0.5 text-[12px] font-bold text-stone-900"
 										>
-											{#each tiktokPrivacyChoices(meta) as level (level)}
-												<option value={level}>{tiktokPrivacyLabel(level)}</option>
+											<option value="">No brand</option>
+											{#each brands as brand (brand.id)}
+												<option value={brand.id}>{brand.name}</option>
 											{/each}
 										</select>
 									</label>
-									{#each [{ key: 'allowComment', label: 'Comments', allowed: meta.tiktokAllowComment, off: meta.tiktokCommentDisabled }, { key: 'allowDuet', label: 'Duet', allowed: meta.tiktokAllowDuet, off: meta.tiktokDuetDisabled }, { key: 'allowStitch', label: 'Stitch', allowed: meta.tiktokAllowStitch, off: meta.tiktokStitchDisabled }] as option (option.key)}
-										<label
-											class="flex items-center gap-1"
-											title={option.off
-												? 'Turned off in the TikTok app for this account'
-												: undefined}
+								</p>
+								{#if account.platform === 'x' && !viaZernio(account) && !needsReconnect}
+									{@const long = (account.metaJson?.maxCharacters ?? 280) > 280}
+									<p
+										class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-medium text-stone-500"
+										data-testid="x-long-posts-{account.id}"
+									>
+										<span>
+											Long posts {long ? 'on, up to 25,000 characters' : 'off, 280 characters'} ·
+											{longPostSource(account)}
+										</span>
+										<button
+											type="button"
+											onclick={() => setLongPosts(account, !long)}
+											disabled={savingLongPosts === account.id}
+											class="font-bold text-stone-900 underline"
+											>{long ? 'Turn off' : 'Turn on'}</button
 										>
-											<input
-												type="checkbox"
-												checked={option.allowed === true && !option.off}
-												disabled={option.off === true || savingTiktok === account.id}
-												onchange={(e) =>
-													setTiktok(account, { [option.key]: e.currentTarget.checked })}
-											/>
-											<span>{option.label}</span>
+										{#if typeof account.metaJson?.longPosts === 'boolean'}
+											<button
+												type="button"
+												onclick={() => setLongPosts(account, null)}
+												disabled={savingLongPosts === account.id}
+												class="font-bold text-stone-500 underline">Use what X reports</button
+											>
+										{/if}
+										<button
+											type="button"
+											onclick={() => verify(account.id, 'Checked with X')}
+											disabled={verifying === account.id}
+											class="font-bold text-stone-500 underline"
+											>{verifying === account.id ? 'Checking…' : 'Check plan'}</button
+										>
+									</p>
+								{/if}
+								{#if account.platform === 'tiktok' && !viaZernio(account) && !needsReconnect}
+									{@const meta = account.metaJson ?? {}}
+									<div
+										class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] font-medium text-stone-500"
+										data-testid="tiktok-settings-{account.id}"
+									>
+										<label class="flex items-center gap-1">
+											<span>Who can see posts</span>
+											<select
+												value={tiktokPrivacyOf(meta)}
+												onchange={(e) => setTiktok(account, { privacy: e.currentTarget.value })}
+												disabled={savingTiktok === account.id}
+												class="rounded border border-stone-300 bg-white px-1 py-0.5 text-[12px] font-bold text-stone-900"
+											>
+												{#each tiktokPrivacyChoices(meta) as level (level)}
+													<option value={level}>{tiktokPrivacyLabel(level)}</option>
+												{/each}
+											</select>
 										</label>
-									{/each}
-									<span class="basis-full text-[11px] text-stone-400">
-										By posting, you agree to TikTok's <a
-											href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
-											target="_blank"
-											rel="noopener noreferrer"
-											class="underline">Music Usage Confirmation</a
-										>. Videos can take a few minutes to appear after publishing.
-									</span>
-								</div>
+										{#each [{ key: 'allowComment', label: 'Comments', allowed: meta.tiktokAllowComment, off: meta.tiktokCommentDisabled }, { key: 'allowDuet', label: 'Duet', allowed: meta.tiktokAllowDuet, off: meta.tiktokDuetDisabled }, { key: 'allowStitch', label: 'Stitch', allowed: meta.tiktokAllowStitch, off: meta.tiktokStitchDisabled }] as option (option.key)}
+											<label
+												class="flex items-center gap-1"
+												title={option.off
+													? 'Turned off in the TikTok app for this account'
+													: undefined}
+											>
+												<input
+													type="checkbox"
+													checked={option.allowed === true && !option.off}
+													disabled={option.off === true || savingTiktok === account.id}
+													onchange={(e) =>
+														setTiktok(account, { [option.key]: e.currentTarget.checked })}
+												/>
+												<span>{option.label}</span>
+											</label>
+										{/each}
+										<span class="basis-full text-[11px] text-stone-400">
+											By posting, you agree to TikTok's <a
+												href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
+												target="_blank"
+												rel="noopener noreferrer"
+												class="underline">Music Usage Confirmation</a
+											>. Videos can take a few minutes to appear after publishing.
+										</span>
+									</div>
+								{/if}
+							</div>
+						</div>
+						<div class="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:justify-end">
+							{#if needsReconnect}
+								<span
+									class="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-bold tracking-widest text-amber-700 uppercase"
+								>
+									{account.status}
+								</span>
+								<button
+									type="button"
+									onclick={() => reconnectAccount(account)}
+									disabled={verifying === account.id || loading}
+									class="text-xs font-bold text-stone-900 underline">Reconnect</button
+								>
+								<button
+									type="button"
+									onclick={() => verify(account.id)}
+									disabled={verifying === account.id}
+									class="text-xs font-bold text-stone-500 underline"
+									>{verifying === account.id ? 'Checking…' : 'Check'}</button
+								>
+							{:else}
+								<span
+									class="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-widest text-emerald-700 uppercase shadow-sm"
+								>
+									Connected
+								</span>
 							{/if}
+							<button
+								type="button"
+								onclick={() =>
+									(pendingDisconnect = {
+										id: account.id,
+										label:
+											accountLabel(account.displayName, account.handle, account.instanceUrl) ||
+											account.platform
+									})}
+								class="flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-red-50 hover:text-red-600"
+								aria-label={`Disconnect ${accountLabel(account.displayName, account.handle, account.instanceUrl) || platformName(account.platform)}`}
+								title={`Disconnect ${accountLabel(account.displayName, account.handle, account.instanceUrl) || platformName(account.platform)}`}
+							>
+								<X class="h-4 w-4" />
+							</button>
 						</div>
 					</div>
-					<div class="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:justify-end">
-						{#if needsReconnect}
-							<span
-								class="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-bold tracking-widest text-amber-700 uppercase"
-							>
-								{account.status}
-							</span>
-							<button
-								type="button"
-								onclick={() => reconnectAccount(account)}
-								disabled={verifying === account.id || loading}
-								class="text-xs font-bold text-stone-900 underline">Reconnect</button
-							>
-							<button
-								type="button"
-								onclick={() => verify(account.id)}
-								disabled={verifying === account.id}
-								class="text-xs font-bold text-stone-500 underline"
-								>{verifying === account.id ? 'Checking…' : 'Check'}</button
-							>
-						{:else}
-							<span
-								class="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-widest text-emerald-700 uppercase shadow-sm"
-							>
-								Connected
-							</span>
-						{/if}
-						<button
-							type="button"
-							onclick={() =>
-								(pendingDisconnect = {
-									id: account.id,
-									label:
-										accountLabel(account.displayName, account.handle, account.instanceUrl) ||
-										account.platform
-								})}
-							class="flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-red-50 hover:text-red-600"
-							aria-label={`Disconnect ${accountLabel(account.displayName, account.handle, account.instanceUrl) || platformName(account.platform)}`}
-							title={`Disconnect ${accountLabel(account.displayName, account.handle, account.instanceUrl) || platformName(account.platform)}`}
-						>
-							<X class="h-4 w-4" />
-						</button>
-					</div>
-				</div>
+				{/each}
 			{/each}
 		{/if}
 	</div>
+
+	<section
+		class="mt-8 overflow-hidden rounded-[2rem] border border-stone-200/80 bg-white p-4 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.06)] sm:p-6"
+		aria-labelledby="brands-title"
+		data-testid="brands-panel"
+	>
+		<h2 id="brands-title" class="text-[17px] font-extrabold tracking-tight text-stone-900">
+			Brands
+		</h2>
+		<p class="mt-1 text-[13px] font-medium text-stone-500">
+			Group accounts by brand. Agents address an account as <code class="font-mono text-[12px]"
+				>brand.platform</code
+			>, such as <code class="font-mono text-[12px]">jobjob.linkedin</code>; renaming a brand keeps
+			its keys.
+		</p>
+		{#if brands.length}
+			<ul class="mt-4 divide-y divide-stone-100">
+				{#each brands as brand (brand.id)}
+					<li class="flex flex-wrap items-center gap-3 py-2" data-testid="brand-row-{brand.slug}">
+						<input
+							type="color"
+							value={brand.color}
+							onchange={(e) => recolorBrand(brand, e.currentTarget.value)}
+							disabled={brandBusy}
+							aria-label={`Colour of ${brand.name}`}
+							class="h-7 w-7 shrink-0 cursor-pointer rounded-full border border-stone-200 bg-white p-0.5"
+						/>
+						<input
+							type="text"
+							value={brand.name}
+							maxlength="60"
+							onchange={(e) => renameBrand(brand, e.currentTarget.value)}
+							disabled={brandBusy}
+							aria-label={`Name of ${brand.name}`}
+							class="min-w-0 flex-1 rounded-xl border border-stone-200/80 bg-stone-50 px-3 py-1.5 text-[13px] font-bold text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none pointer-coarse:text-base"
+						/>
+						<code class="font-mono text-[11px] text-stone-500" title="Slug used in channel keys"
+							>{brand.slug}</code
+						>
+						<button
+							type="button"
+							onclick={() => (pendingBrandDelete = brand)}
+							disabled={brandBusy}
+							class="flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-red-50 hover:text-red-600"
+							aria-label={`Delete brand ${brand.name}`}
+							title={`Delete brand ${brand.name}`}
+						>
+							<X class="h-4 w-4" />
+						</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+		<form class="mt-4 flex flex-wrap items-center gap-3" onsubmit={createBrand}>
+			<input
+				type="color"
+				bind:value={newBrandColor}
+				aria-label="Colour of the new brand"
+				class="h-7 w-7 shrink-0 cursor-pointer rounded-full border border-stone-200 bg-white p-0.5"
+			/>
+			<input
+				type="text"
+				bind:value={newBrandName}
+				maxlength="60"
+				placeholder="New brand name"
+				aria-label="New brand name"
+				class="min-w-0 flex-1 rounded-xl border border-stone-200/80 bg-stone-50 px-3 py-1.5 text-[13px] font-medium text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none pointer-coarse:text-base"
+			/>
+			<button
+				type="submit"
+				disabled={brandBusy || !newBrandName.trim()}
+				class="rounded-full bg-stone-900 px-4 py-1.5 text-[12px] font-bold text-white hover:bg-stone-800 disabled:opacity-50"
+				>Add brand</button
+			>
+		</form>
+	</section>
 </div>
 
 {#if showConnectDialog}
@@ -1470,6 +1672,17 @@
 		</div>
 	</div>
 {/if}
+
+<ConfirmDialog
+	open={pendingBrandDelete !== null}
+	idPrefix="brand-delete-dialog"
+	title={`Delete brand ${pendingBrandDelete?.name ?? ''}?`}
+	body="Its accounts stay connected and become unbranded, so their channel keys change to unbranded.<platform>. Scheduled posts are not touched."
+	confirmLabel="Delete brand"
+	busy={brandBusy}
+	onConfirm={() => void confirmBrandDelete()}
+	onCancel={() => (pendingBrandDelete = null)}
+/>
 
 <ConfirmDialog
 	open={pendingDisconnect !== null}

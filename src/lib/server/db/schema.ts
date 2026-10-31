@@ -62,6 +62,24 @@ export const oauthPending = sqliteTable(
 	]
 );
 
+export const brands = sqliteTable(
+	'brands',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		// Stable once created: it is the first half of every channel key an agent
+		// may have saved, so renaming a brand leaves it alone.
+		slug: text('slug').notNull(),
+		color: text('color').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [uniqueIndex('brands_user_slug_uq').on(t.userId, t.slug)]
+);
+
 export const connections = sqliteTable(
 	'connections',
 	{
@@ -78,12 +96,14 @@ export const connections = sqliteTable(
 		metaJson: text('meta_json').notNull().default('{}'),
 		status: text('status').notNull().default('active'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+		brandId: text('brand_id').references(() => brands.id, { onDelete: 'set null' })
 	},
 	(t) => [
 		index('connections_user_platform_idx').on(t.userId, t.platform),
 		index('connections_user_status_idx').on(t.userId, t.status),
-		index('connections_user_created_idx').on(t.userId, t.createdAt)
+		index('connections_user_created_idx').on(t.userId, t.createdAt),
+		index('connections_brand_idx').on(t.brandId)
 	]
 );
 

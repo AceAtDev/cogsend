@@ -97,7 +97,8 @@ describe('ensureSchema', () => {
 			'mfa_challenges',
 			'totp_backup_codes',
 			'notification_state',
-			'draft_shares'
+			'draft_shares',
+			'brands'
 		]) {
 			expect(names).toContain(table);
 		}

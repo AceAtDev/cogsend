@@ -15,6 +15,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		console.error('[accounts] list failed', err);
 		return {
 			connections: [],
+			brands: [],
 			configured: { linkedin: false, threads: false, instagram: false, tiktok: false, x: false },
 			secrets: {},
 			sources: { linkedin: null, threads: null, instagram: null, tiktok: null, x: null },

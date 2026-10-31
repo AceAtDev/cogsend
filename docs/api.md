@@ -14,8 +14,9 @@ curl -s "$APP_URL/api/connections" -H "Authorization: Bearer $COGSEND_API_KEY"
 ```
 
 `X-API-Key` works as an alternative header; never put the key in the URL. The key
-acts as you on drafts, variants, media, publish, schedule, queue, settings, and
-reads — but it can never connect, re-verify or disconnect accounts, or create,
+acts as you on drafts, variants, media, publish, schedule, queue, brands, settings, and
+reads — but it can never connect, re-verify or disconnect accounts, move an
+account to another brand (`PATCH /api/connections/:id` with `brandId`), or create,
 rotate, or revoke keys (those stay in the browser session). The global
 `API_TOKEN` Worker secret still works as a bearer for backwards compatibility, on
 exactly the same routes as a personal key — it cannot reach the session-only ones
@@ -32,7 +33,8 @@ A failed request answers a JSON object with an `error` property.
 
 ### With any key
 
-- `GET /api/connections`: account ids, platforms, statuses, and which platforms this deployment can connect.
+- `GET /api/connections`: account ids, platforms, statuses, brands, each account's `brandId` and `channelKey`, and which platforms this deployment can connect.
+- `GET /api/brands`: every brand with its `channels` (each with `key`, `keys`, platform, handle and status), and the `unbranded` channels. See [Brands](accounts.md#brands).
 - `GET /api/drafts`: list drafts with their variants, media and targets.
 - `GET /api/drafts/:id`: one draft.
 - `GET /api/drafts/:id/share`: the draft's preview link, see [Preview links](#preview-links).
@@ -43,6 +45,9 @@ A failed request answers a JSON object with an `error` property.
 
 ### With a Read + write key
 
+- `POST /api/brands`: `{"name", "color?", "slug?"}` answers `201` with `{brand}`. The slug is made from the name unless given; `unbranded` is reserved, and a slug another brand uses answers **409**.
+- `PATCH /api/brands/:id`: `{"name?", "color?", "slug?"}`. A rename keeps the slug, so channel keys stay the same; only `slug` changes them.
+- `DELETE /api/brands/:id`: answers `{ok, unbranded}`, the number of accounts that are now unbranded.
 - `POST /api/drafts`: `{"title?", "baseBody?", "selectedConnectionIds?"}` answers `201` with `{draft}`.
 - `PATCH /api/drafts/:id`: edit the title, body or `selectedConnectionIds`. **409** while publishing.
 - `DELETE /api/drafts/:id`: delete a draft.

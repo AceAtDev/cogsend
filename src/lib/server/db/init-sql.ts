@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS \`oauth_pending\` (
 CREATE INDEX IF NOT EXISTS \`oauth_pending_expires_idx\` ON \`oauth_pending\` (\`expires_at\`);
 CREATE INDEX IF NOT EXISTS \`oauth_pending_user_idx\` ON \`oauth_pending\` (\`user_id\`);
 
+CREATE TABLE IF NOT EXISTS \`brands\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`name\` text NOT NULL,
+	\`slug\` text NOT NULL,
+	\`color\` text NOT NULL,
+	\`created_at\` integer NOT NULL,
+	\`updated_at\` integer NOT NULL,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS \`brands_user_slug_uq\` ON \`brands\` (\`user_id\`, \`slug\`);
+
 CREATE TABLE IF NOT EXISTS \`connections\` (
 	\`id\` text PRIMARY KEY NOT NULL,
 	\`user_id\` text NOT NULL,
@@ -60,8 +72,11 @@ CREATE TABLE IF NOT EXISTS \`connections\` (
 	\`status\` text NOT NULL DEFAULT 'active',
 	\`created_at\` integer NOT NULL,
 	\`updated_at\` integer NOT NULL,
-	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+	\`brand_id\` text,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE,
+	FOREIGN KEY (\`brand_id\`) REFERENCES \`brands\`(\`id\`) ON DELETE SET NULL
 );
+CREATE INDEX IF NOT EXISTS \`connections_brand_idx\` ON \`connections\` (\`brand_id\`);
 CREATE INDEX IF NOT EXISTS \`connections_user_platform_idx\` ON \`connections\` (\`user_id\`, \`platform\`);
 CREATE INDEX IF NOT EXISTS \`connections_user_status_idx\` ON \`connections\` (\`user_id\`, \`status\`);
 CREATE INDEX IF NOT EXISTS \`connections_user_created_idx\` ON \`connections\` (\`user_id\`, \`created_at\`);
@@ -242,7 +257,8 @@ const BACKFILL_INDEXES = [
 	'CREATE INDEX IF NOT EXISTS connections_user_created_idx ON connections (user_id, created_at)',
 	'CREATE INDEX IF NOT EXISTS publish_targets_status_updated_idx ON publish_targets (status, updated_at)',
 	'CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at)',
-	'CREATE INDEX IF NOT EXISTS mfa_challenges_expires_idx ON mfa_challenges (expires_at)'
+	'CREATE INDEX IF NOT EXISTS mfa_challenges_expires_idx ON mfa_challenges (expires_at)',
+	'CREATE INDEX IF NOT EXISTS connections_brand_idx ON connections (brand_id)'
 ];
 
 async function tableColumns(d1: D1Database, table: string): Promise<Set<string>> {
@@ -310,6 +326,12 @@ const COLUMN_BACKFILLS: Array<{ table: string; columns: { name: string; ddl: str
 	{
 		table: 'sessions',
 		columns: [{ name: 'mfa_verified', ddl: 'mfa_verified integer NOT NULL DEFAULT 0' }]
+	},
+	// SQLite does not check that a REFERENCES target exists when a column is
+	// added, so this may run before LEGACY_TABLES_SQL creates `brands`.
+	{
+		table: 'connections',
+		columns: [{ name: 'brand_id', ddl: 'brand_id text REFERENCES brands(id) ON DELETE SET NULL' }]
 	}
 ];
 
@@ -371,6 +393,17 @@ CREATE TABLE IF NOT EXISTS draft_shares (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS draft_shares_token_uq ON draft_shares (token_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS draft_shares_draft_uq ON draft_shares (draft_id);
+CREATE TABLE IF NOT EXISTS brands (
+	id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	name text NOT NULL,
+	slug text NOT NULL,
+	color text NOT NULL,
+	created_at integer NOT NULL,
+	updated_at integer NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS brands_user_slug_uq ON brands (user_id, slug);
 `;
 
 /**

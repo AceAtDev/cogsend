@@ -11,6 +11,7 @@ import { refreshDraftStatuses } from '#lib/server/publish.js';
 import { draftHasInFlightPublish } from '#lib/server/publish-plan.js';
 import { requireSession } from '#lib/server/require.js';
 import { serializeConnection } from '#lib/server/serialize.js';
+import { assignConnectionBrand } from '#lib/server/brands.js';
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
 	try {
@@ -148,8 +149,11 @@ async function patchTiktok(
 /**
  * Per-account settings. On an X account, the long-post switch: `true` or
  * `false` overrides what X reported about the account's plan, and `null` goes
- * back to that report. On a TikTok account, `tiktok` (see patchTiktok).
- * Session-only, like connecting: a key cannot change what an account may post.
+ * back to that report. On a TikTok account, `tiktok` (see patchTiktok). On any
+ * account, `brandId` (a brand's id, or `null` for none), which decides the
+ * account's channel key.
+ * Session-only, like connecting: a key cannot change what an account may post,
+ * nor re-point the channel key an agent targets.
  */
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	try {
@@ -157,7 +161,11 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		const body = (await request.json().catch(() => null)) as {
 			longPosts?: unknown;
 			tiktok?: unknown;
+			brandId?: unknown;
 		} | null;
+		if (body && Object.hasOwn(body, 'brandId')) {
+			return ok(await assignConnectionBrand(locals.db, user.id, params.id, body.brandId));
+		}
 		if (body && Object.hasOwn(body, 'tiktok')) {
 			const owned = and(eq(connections.id, params.id), eq(connections.userId, user.id));
 			const conn = await first(locals.db.select().from(connections).where(owned));
@@ -170,7 +178,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 			return await patchTiktok(conn, body.tiktok, locals, owned);
 		}
 		const longPosts = body?.longPosts;
-		if (!body || !Object.hasOwn(body, 'longPosts')) return fail('Send longPosts or tiktok', 400);
+		if (!body || !Object.hasOwn(body, 'longPosts'))
+			return fail('Send longPosts, tiktok or brandId', 400);
 		if (longPosts !== null && typeof longPosts !== 'boolean') {
 			return fail('longPosts must be true, false or null', 400);
 		}

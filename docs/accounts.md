@@ -51,6 +51,19 @@ A TikTok account connected directly shows its post settings under its name. TikT
 
 The settings apply to every post to that account, and a reconnect keeps them. CogSend reads the account's options from TikTok when you connect it and when you press **Verify**, and checks them again before each upload, so a choice TikTok no longer offers fails with a message rather than going out differently. Posting means agreeing to TikTok's [Music Usage Confirmation](https://www.tiktok.com/legal/page/global/music-usage-confirmation/en), which the settings line links to.
 
+## Brands
+
+Brands group accounts, such as a LinkedIn page and an Instagram account that both belong to one business. Add a brand under **Brands** at the bottom of **Accounts**, then pick it in the **Brand** menu on each of its accounts; the list shows accounts grouped by brand, with a colour each. Renaming or recolouring a brand changes nothing else. Deleting one leaves its accounts connected and unbranded, and leaves their scheduled posts alone.
+
+Every account has a **channel key**, shown next to it, which is how agents and the [MCP server](mcp.md) name it:
+
+- `<brand>.<platform>`, such as `jobjob.linkedin` or `465cal.instagram`. The brand part is the brand's slug, made from its name when it is created and kept when it is renamed, so saved keys keep working.
+- When a brand has two accounts on the same platform, neither gets the short key: both become `<brand>.<platform>.<handle>`, such as `jobjob.instagram.jobjob-careers`, and `jobjob.instagram` on its own is refused as ambiguous. The long form is accepted for every account, so it is the safer one to save.
+- Accounts with no brand use `unbranded`, such as `unbranded.bluesky`.
+- The handle part is the handle in lowercase with anything other than letters and digits turned into dashes. Two handles that come out the same also get the start of the account's id, such as `pat-dev-1a2b3c`.
+
+Assigning an account to a brand changes its key, so it is done from the browser only; an API key can manage brands but cannot move an account between them.
+
 ## When an account needs reconnecting
 
 A token that stops working marks the account as needing a reconnect, both here and
