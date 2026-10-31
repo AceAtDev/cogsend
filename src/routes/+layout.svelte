@@ -9,6 +9,7 @@
 		BookOpenText,
 		PenLine,
 		Calendar,
+		CalendarDays,
 		Users,
 		ChartColumn
 	} from '@lucide/svelte';
@@ -49,6 +50,8 @@
 	const isLoginRoute = $derived(page.url.pathname.startsWith('/login'));
 	// A preview link looks the same to its owner as to whoever it was sent to.
 	const isShareRoute = $derived(page.url.pathname.startsWith('/p/'));
+	// A week of seven columns does not fit the reading width the other pages use.
+	const isWideRoute = $derived(page.url.pathname === '/calendar');
 
 	// Write starts a new post. On the compose page it only shows while a post
 	// is open there, and before the editor has mounted the URL is the guess.
@@ -246,6 +249,21 @@
 								<span class="ml-auto h-2 w-2 rounded-full bg-red-500" aria-hidden="true"></span>
 								<span class="sr-only">— a post failed to publish</span>
 							{/if}
+						</a>
+						<a
+							href="/calendar"
+							class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-bold transition-colors {page
+								.url.pathname === '/calendar'
+								? 'bg-stone-900 text-white shadow-md'
+								: 'text-stone-600 hover:bg-stone-50 hover:text-stone-900'}"
+							onclick={() => (showWorkspaceDropdown = false)}
+							role="menuitem"
+						>
+							<CalendarDays
+								class="h-4 w-4 {page.url.pathname === '/calendar'
+									? 'text-white'
+									: 'text-stone-500'}"
+							/> Calendar
 						</a>
 						<a
 							href="/insights"
@@ -447,7 +465,9 @@
 		<main
 			id="main-content"
 			tabindex="-1"
-			class="relative mx-auto flex min-h-dvh w-full max-w-[800px] flex-col px-6 pt-32 pb-20 focus:outline-none"
+			class="relative mx-auto flex min-h-dvh w-full {isWideRoute
+				? 'max-w-[1280px]'
+				: 'max-w-[800px]'} flex-col px-6 pt-32 pb-20 focus:outline-none"
 		>
 			{@render children()}
 		</main>
