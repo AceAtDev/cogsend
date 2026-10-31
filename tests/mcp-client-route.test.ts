@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Client } from '@modelcontextprotocol/client';
 import { mcpConfirmations, mcpIdempotency, publishTargets } from '#lib/server/db/schema.js';
 import * as publish from '#lib/server/publish.js';
+import { overallOutcome } from '#lib/server/api/agent-operations.js';
 import { createMcpHarness, data, inHours, text } from './mcp-harness';
 
 const expectedTools = [
@@ -396,6 +397,30 @@ describe('schedule_posts', () => {
 			status: 'published',
 			channel: { key: 'jobjob.linkedin' }
 		});
+	});
+	it('reports a failed publish at the top level, not as published', async () => {
+		vi.spyOn(publish, 'publishTarget').mockImplementation(async (db, _env, _media, targetId) => {
+			await db
+				.update(publishTargets)
+				.set({ status: 'failed' })
+				.where(eq(publishTargets.id, targetId));
+			return { status: 'failed', error: 'refused by the platform' } as never;
+		});
+		const posts = [{ channels: ['jobjob.linkedin'], text: 'Will fail', runAt: 'now' }];
+		const preview = data(await call('schedule_posts', { posts }));
+		const done = await call('schedule_posts', { posts, confirmToken: preview.confirmToken });
+		expect(data(done).status).toBe('failed');
+		expect(text(done)).toMatch(/^FAILED: /);
+		expect(data(done).posts[0].deliveries[0].status).toBe('failed');
+	});
+});
+
+describe('overall outcome of a batch', () => {
+	it('is failed when every delivery failed, partial when some did or the run stopped', () => {
+		expect(overallOutcome(['failed'], false)).toBe('failed');
+		expect(overallOutcome(['failed', 'published'], false)).toBe('partial');
+		expect(overallOutcome(['published', 'pending'], true)).toBe('partial');
+		expect(overallOutcome(['published', 'pending'], false)).toBe('published');
 	});
 });
 

@@ -804,8 +804,12 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 	}
 	const deliveries = results.flatMap((r) => r.deliveries);
 	const publishedNow = plans.some((p) => p.runAt.now);
+	const nowOutcome = overallOutcome(
+		deliveries.map((d) => d.status),
+		false
+	);
 	return {
-		status: publishedNow ? 'published' : 'scheduled',
+		status: publishedNow ? nowOutcome : 'scheduled',
 		committed: true,
 		complete: true,
 		now: nowView(agent),
@@ -813,7 +817,7 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 		warnings,
 		next: 'Done. list_posts shows them; reschedule_posts changes a time, move_post changes a channel, cancel_posts stops one.',
 		summary: [
-			`${publishedNow ? 'Published/queued' : 'Scheduled'} ${deliveries.length} deliver${deliveries.length === 1 ? 'y' : 'ies'}:`,
+			`${publishedNow && nowOutcome !== 'published' ? `${nowOutcome.toUpperCase()}: ` : ''}${publishedNow ? 'Published/queued' : 'Scheduled'} ${deliveries.length} deliver${deliveries.length === 1 ? 'y' : 'ies'}:`,
 			...deliveries.map(
 				(d) =>
 					`${d.channel.key} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (post ${d.postId}, delivery ${d.deliveryId})${d.error ? ` — ${d.error}` : ''}`
@@ -1422,19 +1426,28 @@ export async function publishNowOp(
 				permalink: r.permalink,
 				error: r.error
 			}));
+			const outcome = overallOutcome(
+				deliveries.map((d) => d.status),
+				Boolean(published.stopped)
+			);
 			return {
-				status: published.stopped ? 'partial' : 'published',
+				status: outcome,
 				committed: true,
 				now: nowView(agent),
 				postId: input.postId,
 				channels: channels.map(channelView),
 				deliveries,
 				...(published.stopped ? { error: published.stoppedError } : {}),
-				next: published.stopped
-					? 'Some channels were not reached; they are still due and go out on the next scheduler tick. Do not resend.'
-					: 'Done. Deliveries with status pending go out on the next scheduler tick; do not resend them.',
+				next:
+					outcome === 'failed'
+						? 'Nothing was published. Read each delivery error, fix the cause, then call publish_now again for this post.'
+						: published.stopped
+							? 'Some channels were not reached; they are still due and go out on the next scheduler tick. Do not resend.'
+							: outcome === 'partial'
+								? 'Some deliveries failed; the rest went out. Fix the failed ones from their errors and publish_now only those channels; do not resend the published ones.'
+								: 'Done. Deliveries with status pending go out on the next scheduler tick; do not resend them.',
 				summary: [
-					`Publish of post ${input.postId}:`,
+					`${outcome === 'failed' ? 'FAILED: ' : outcome === 'partial' ? 'PARTIAL: ' : ''}Publish of post ${input.postId}:`,
 					...deliveries.map(
 						(d) =>
 							`  ${d.channel.key} ${d.channel.handle ?? ''} — ${d.status}${d.permalink ? ` ${d.permalink}` : ''}${d.error ? ` — ${d.error}` : ''}`
@@ -1444,6 +1457,18 @@ export async function publishNowOp(
 		},
 		now
 	);
+}
+
+/** One word for a batch of deliveries, so an agent reading only the top level
+ *  is never told "published" when a channel failed. */
+export function overallOutcome(
+	statuses: string[],
+	stopped: boolean
+): 'published' | 'partial' | 'failed' {
+	const failed = statuses.filter((s) => s === 'failed').length;
+	if (statuses.length && failed === statuses.length) return 'failed';
+	if (failed || stopped) return 'partial';
+	return 'published';
 }
 
 export const DELIVERY_STATUSES = [
