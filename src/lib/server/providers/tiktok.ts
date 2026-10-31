@@ -399,6 +399,16 @@ export const tiktokProvider: PlatformProvider = {
 		supportsVisibility: false,
 		supportsThreads: false
 	},
+	requirements: {
+		imageMimes: [],
+		requiresMedia: true,
+		altText: { images: false, videos: false },
+		notes: [
+			'Exactly one video per post; photo posts need a verified domain and are not supported',
+			'Privacy, comments, Duet and Stitch come from the account settings and what TikTok allows the creator',
+			'Until TikTok audits the app, every post is Only me and only private accounts can post'
+		]
+	},
 
 	validate(content, meta): ValidationIssue[] {
 		const { text, media } = singlePost(content);

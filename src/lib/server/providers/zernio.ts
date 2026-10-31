@@ -169,6 +169,7 @@ export function zernioProviderFor(
 		// Zernio is sent media URLs (mediaItemFor), never bytes.
 		mediaByUrl: true,
 		capabilities: direct.capabilities,
+		requirements: direct.requirements,
 		// Zernio's X route stops at 280 whatever the account's own plan.
 		validate: (content, meta) =>
 			direct.validate(

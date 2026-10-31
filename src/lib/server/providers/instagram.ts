@@ -1,6 +1,7 @@
 import {
 	INSTAGRAM_MAX_IMAGE_BYTES,
 	INSTAGRAM_MAX_ITEMS,
+	INSTAGRAM_PHOTO_ASPECT,
 	instagramMediaProblems
 } from '#lib/domain/media-limits.js';
 import { formatThreadsMetaMarker } from '#lib/domain/threads-error.js';
@@ -155,6 +156,19 @@ export const instagramProvider: PlatformProvider = {
 		supportsCW: false,
 		supportsVisibility: false,
 		supportsThreads: false
+	},
+	requirements: {
+		imageMimes: ['image/jpeg'],
+		jpegCopyMimes: ['image/png', 'image/webp'],
+		imageAspect: INSTAGRAM_PHOTO_ASPECT,
+		requiresMedia: true,
+		videoCover: true,
+		altText: { images: true, videos: false, maxLength: MAX_ALT_TEXT },
+		notes: [
+			'A video goes on its own, as a Reel',
+			'A PNG or WebP goes as a JPEG copy, which the composer makes at upload and the Images binding makes later; attach a JPEG otherwise',
+			'At most 30 hashtags'
+		]
 	},
 
 	validate(content, meta): ValidationIssue[] {

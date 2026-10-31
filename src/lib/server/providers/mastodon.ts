@@ -361,6 +361,14 @@ export const mastodonProvider: PlatformProvider = {
 		supportsVisibility: true,
 		supportsThreads: true
 	},
+	requirements: {
+		videoCover: true,
+		altText: { images: true, videos: true },
+		notes: [
+			'Links count as 23 characters, and a content warning counts toward the limit',
+			'A poll cannot go with media'
+		]
+	},
 
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[] {
 		const issues: ValidationIssue[] = [];

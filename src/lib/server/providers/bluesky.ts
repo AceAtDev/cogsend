@@ -579,6 +579,10 @@ export const blueskyProvider: PlatformProvider = {
 		supportsVisibility: false,
 		supportsThreads: true
 	},
+	requirements: {
+		altText: { images: true, videos: true },
+		notes: ['Text is also capped at 3,000 bytes of UTF-8']
+	},
 
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[] {
 		const issues: ValidationIssue[] = [];

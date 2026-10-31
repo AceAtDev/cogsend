@@ -7,7 +7,7 @@ import { fail } from './http';
 import { draftEditBlock } from './publish-plan';
 
 const MAX_SEGMENT_INDEX = 100;
-const MAX_ALT_LENGTH = 1500;
+export const MAX_ALT_LENGTH = 1500;
 // No per-draft or per-user cap existed: segment math alone allows
 // ~400 files per draft (100 segments x 4), unbounded R2 cost and
 // Worker-memory pressure at publish (bytes are buffered ~2x).
@@ -27,13 +27,23 @@ export function cleanAltText(value: unknown): string | null {
 	return trimmed.slice(0, MAX_ALT_LENGTH);
 }
 
-export async function rejectIfNotEditable(db: App.Locals['db'], draftId: string) {
+/** Why the draft's media cannot change now (publishing, or published), or null. */
+export async function draftMediaEditBlock(
+	db: App.Locals['db'],
+	draftId: string
+): Promise<string | null> {
 	const targets = await db.select().from(publishTargets).where(eq(publishTargets.draftId, draftId));
-	const blocked = draftEditBlock(targets);
+	return draftEditBlock(targets);
+}
+
+export async function rejectIfNotEditable(db: App.Locals['db'], draftId: string) {
+	const blocked = await draftMediaEditBlock(db, draftId);
 	return blocked ? fail(blocked, 409) : null;
 }
 
-export async function ownDraft(locals: App.Locals, id: string, userId: string) {
+type DbLocals = Pick<App.Locals, 'db'>;
+
+export async function ownDraft(locals: DbLocals, id: string, userId: string) {
 	return first(
 		locals.db
 			.select()
@@ -54,7 +64,7 @@ export async function ownDraft(locals: App.Locals, id: string, userId: string) {
  * those is attached at publish.
  */
 export async function segmentProblem(
-	locals: App.Locals,
+	locals: DbLocals,
 	draft: { id: string; baseBody: string | null },
 	segmentIndex: number
 ): Promise<string | null> {
@@ -103,27 +113,27 @@ const isVideoRow = (m: { mime: string | null }) =>
  * it completes, since another upload may have landed in between.
  */
 export async function videoSlotProblem(
-	locals: App.Locals,
+	locals: DbLocals,
 	draft: { id: string; baseBody: string | null; userId: string },
 	segmentIndex: number
-): Promise<Response | null> {
+): Promise<{ message: string; status: number } | null> {
 	const problem = await segmentProblem(locals, draft, segmentIndex);
-	if (problem) return fail(problem, 400);
+	if (problem) return { message: problem, status: 400 };
 	const existing = await locals.db
 		.select()
 		.from(draftMedia)
 		.where(eq(draftMedia.draftId, draft.id));
 	if (existing.length + 1 > MAX_FILES_PER_DRAFT) {
-		return fail(`Max ${MAX_FILES_PER_DRAFT} files per draft`, 413);
+		return { message: `Max ${MAX_FILES_PER_DRAFT} files per draft`, status: 413 };
 	}
 	if (await overUserFileCap(locals.db, draft.userId, 1)) {
-		return fail(`Max ${MAX_FILES_PER_USER} files per account`, 413);
+		return { message: `Max ${MAX_FILES_PER_USER} files per account`, status: 413 };
 	}
 	const onSegment = existing.filter((m) => (m.segmentIndex ?? 0) === segmentIndex);
 	if (onSegment.length >= MAX_IMAGES_PER_SEGMENT) {
-		return fail(`Max ${MAX_IMAGES_PER_SEGMENT} images per post`);
+		return { message: `Max ${MAX_IMAGES_PER_SEGMENT} images per post`, status: 400 };
 	}
 	const videos = onSegment.filter(isVideoRow).length;
 	const mix = videoMixProblem(videos + 1, onSegment.length - videos);
-	return mix ? fail(mix) : null;
+	return mix ? { message: mix, status: 400 } : null;
 }

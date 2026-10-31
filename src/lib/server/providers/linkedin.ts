@@ -485,6 +485,11 @@ export const linkedinProvider: PlatformProvider = {
 		supportsVisibility: false,
 		supportsThreads: false
 	},
+	requirements: {
+		imageMimes: ['image/jpeg', 'image/png', 'image/gif'],
+		videoCover: true,
+		altText: { images: true, videos: false, maxLength: LINKEDIN_MAX_ALT_TEXT }
+	},
 
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[] {
 		const issues: ValidationIssue[] = [];

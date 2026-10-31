@@ -86,11 +86,12 @@ function megabytes(bytes: number): string {
 
 const CODEC_NAMES: Record<string, string> = { avc: 'H.264', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' };
 
-function codecName(codec: string): string {
+export function codecName(codec: string): string {
 	return CODEC_NAMES[codec] ?? codec;
 }
 
-interface Limits {
+/** What one platform takes in a video; unset fields are not limited (or not known). */
+export interface VideoLimits {
 	minMs?: number;
 	maxMs?: number;
 	maxMsNote?: string;
@@ -108,7 +109,7 @@ interface Limits {
 	faststart?: boolean;
 }
 
-function limitsFor(platform: string, meta: VideoRuleMeta | null | undefined): Limits | null {
+export function videoLimitsFor(platform: string, meta?: VideoRuleMeta | null): VideoLimits | null {
 	switch (platform) {
 		case 'x': {
 			// Zernio's X route is not the account's own, so its plan is unknown.
@@ -182,7 +183,7 @@ export function videoIssues(
 	facts: VideoFacts,
 	meta?: VideoRuleMeta | null
 ): VideoIssue[] {
-	const limits = limitsFor(platform, meta);
+	const limits = videoLimitsFor(platform, meta);
 	if (!limits) return [];
 	const name = platformName(platform);
 	const issues: VideoIssue[] = [];

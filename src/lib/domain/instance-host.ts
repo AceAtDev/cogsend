@@ -14,6 +14,13 @@ export function isPrivateIpv4(ip: string): boolean {
 	if (a === 169 && b === 254) return true;
 	if (a === 172 && b >= 16 && b <= 31) return true;
 	if (a === 100 && b >= 64 && b <= 127) return true;
+	// Benchmarking, IETF protocol and documentation ranges, then multicast,
+	// reserved and broadcast: none of them is a public web server.
+	if (a === 198 && (b === 18 || b === 19)) return true;
+	if (a === 192 && b === 0 && (Number(m[3]) === 0 || Number(m[3]) === 2)) return true;
+	if (a === 198 && b === 51 && Number(m[3]) === 100) return true;
+	if (a === 203 && b === 0 && Number(m[3]) === 113) return true;
+	if (a >= 224) return true;
 	return false;
 }
 
@@ -75,11 +82,26 @@ function mappedIpv6ToV4(host: string): string | null {
 	return `${a}.${b}.${c}.${d}`;
 }
 
+// NAT64 (`64:ff9b::7f00:1`) and the old IPv4-compatible form (`::7f00:1`, which
+// URL parsing makes of `[::127.0.0.1]`) both carry an IPv4 address in the low
+// 32 bits, and reach it.
+function embeddedIpv4(host: string): string | null {
+	const m = host.match(/^(?:64:ff9b:(?:0:)*:?|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+	if (!m) return null;
+	const [a, b] = hexWordToBytePair(m[1]);
+	const [c, d] = hexWordToBytePair(m[2]);
+	return `${a}.${b}.${c}.${d}`;
+}
+
 function isPrivateIpv6(ip: string): boolean {
 	const h = ip.toLowerCase();
 	if (h === '::1' || h === '::') return true;
-	if (h.startsWith('fe80:')) return true;
+	// Link-local and the retired site-local (fe80::/10, fec0::/10), multicast.
+	if (/^fe[89a-f]/.test(h) || h.startsWith('ff')) return true;
 	if (h.startsWith('fc') || h.startsWith('fd')) return true;
+	if (h.startsWith('2001:db8:')) return true;
+	const embedded = embeddedIpv4(h);
+	if (embedded && isPrivateIpv4(embedded)) return true;
 	return false;
 }
 

@@ -368,6 +368,32 @@ export class PublishPartialError extends Error {
 	}
 }
 
+/**
+ * A provider's media rules beyond `capabilities`, for the requirements an
+ * agent reads before it builds a post (server/platform-requirements). Every
+ * field is optional: a provider that declares none is described from its
+ * capabilities, the video rules and the text limits alone, with CogSend's own
+ * defaults for the rest. Keep these in step with what `validate` refuses.
+ */
+export interface ProviderRequirements {
+	/** Image types the platform takes. Unset: every type CogSend stores. */
+	imageMimes?: readonly string[];
+	/** Types sent as the JPEG copy kept beside them (jpegKey), so only once one exists. */
+	jpegCopyMimes?: readonly string[];
+	/** Narrowest and widest width:height of a photo. */
+	imageAspect?: { min: number; max: number; label: string };
+	/** A post with no photo or video is refused. */
+	requiresMedia?: boolean;
+	/** The platform takes no video at all. */
+	noVideo?: boolean;
+	/** A chosen video cover is sent with the video. */
+	videoCover?: boolean;
+	/** Which attachments carry their alt text, and the longest it keeps. */
+	altText?: { images: boolean; videos: boolean; maxLength?: number };
+	/** Rules the numbers cannot say, one sentence each. */
+	notes?: readonly string[];
+}
+
 export interface PlatformProvider {
 	id: PlatformId;
 	/**
@@ -384,6 +410,8 @@ export interface PlatformProvider {
 		supportsVisibility: boolean;
 		supportsThreads: boolean;
 	};
+	/** What `capabilities` and the shared limits cannot say; see ProviderRequirements. */
+	requirements?: ProviderRequirements;
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[];
 	publish(
 		content: NormalizedPost,

@@ -19,6 +19,7 @@
 
 import { isBlockedInstanceHost } from '#lib/domain/instance-host.js';
 import type { FetchLike } from './providers/types';
+import { assertPublicHttpUrl } from './safe-fetch';
 
 export interface OpenGraphData {
 	url: string;
@@ -32,22 +33,6 @@ export const OG_HTML_MAX_BYTES = 2_000_000;
 export const OG_IMAGE_MAX_BYTES = 5_000_000;
 const OG_FETCH_TIMEOUT_MS = 10_000;
 const OG_MAX_REDIRECTS = 3;
-
-function assertPublicHttpUrl(raw: string): URL {
-	let u: URL;
-	try {
-		u = new URL(raw);
-	} catch {
-		throw Object.assign(new Error('Invalid URL'), { status: 400 });
-	}
-	if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-		throw Object.assign(new Error('Only http(s) URLs are supported'), { status: 400 });
-	}
-	if (isBlockedInstanceHost(u.hostname)) {
-		throw Object.assign(new Error('URL host not allowed'), { status: 400 });
-	}
-	return u;
-}
 
 export function decodeHtmlEntities(s: string): string {
 	return s
