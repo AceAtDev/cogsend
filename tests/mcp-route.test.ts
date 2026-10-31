@@ -27,7 +27,18 @@ const toolNames = [
 	'list_queue',
 	'cancel_delivery',
 	'retry_delivery',
-	'reschedule_delivery'
+	'reschedule_delivery',
+	'get_platform_requirements',
+	'list_media',
+	'attach_media_from_url',
+	'attach_media_base64',
+	'create_media_upload',
+	'complete_media_upload',
+	'abort_media_upload',
+	'update_media',
+	'remove_media',
+	'set_video_cover',
+	'remove_video_cover'
 ];
 
 const readAnnotations = {
@@ -57,6 +68,12 @@ const deleteAnnotations = {
 const publishAnnotations = {
 	readOnlyHint: false,
 	destructiveHint: true,
+	idempotentHint: false,
+	openWorldHint: true
+};
+const fetchAnnotations = {
+	readOnlyHint: false,
+	destructiveHint: false,
 	idempotentHint: false,
 	openWorldHint: true
 };
@@ -196,7 +213,7 @@ async function postMcp(
 }
 
 describe('MCP route', () => {
-	it('exposes exactly the curated 16-tool catalog and the required annotations', async () => {
+	it('exposes exactly the curated 27-tool catalog and the required annotations', async () => {
 		const { response, payload } = await postMcp('tools/list');
 		expect(response.headers.get('content-type')).toContain('application/json');
 		expect(response.headers.get('content-type')).not.toContain('text/event-stream');
@@ -221,7 +238,10 @@ describe('MCP route', () => {
 				required: ['draftId', 'platform']
 			},
 			delete_draft_variant: { fields: ['draftId', 'platform'], required: ['draftId', 'platform'] },
-			validate_post: { fields: ['text', 'platform', 'maxCharacters'], required: ['text'] },
+			validate_post: {
+				fields: ['text', 'platform', 'maxCharacters', 'draftId', 'connectionIds'],
+				required: []
+			},
 			publish_draft: {
 				fields: ['draftId', 'connectionIds'],
 				required: ['draftId', 'connectionIds']
@@ -233,7 +253,36 @@ describe('MCP route', () => {
 			list_queue: { fields: ['limit'], required: [] },
 			cancel_delivery: { fields: ['targetId'], required: ['targetId'] },
 			retry_delivery: { fields: ['targetId'], required: ['targetId'] },
-			reschedule_delivery: { fields: ['targetId', 'runAt'], required: ['targetId', 'runAt'] }
+			reschedule_delivery: { fields: ['targetId', 'runAt'], required: ['targetId', 'runAt'] },
+			get_platform_requirements: { fields: ['platforms', 'connectionIds'], required: [] },
+			list_media: { fields: ['draftId'], required: ['draftId'] },
+			attach_media_from_url: {
+				fields: ['draftId', 'url', 'segmentIndex', 'altText'],
+				required: ['draftId', 'url']
+			},
+			attach_media_base64: {
+				fields: ['draftId', 'data', 'segmentIndex', 'altText'],
+				required: ['draftId', 'data']
+			},
+			create_media_upload: {
+				fields: ['draftId', 'size', 'mime', 'segmentIndex'],
+				required: ['draftId', 'size']
+			},
+			complete_media_upload: {
+				fields: ['draftId', 'upload', 'parts', 'altText'],
+				required: ['draftId', 'upload', 'parts']
+			},
+			abort_media_upload: { fields: ['draftId', 'upload'], required: ['draftId', 'upload'] },
+			update_media: {
+				fields: ['draftId', 'mediaId', 'altText', 'segmentIndex'],
+				required: ['draftId', 'mediaId']
+			},
+			remove_media: { fields: ['draftId', 'mediaId'], required: ['draftId', 'mediaId'] },
+			set_video_cover: {
+				fields: ['draftId', 'mediaId', 'data', 'url', 'atMs'],
+				required: ['draftId', 'mediaId']
+			},
+			remove_video_cover: { fields: ['draftId', 'mediaId'], required: ['draftId', 'mediaId'] }
 		};
 		for (const tool of tools) {
 			const expected = expectedParameters[tool.name];
@@ -259,7 +308,18 @@ describe('MCP route', () => {
 			list_queue: readAnnotations,
 			cancel_delivery: deleteAnnotations,
 			retry_delivery: publishAnnotations,
-			reschedule_delivery: updateAnnotations
+			reschedule_delivery: updateAnnotations,
+			get_platform_requirements: readAnnotations,
+			list_media: readAnnotations,
+			attach_media_from_url: fetchAnnotations,
+			attach_media_base64: createAnnotations,
+			create_media_upload: createAnnotations,
+			complete_media_upload: createAnnotations,
+			abort_media_upload: deleteAnnotations,
+			update_media: updateAnnotations,
+			remove_media: deleteAnnotations,
+			set_video_cover: updateAnnotations,
+			remove_video_cover: deleteAnnotations
 		};
 		for (const tool of tools) expect(tool.annotations).toEqual(expectedAnnotations[tool.name]);
 

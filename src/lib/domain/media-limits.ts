@@ -133,7 +133,8 @@ const PLATFORM_LABEL = {
 	x: 'X'
 };
 
-function imageCap(platform: string, mime: string): number | null {
+/** The largest image of this type `platform` takes, or null when CogSend holds it to no cap of its own. */
+export function platformImageCap(platform: string, mime: string): number | null {
 	if (platform === 'bluesky') return BLUESKY_MAX_IMAGE_BYTES;
 	if (platform === 'linkedin') return LINKEDIN_MAX_IMAGE_BYTES;
 	if (platform === 'threads') return THREADS_MAX_IMAGE_BYTES;
@@ -171,7 +172,7 @@ export function imageOverCap(
 	for (const m of media) {
 		const mime = (m.mime || '').toLowerCase();
 		if (mime.startsWith('video/') || m.size === undefined) continue;
-		const cap = imageCap(platform, mime);
+		const cap = platformImageCap(platform, mime);
 		if (cap !== null && m.size > cap) {
 			const label = PLATFORM_LABEL[platform as keyof typeof PLATFORM_LABEL];
 			return `An image is over ${label}'s ${cap / 1_000_000}MB limit`;
@@ -203,8 +204,9 @@ export function jpegCopyExpected(
 
 // Feed photos run from 4:5 portrait to 1.91:1 landscape; a hair of slack so a
 // 1080×1350 crop rounded by an editor still counts as 4:5.
-const INSTAGRAM_MIN_ASPECT = 0.8 - 0.005;
-const INSTAGRAM_MAX_ASPECT = 1.91 + 0.005;
+export const INSTAGRAM_PHOTO_ASPECT = { min: 0.8, max: 1.91, label: '4:5 tall to 1.91:1 wide' };
+const INSTAGRAM_MIN_ASPECT = INSTAGRAM_PHOTO_ASPECT.min - 0.005;
+const INSTAGRAM_MAX_ASPECT = INSTAGRAM_PHOTO_ASPECT.max + 0.005;
 
 /**
  * What stops a post from going to Instagram, worst first, given the whole
@@ -239,7 +241,7 @@ export function instagramMediaProblems(media: InstagramMediaFacts[]): string[] {
 		const aspect = m.width / m.height;
 		return aspect < INSTAGRAM_MIN_ASPECT || aspect > INSTAGRAM_MAX_ASPECT;
 	});
-	if (offShape) problems.push('Instagram takes photos from 4:5 tall to 1.91:1 wide');
+	if (offShape) problems.push(`Instagram takes photos from ${INSTAGRAM_PHOTO_ASPECT.label}`);
 	return problems;
 }
 

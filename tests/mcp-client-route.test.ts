@@ -28,7 +28,18 @@ const expectedTools = [
 	'list_queue',
 	'cancel_delivery',
 	'retry_delivery',
-	'reschedule_delivery'
+	'reschedule_delivery',
+	'get_platform_requirements',
+	'list_media',
+	'attach_media_from_url',
+	'attach_media_base64',
+	'create_media_upload',
+	'complete_media_upload',
+	'abort_media_upload',
+	'update_media',
+	'remove_media',
+	'set_video_cover',
+	'remove_video_cover'
 ];
 
 let db: Awaited<ReturnType<typeof createTestDb>>['db'];
@@ -152,14 +163,26 @@ const expectedOutputFields: Record<string, string[]> = {
 		'threads',
 		'instagram',
 		'x',
-		'issues'
+		'issues',
+		'draft'
 	],
 	publish_draft: ['results', 'stopped', 'stoppedError', 'draft'],
 	schedule_draft: ['targets', 'scheduledFor'],
 	list_queue: ['targets', 'hasMore'],
 	cancel_delivery: ['target'],
 	retry_delivery: ['status', 'remotePostId', 'error', 'skipped'],
-	reschedule_delivery: ['ok', 'scheduledFor']
+	reschedule_delivery: ['ok', 'scheduledFor'],
+	get_platform_requirements: ['platforms', 'accounts', 'store', 'attach'],
+	list_media: ['media'],
+	attach_media_from_url: ['media', 'sourceUrl'],
+	attach_media_base64: ['media', 'sourceUrl'],
+	create_media_upload: ['upload', 'parts', 'request', 'complete', 'abort'],
+	complete_media_upload: ['media', 'sourceUrl'],
+	abort_media_upload: ['ok'],
+	update_media: ['media', 'sourceUrl'],
+	remove_media: ['ok'],
+	set_video_cover: ['media', 'sourceUrl'],
+	remove_video_cover: ['media', 'sourceUrl']
 };
 
 describe('MCP protocol client through the deployed route handler', () => {
@@ -257,7 +280,18 @@ describe('MCP protocol client through the deployed route handler', () => {
 			list_queue: read,
 			cancel_delivery: remove,
 			retry_delivery: publish,
-			reschedule_delivery: update
+			reschedule_delivery: update,
+			get_platform_requirements: read,
+			list_media: read,
+			attach_media_from_url: { ...create, openWorldHint: true },
+			attach_media_base64: create,
+			create_media_upload: create,
+			complete_media_upload: create,
+			abort_media_upload: remove,
+			update_media: update,
+			remove_media: remove,
+			set_video_cover: update,
+			remove_video_cover: remove
 		});
 	});
 

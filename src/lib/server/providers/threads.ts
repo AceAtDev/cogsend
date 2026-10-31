@@ -415,6 +415,11 @@ export const threadsProvider: PlatformProvider = {
 		supportsVisibility: false,
 		supportsThreads: true
 	},
+	requirements: {
+		imageMimes: [...THREADS_IMAGE_MIMES],
+		altText: { images: false, videos: true },
+		notes: ['At most 5 links per post']
+	},
 
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[] {
 		const issues: ValidationIssue[] = [];

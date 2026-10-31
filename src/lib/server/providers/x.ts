@@ -28,6 +28,7 @@ export const X_MAX_CHARS = 280;
 export const X_MAX_IMAGES = 4;
 export { X_MAX_GIF_BYTES, X_MAX_IMAGE_BYTES } from '#lib/domain/media-limits.js';
 const X_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const X_MAX_ALT_TEXT = 1000;
 // APPEND chunks: server max is 8MB; docs recommend <=5MB.
 const X_UPLOAD_CHUNK_BYTES = 5_000_000;
 // STATUS poll budget: honor check_after_secs (capped) up to ~30s total.
@@ -514,7 +515,7 @@ async function setAltText(
 	fetchImpl: FetchLike
 ): Promise<void> {
 	if (!altText?.trim()) return;
-	const alt = altText.trim().slice(0, 1000);
+	const alt = altText.trim().slice(0, X_MAX_ALT_TEXT);
 	for (const shape of [
 		{ media_id: mediaId, alt_text: { text: alt } },
 		{ id: mediaId, alt_text: { text: alt } }
@@ -666,6 +667,15 @@ export const xProvider: PlatformProvider = {
 		supportsCW: false,
 		supportsVisibility: false,
 		supportsThreads: true
+	},
+	requirements: {
+		imageMimes: [...X_IMAGE_MIMES],
+		altText: { images: true, videos: true, maxLength: X_MAX_ALT_TEXT },
+		notes: [
+			'A GIF goes on its own: one per post, with no other images',
+			'Links count as 23 characters, and emoji and most non-Latin characters as 2',
+			'At most one cashtag ($AAPL) per post'
+		]
 	},
 
 	validate(content: NormalizedPost, meta?: ConnectionMeta): ValidationIssue[] {
