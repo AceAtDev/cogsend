@@ -24,6 +24,8 @@ export interface VideoRuleMeta extends XLimitMeta {
 	videoSizeLimit?: number | null;
 	videoMatrixLimit?: number | null;
 	videoFrameRateLimit?: number | null;
+	/** TikTok: the longest video this creator may post (`max_video_post_duration_sec`). */
+	tiktokMaxVideoSec?: number | null;
 }
 
 /** In every message about a parked video; the composer and Posts read it to say "Processing". */
@@ -63,6 +65,9 @@ const MASTODON_VIDEO_MATRIX = 8_294_400;
 const MASTODON_VIDEO_FPS = 120;
 
 const X_FREE_MAX_MS = 140_000;
+// The longest the Content Posting API takes. Every creator may post 3 minutes
+// and some 5 or 10, which creator_info reports per account.
+const TIKTOK_API_MAX_MS = 10 * 60_000;
 const X_PREMIUM_MAX_MS = 125 * 60_000;
 
 /** `2:20`, `1:02:05`. */
@@ -96,6 +101,8 @@ interface Limits {
 	aspect?: [number, number, string];
 	maxWidth?: number;
 	maxPixels?: number;
+	/** Shortest and longest side, in pixels, for both width and height. */
+	sides?: [number, number];
 	minFps?: number;
 	maxFps?: number;
 	faststart?: boolean;
@@ -149,6 +156,21 @@ function limitsFor(platform: string, meta: VideoRuleMeta | null | undefined): Li
 				maxFps: 60,
 				faststart: true
 			};
+		case 'tiktok': {
+			// The Content Posting API's media transfer guide. Without the creator's
+			// own limit (creator_info could not be read) only the API's is held
+			// here, and publish checks the creator's again before uploading.
+			const reported = meta?.tiktokMaxVideoSec;
+			const known = typeof reported === 'number' && reported > 0;
+			return {
+				maxMs: known ? Math.min(reported * 1000, TIKTOK_API_MAX_MS) : TIKTOK_API_MAX_MS,
+				maxBytes: 4_000_000_000,
+				codecs: ['avc', 'hevc', 'vp8', 'vp9'],
+				sides: [360, 4096],
+				minFps: 23,
+				maxFps: 60
+			};
+		}
 		default:
 			return null;
 	}
@@ -203,6 +225,14 @@ export function videoIssues(
 		}
 		if (limits.maxWidth && width > limits.maxWidth) {
 			error(`${name} takes videos up to ${limits.maxWidth} pixels wide — this one is ${width}`);
+		}
+		if (limits.sides) {
+			const [least, most] = limits.sides;
+			if (Math.min(width, height) < least || Math.max(width, height) > most) {
+				error(
+					`${name} takes videos from ${least} to ${most} pixels a side — this one is ${width}×${height}`
+				);
+			}
 		}
 		if (limits.maxPixels && width * height > limits.maxPixels) {
 			const most =

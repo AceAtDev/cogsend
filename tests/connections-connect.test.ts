@@ -8,6 +8,7 @@ import { POST as linkedinPOST } from '../src/routes/api/connections/linkedin/+se
 import { POST as mastodonPOST } from '../src/routes/api/connections/mastodon/+server';
 import { POST as instagramPOST } from '../src/routes/api/connections/instagram/+server';
 import { POST as threadsPOST } from '../src/routes/api/connections/threads/+server';
+import { POST as tiktokPOST } from '../src/routes/api/connections/tiktok/+server';
 import { POST as xPOST } from '../src/routes/api/connections/x/+server';
 import { platformName } from '#lib/domain/platforms.js';
 import { PLATFORM_SECRET_NAMES, PLATFORM_SETUP } from '#lib/domain/platform-setup.js';
@@ -30,6 +31,8 @@ describe('connect routes', () => {
 		THREADS_APP_SECRET: 'threads-secret',
 		INSTAGRAM_APP_ID: 'ig-app',
 		INSTAGRAM_APP_SECRET: 'ig-secret',
+		TIKTOK_CLIENT_KEY: 'tt-key',
+		TIKTOK_CLIENT_SECRET: 'tt-secret',
 		X_CLIENT_ID: 'x-client',
 		X_CLIENT_SECRET: 'x-secret',
 		LINKEDIN_CLIENT_ID: 'li-client',
@@ -82,7 +85,14 @@ describe('connect routes', () => {
 	afterEach(() => vi.unstubAllGlobals());
 
 	it('refuses bearer credentials — connecting is session-only', async () => {
-		for (const handler of [mastodonPOST, threadsPOST, instagramPOST, xPOST, linkedinPOST]) {
+		for (const handler of [
+			mastodonPOST,
+			threadsPOST,
+			instagramPOST,
+			tiktokPOST,
+			xPOST,
+			linkedinPOST
+		]) {
 			const res = await call(
 				handler,
 				{ instanceUrl: 'https://mastodon.example' },
@@ -100,6 +110,7 @@ describe('connect routes', () => {
 		for (const [handler, platform, secrets] of [
 			[threadsPOST, 'threads', ['THREADS_APP_ID', 'THREADS_APP_SECRET']],
 			[instagramPOST, 'instagram', ['INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET']],
+			[tiktokPOST, 'tiktok', ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET']],
 			[xPOST, 'x', ['X_CLIENT_ID']],
 			[linkedinPOST, 'linkedin', ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET']]
 		] as const) {
@@ -133,6 +144,7 @@ describe('connect routes', () => {
 		for (const [handler, platform] of [
 			[threadsPOST, 'threads'],
 			[instagramPOST, 'instagram'],
+			[tiktokPOST, 'tiktok'],
 			[xPOST, 'x'],
 			[linkedinPOST, 'linkedin']
 		] as const) {
@@ -173,7 +185,13 @@ describe('connect routes', () => {
 			secrets: Record<string, boolean>;
 			appUrl?: string;
 		};
-		expect(body.configured).toEqual({ linkedin: true, threads: true, instagram: true, x: true });
+		expect(body.configured).toEqual({
+			linkedin: true,
+			threads: true,
+			instagram: true,
+			tiktok: true,
+			x: true
+		});
 		expect(body.appUrl).toBe('https://cogsend.example.com/');
 		// Presence per secret, not just per platform: this is what lets the
 		// dialog name the missing half instead of repeating "no credentials".
@@ -194,6 +212,7 @@ describe('connect routes', () => {
 			linkedin: false,
 			threads: false,
 			instagram: false,
+			tiktok: false,
 			x: false
 		});
 		expect(Object.values(bareBody.secrets).some(Boolean)).toBe(false);
@@ -261,6 +280,25 @@ describe('connect routes', () => {
 				);
 			}
 		}
+	});
+
+	it('returns a TikTok authorize URL with client_key, comma scopes and a bound state', async () => {
+		const res = await call(tiktokPOST);
+		expect(res.status).toBe(200);
+		const url = new URL(((await res.json()) as { authorizeUrl: string }).authorizeUrl);
+		expect(url.origin + url.pathname).toBe('https://www.tiktok.com/v2/auth/authorize/');
+		// TikTok names the client `client_key`, not `client_id`.
+		expect(url.searchParams.get('client_key')).toBe('tt-key');
+		expect(url.searchParams.has('client_id')).toBe(false);
+		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish');
+		expect(url.searchParams.get('response_type')).toBe('code');
+		expect(url.searchParams.get('redirect_uri')).toMatch(/\/api\/connections\/tiktok\/callback$/);
+		expect(url.searchParams.get('state')).toBeTruthy();
+
+		const row = await pendingFor('tiktok');
+		expect(row.clientId).toBe('tt-key');
+		// The secret is needed again at the callback, and travels encrypted.
+		expect(row.clientSecretEnc).not.toContain('tt-secret');
 	});
 
 	it('rejects a Mastodon instance the SSRF guard blocks', async () => {

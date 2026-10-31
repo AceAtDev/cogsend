@@ -376,6 +376,7 @@ export function categorizeFailure(
 	const isThreads = platform === 'threads' || (!platform && s.includes('threads'));
 	const isLinkedIn = platform === 'linkedin' || (!platform && s.includes('linkedin'));
 	const isInstagram = platform === 'instagram' || (!platform && s.includes('instagram'));
+	const isTiktok = platform === 'tiktok' || (!platform && s.includes('tiktok'));
 
 	if (isThreads) {
 		if (isThreadsMediaFetchFailure(raw)) return 'Threads media timeout';
@@ -389,6 +390,14 @@ export function categorizeFailure(
 		if (isThreadsAuthFailure(raw)) return 'Instagram permission';
 		if (s.includes('100 posts a day')) return 'Instagram daily limit';
 		if (s.includes('needs a photo or video')) return 'Instagram needs media';
+	}
+	if (isTiktok) {
+		if (s.includes('has not audited')) return 'TikTok app not audited';
+		if (s.includes('daily post limit') || s.includes('daily limit of accounts'))
+			return 'TikTok daily limit';
+		if (s.includes('needs a video') || s.includes('not photos') || s.includes('one video'))
+			return 'TikTok needs a video';
+		if (s.includes('privacy')) return 'TikTok privacy';
 	}
 	if (isLinkedIn) {
 		if (s.includes('does not support threads') || s.includes('single post'))

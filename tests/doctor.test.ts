@@ -50,14 +50,16 @@ describe('platform credentials', () => {
 	it('marks a deployment without them as complete, not as a problem', () => {
 		const check = platformVerdict(['APP_ENCRYPTION_KEY']);
 		expect(check.status).toBe('ok');
-		expect(check.label).toBe('LinkedIn, Threads, Instagram, X: no app credentials (optional)');
+		expect(check.label).toBe(
+			'LinkedIn, Threads, Instagram, TikTok, X: no app credentials (optional)'
+		);
 		expect(check.detail).toBe('Mastodon and Bluesky can be connected');
 		expect(check.fix).toMatch(/oauth-apps\.md/);
 	});
 
 	it('names only what is missing, and what is not', () => {
 		const check = platformVerdict(['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'X_CLIENT_ID']);
-		expect(check.label).toBe('Threads, Instagram: no app credentials (optional)');
+		expect(check.label).toBe('Threads, Instagram, TikTok: no app credentials (optional)');
 		expect(check.detail).toBe('LinkedIn, X can be connected');
 	});
 
@@ -67,7 +69,7 @@ describe('platform credentials', () => {
 		expect(platformVerdict(['LINKEDIN_CLIENT_ID']).label).toContain('LinkedIn');
 	});
 
-	it('reports all six platforms once the credentials are there', () => {
+	it('reports all seven platforms once the credentials are there', () => {
 		const check = platformVerdict([
 			'LINKEDIN_CLIENT_ID',
 			'LINKEDIN_CLIENT_SECRET',
@@ -75,11 +77,13 @@ describe('platform credentials', () => {
 			'THREADS_APP_SECRET',
 			'INSTAGRAM_APP_ID',
 			'INSTAGRAM_APP_SECRET',
+			'TIKTOK_CLIENT_KEY',
+			'TIKTOK_CLIENT_SECRET',
 			'X_CLIENT_ID'
 		]);
 		expect(check.status).toBe('ok');
-		expect(check.label).toBe('LinkedIn, Threads, Instagram and X have app credentials');
-		expect(check.detail).toBe('all six platforms can be connected');
+		expect(check.label).toBe('LinkedIn, Threads, Instagram, TikTok and X have app credentials');
+		expect(check.detail).toBe('all seven platforms can be connected');
 	});
 });
 

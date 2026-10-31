@@ -12,6 +12,7 @@ import {
 	linkedinVerify,
 	ProviderError,
 	threadsVerify,
+	tiktokVerify,
 	xVerify,
 	type ConnectionCredentials
 } from '#lib/server/providers/index.js';
@@ -265,6 +266,66 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 					avatarUrl: info.avatarUrl || conn.avatarUrl,
 					handle: info.handle || conn.handle,
 					...(metaChanged ? { metaJson: JSON.stringify({ ...meta, igUserId: info.userId }) } : {}),
+					...(Object.keys(credsPatch).length
+						? {
+								credentialsEncrypted: await encryptJson(
+									{ ...checkCreds, ...credsPatch },
+									locals.env.APP_ENCRYPTION_KEY
+								)
+							}
+						: {}),
+					updatedAt: new Date()
+				})
+				.where(owned);
+		} else if (conn.platform === 'tiktok') {
+			// The access token lasts a day, so a Verify is usually a refresh too.
+			let checkCreds = creds;
+			try {
+				const refreshed = await getProvider('tiktok').refreshIfNeeded!(creds);
+				if (refreshed.accessToken && refreshed.accessToken !== creds.accessToken) {
+					checkCreds = refreshed;
+					await locals.db
+						.update(connections)
+						.set({
+							credentialsEncrypted: await encryptJson(refreshed, locals.env.APP_ENCRYPTION_KEY),
+							updatedAt: new Date()
+						})
+						.where(owned);
+				}
+			} catch (err) {
+				if ((err as { status?: number } | null)?.status === 401) {
+					await locals.db
+						.update(connections)
+						.set({ status: 'expired', updatedAt: new Date() })
+						.where(owned);
+					return fail('Token expired — reconnect', 401);
+				}
+			}
+			const info = await tiktokVerify(checkCreds);
+			// What creator_info reports (privacy levels, longest video) changes
+			// with the account, and the composer and Accounts page read it here.
+			const meta = parseJson<Record<string, unknown>>(conn.metaJson, {});
+			const nextMeta = {
+				...meta,
+				...info.meta,
+				...(info.openId ? { tiktokOpenId: info.openId } : {})
+			};
+			const credsPatch = {
+				...(info.openId && info.openId !== checkCreds.tiktokOpenId
+					? { tiktokOpenId: info.openId }
+					: {}),
+				...(info.username && info.username !== checkCreds.tiktokUsername
+					? { tiktokUsername: info.username }
+					: {})
+			};
+			await locals.db
+				.update(connections)
+				.set({
+					status: 'active',
+					displayName: info.displayName || conn.displayName,
+					avatarUrl: info.avatarUrl || conn.avatarUrl,
+					handle: info.handle || conn.handle,
+					metaJson: JSON.stringify(nextMeta),
 					...(Object.keys(credsPatch).length
 						? {
 								credentialsEncrypted: await encryptJson(

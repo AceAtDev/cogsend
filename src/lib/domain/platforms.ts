@@ -1,10 +1,12 @@
-export type PlatformId = 'mastodon' | 'bluesky' | 'linkedin' | 'threads' | 'instagram' | 'x';
+export type PlatformId =
+	'mastodon' | 'bluesky' | 'linkedin' | 'threads' | 'instagram' | 'tiktok' | 'x';
 
-/** Canonical display order everywhere: X first, then Threads, Instagram, LinkedIn, Mastodon, Bluesky. */
+/** Canonical display order everywhere: X first, then Threads, Instagram, TikTok, LinkedIn, Mastodon, Bluesky. */
 export const PLATFORM_ORDER: PlatformId[] = [
 	'x',
 	'threads',
 	'instagram',
+	'tiktok',
 	'linkedin',
 	'mastodon',
 	'bluesky'
@@ -23,6 +25,7 @@ export const PREVIEW_PRIORITY: PlatformId[] = [
 	'x',
 	'threads',
 	'instagram',
+	'tiktok',
 	'linkedin',
 	'mastodon',
 	'bluesky'
@@ -45,6 +48,7 @@ export function supportsThreads(platform: string): boolean {
 export function platformName(p: string): string {
 	if (p === 'linkedin') return 'LinkedIn';
 	if (p === 'x') return 'X';
+	if (p === 'tiktok') return 'TikTok';
 	return p.charAt(0).toUpperCase() + p.slice(1);
 }
 

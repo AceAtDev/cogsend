@@ -90,6 +90,12 @@ export interface ConnectionCredentials {
 	/** Instagram professional account id (`/me` user_id), the publish target */
 	igUserId?: string;
 	igUsername?: string;
+	/** TikTok's id for the user within this app (`open_id`) */
+	tiktokOpenId?: string;
+	/** TikTok username without @ (for permalinks) */
+	tiktokUsername?: string;
+	/** When the refresh token itself runs out (TikTok's lasts a year). */
+	refreshExpiresAt?: number;
 	/** X numeric user id */
 	xUserId?: string;
 	/** X handle without @ (for permalinks) */
@@ -111,6 +117,22 @@ export interface ConnectionMeta {
 	igUserId?: string;
 	/** Instagram: `Business` or `Media_Creator`, the only kinds that can post. */
 	igAccountType?: string;
+	tiktokOpenId?: string;
+	/** TikTok: who may see a post, chosen on the Accounts page. Absent means
+	 *  SELF_ONLY: TikTok's guidelines leave the choice to the creator, so
+	 *  nothing goes out publicly unless they picked it. */
+	tiktokPrivacy?: string;
+	/** TikTok: what the operator allows on posts. Absent is false, as TikTok's
+	 *  guidelines want these unticked until the creator ticks them. */
+	tiktokAllowComment?: boolean;
+	tiktokAllowDuet?: boolean;
+	tiktokAllowStitch?: boolean;
+	/** TikTok: what creator_info last reported for the account. */
+	tiktokPrivacyOptions?: string[];
+	tiktokMaxVideoSec?: number;
+	tiktokCommentDisabled?: boolean;
+	tiktokDuetDisabled?: boolean;
+	tiktokStitchDisabled?: boolean;
 	xUserId?: string;
 	/** X: the last `subscription_type` seen, and the operator's long-post switch. */
 	xSubscription?: string;
@@ -257,7 +279,7 @@ export const UNCONFIRMED_POST_MARK = 'may have been published';
 /**
  * The request that creates a post failed without an answer (timeout, dropped
  * connection) or with a server error, so the platform may have published it.
- * X, LinkedIn, Threads and Instagram take no idempotency key, so a retry cannot
+ * X, LinkedIn, Threads, Instagram and TikTok take no idempotency key, so a retry cannot
  * be recognised as the same post: retrying on its own would risk a duplicate,
  * and the person has to look first.
  * The wording avoids the words humanizedCause and the auth matchers react to,

@@ -151,6 +151,7 @@ const expectedOutputFields: Record<string, string[]> = {
 		'linkedin',
 		'threads',
 		'instagram',
+		'tiktok',
 		'x',
 		'issues'
 	],

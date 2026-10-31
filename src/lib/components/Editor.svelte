@@ -39,6 +39,7 @@
 		imageOverCap,
 		instagramMediaProblems,
 		jpegCopyExpected,
+		tiktokMediaProblems,
 		mediaSizeProblem,
 		remapSegmentIndexAfterRemoval
 	} from '#lib/domain/media-limits.js';
@@ -111,6 +112,7 @@
 	import {
 		countGraphemes,
 		mastodonWeightedLength,
+		tiktokLength,
 		xWeightedLength
 	} from '#lib/domain/validation/text.js';
 	import { utf8ByteLength } from '#lib/domain/bytes.js';
@@ -490,6 +492,7 @@
 	function countForPlatform(text: string, platform: string): number {
 		if (platform === 'mastodon') return mastodonWeightedLength(text);
 		if (platform === 'x') return xWeightedLength(text);
+		if (platform === 'tiktok') return tiktokLength(text);
 		return countGraphemes(text);
 	}
 
@@ -554,6 +557,7 @@
 		const linkedinText = effectivePlatformBody(baseBody, overrides, 'linkedin');
 		const threadsText = effectivePlatformBody(baseBody, overrides, 'threads');
 		const instagramText = effectivePlatformBody(baseBody, overrides, 'instagram');
+		const tiktokText = effectivePlatformBody(baseBody, overrides, 'tiktok');
 		const xText = effectivePlatformBody(baseBody, overrides, 'x');
 		const linkedinFlat = flattenThreadBody(linkedinText);
 		return {
@@ -573,6 +577,10 @@
 			instagram: {
 				len: countGraphemes(flattenThreadBody(instagramText)),
 				max: PLATFORM_LIMITS.instagram
+			},
+			tiktok: {
+				len: tiktokLength(flattenThreadBody(tiktokText)),
+				max: PLATFORM_LIMITS.tiktok
 			},
 			x: {
 				len: maxThreadSegmentLength(xText, xWeightedLength),
@@ -625,6 +633,11 @@
 		);
 		return problems[0] ?? null;
 	});
+	// TikTok flattens the thread too, and takes nothing but one video.
+	const tiktokMediaProblem = $derived.by(() => {
+		if (!selectedPlatforms.has('tiktok')) return null;
+		return tiktokMediaProblems(media)[0] ?? null;
+	});
 	const overSelectedLimit = $derived(
 		isOverSelectedPlatformLimit({
 			selectedPlatforms,
@@ -638,6 +651,8 @@
 			threadsMax: counters.threads.max,
 			instagramLen: counters.instagram.len,
 			instagramMax: counters.instagram.max,
+			tiktokLen: counters.tiktok.len,
+			tiktokMax: counters.tiktok.max,
 			xLen: counters.x.len,
 			xMax: counters.x.max
 		}) ||
@@ -1300,6 +1315,10 @@
 			showToast(instagramMediaProblem, 'warn');
 			return;
 		}
+		if (tiktokMediaProblem && connectionIds.some((id) => platformOf(id) === 'tiktok')) {
+			showToast(tiktokMediaProblem, 'warn');
+			return;
+		}
 		const sizeProblem = mediaSizeProblem(
 			connectionIds.map(platformOf).filter((p) => p !== undefined),
 			media
@@ -1802,6 +1821,10 @@
 			showToast(instagramMediaProblem, 'warn');
 			return;
 		}
+		if (tiktokMediaProblem) {
+			showToast(tiktokMediaProblem, 'warn');
+			return;
+		}
 		const sizeProblem = mediaSizeProblem(selectedPlatforms, media);
 		if (sizeProblem) {
 			showToast(sizeProblem, 'warn');
@@ -2136,7 +2159,7 @@
 	/**
 	 * Every platform that would refuse what is attached to `list`, one row
 	 * each, for the line under the media. `threadWide` adds the rules of the
-	 * platforms that flatten the thread (LinkedIn, Instagram), shown once,
+	 * platforms that flatten the thread (LinkedIn, Instagram, TikTok), shown once,
 	 * under the first card that has media, or the first card when none has.
 	 */
 	function fitProblems(list: MediaItem[], threadWide: boolean): PlatformFit[] {
@@ -2162,6 +2185,9 @@
 				level: 'error',
 				message: instagramMediaProblem
 			});
+		}
+		if (threadWide && tiktokMediaProblem && !rows.has('tiktok')) {
+			rows.set('tiktok', { platform: 'tiktok', level: 'error', message: tiktokMediaProblem });
 		}
 		return [...rows.values()];
 	}

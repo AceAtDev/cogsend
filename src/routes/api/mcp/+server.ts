@@ -26,7 +26,7 @@ import type { OperationContext } from '#lib/server/api/operations.js';
 
 const id = z.string().min(1).max(128);
 const boundedLimit = z.number().int().min(1).max(100).default(50);
-const platform = z.enum(['mastodon', 'bluesky', 'linkedin', 'threads', 'instagram', 'x']);
+const platform = z.enum(['mastodon', 'bluesky', 'linkedin', 'threads', 'instagram', 'tiktok', 'x']);
 const runAt = z.string().min(1).max(64);
 const connectionIds = z.array(id).min(1).max(10);
 const draftFields = {
@@ -224,6 +224,7 @@ const mcpOutputSchemas = {
 					linkedin: z.boolean(),
 					threads: z.boolean(),
 					instagram: z.boolean(),
+					tiktok: z.boolean(),
 					x: z.boolean()
 				})
 				.passthrough(),
@@ -247,6 +248,7 @@ const mcpOutputSchemas = {
 			linkedin: validationCheck,
 			threads: validationCheck,
 			instagram: validationCheck,
+			tiktok: validationCheck,
 			x: validationCheck,
 			issues: z.array(validationIssue)
 		})

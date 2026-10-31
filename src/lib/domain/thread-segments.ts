@@ -79,7 +79,7 @@ export function removeSegment(segments: string[], index: number): string[] {
 }
 
 export type PreviewPlatform =
-	'mastodon' | 'bluesky' | 'linkedin' | 'threads' | 'instagram' | 'x' | 'generic';
+	'mastodon' | 'bluesky' | 'linkedin' | 'threads' | 'instagram' | 'tiktok' | 'x' | 'generic';
 
 export type PreviewIdentity = {
 	platform: PreviewPlatform;
@@ -101,6 +101,7 @@ const FALLBACK_HANDLES: Record<string, string> = {
 	linkedin: 'you',
 	threads: '@you',
 	instagram: 'you',
+	tiktok: '@you',
 	x: '@you'
 };
 
@@ -109,6 +110,7 @@ const PREVIEW_LIMITS: Record<string, { max: number; mode: 'grapheme' | 'mastodon
 	linkedin: { max: 3000, mode: 'grapheme' },
 	threads: { max: 500, mode: 'grapheme' },
 	instagram: { max: 2200, mode: 'grapheme' },
+	tiktok: { max: 2200, mode: 'grapheme' },
 	x: { max: 280, mode: 'grapheme' }
 };
 

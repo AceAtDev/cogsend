@@ -3,13 +3,13 @@ import { platformName } from '#lib/domain/platforms.js';
 /**
  * The platforms whose client credentials belong to whoever runs the
  * deployment: LinkedIn issues them to an app owner, Meta to a Threads or an
- * Instagram app, X to a developer project. Only that person can create them, so a deployment
+ * Instagram app, X to a developer project, TikTok to a developer app. Only that person can create them, so a deployment
  * without them cannot connect the account at all.
  *
  * Mastodon is absent on purpose — it registers its app on the instance itself —
  * and Bluesky takes an app password, so both are self-serve.
  */
-export type OAuthPlatformId = 'linkedin' | 'threads' | 'instagram' | 'x';
+export type OAuthPlatformId = 'linkedin' | 'threads' | 'instagram' | 'tiktok' | 'x';
 
 export type PlatformSetup = {
 	/** Worker secrets the connect route requires: it answers "not enabled"
@@ -70,6 +70,17 @@ export const PLATFORM_SETUP: Record<OAuthPlatformId, PlatformSetup> = {
 			'the Instagram use case → API setup with Instagram login → Set up Instagram business login → Redirect URL',
 		docsAnchor: 'instagram',
 		note: 'Only Business and Creator accounts can post through the API.'
+	},
+	tiktok: {
+		secrets: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET'],
+		callbackPath: '/api/connections/tiktok/callback',
+		consoleUrl: 'https://developers.tiktok.com/apps/',
+		consoleName: 'TikTok for Developers',
+		consoleRequirement:
+			'Create an app, add the Login Kit and Content Posting API products, turn on Direct Post under Content Posting API, and add the user.info.basic and video.publish scopes. Until TikTok audits the app, it posts only to private accounts and only as Only me.',
+		redirectField: 'Login Kit → Redirect URI (Web)',
+		docsAnchor: 'tiktok',
+		note: 'Video only. An app TikTok has not audited can post only to private accounts, visible to the creator alone.'
 	},
 	x: {
 		// PKCE alone completes the exchange, so the secret is read (as HTTP
@@ -178,7 +189,15 @@ export function callbackUri(id: OAuthPlatformId, appUrl: string): string {
  * Self-serve platforms first, then the ones that may need server setup — the
  * order the accounts empty state lists them in.
  */
-const CONNECT_ORDER = ['bluesky', 'mastodon', 'linkedin', 'threads', 'instagram', 'x'] as const;
+const CONNECT_ORDER = [
+	'bluesky',
+	'mastodon',
+	'linkedin',
+	'threads',
+	'instagram',
+	'tiktok',
+	'x'
+] as const;
 
 /** "Bluesky", "Bluesky or Mastodon", "Bluesky, Mastodon, or LinkedIn". */
 export function joinPlatformNames(names: readonly string[]): string {

@@ -28,6 +28,7 @@ cannot reach anything except the tick (see [Scheduling](scheduling.md)).
 | `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | LinkedIn ([OAuth apps](oauth-apps.md))                        |
 | `THREADS_APP_ID` / `THREADS_APP_SECRET`         | Threads                                                       |
 | `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET`     | Instagram                                                     |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`    | TikTok                                                        |
 | `X_CLIENT_ID` / `X_CLIENT_SECRET`               | X                                                             |
 | `RESEND_API_KEY`, `NOTIFY_EMAIL`, `NOTIFY_FROM` | failure digests by email                                      |
 | `MEDIA_PUBLIC_BASE_URL`                         | serving Meta's crawler from a public media origin (see below) |

@@ -4,7 +4,7 @@ LinkedIn, Threads, Instagram and X normally need a developer app of your own bef
 
 Nothing else changes. You still write, schedule and retry in CogSend, and your posts and history stay on your Cloudflare account; Zernio only carries the publish. Zernio has a free plan, though connecting X needs a card on your Zernio account ([pricing](https://zernio.link/cogsend-pricing?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide-pricing)). Zernio also sponsors CogSend.
 
-It is optional. Direct connections stay the default, accounts you connected with your own apps are not touched, and both kinds can sit side by side on **Accounts**, where the Zernio ones are marked **via Zernio**. Mastodon is not available through Zernio.
+It is optional. Direct connections stay the default, accounts you connected with your own apps are not touched, and both kinds can sit side by side on **Accounts**, where the Zernio ones are marked **via Zernio**. Mastodon and TikTok are not available through Zernio in CogSend.
 
 ## What you need
 

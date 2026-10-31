@@ -344,6 +344,12 @@ export function publishCallEstimate(platform: string, content: NormalizedPost): 
 			platformCalls -= videos.length * (VIDEO_START_CALLS - 3);
 			storage = 0;
 			break;
+		case 'tiktok':
+			// One video, which parks when the request runs low: on top of the
+			// room to start it, creator_info and the upload start.
+			platformCalls += 2;
+			storage = 0;
+			break;
 		case 'zernio':
 			// One create and the status polls; media travels as URLs, so there
 			// are no uploads and no storage reads.

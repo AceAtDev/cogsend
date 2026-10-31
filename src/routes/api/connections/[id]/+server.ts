@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, lte, ne, or } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { STALE_CLAIM_MS } from '#lib/domain/due-jobs.js';
+import { isTiktokPrivacy } from '#lib/domain/tiktok.js';
 import { xLimitFor } from '#lib/domain/x-limits.js';
 import { isZernioConnection } from '#lib/domain/zernio.js';
 import { chunkIds, first, parseJson } from '#lib/server/db/client.js';
@@ -106,17 +107,70 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	}
 };
 
+const TIKTOK_SWITCHES = {
+	allowComment: 'tiktokAllowComment',
+	allowDuet: 'tiktokAllowDuet',
+	allowStitch: 'tiktokAllowStitch'
+} as const;
+
 /**
- * The long-post switch on an X account: `true` or `false` overrides what X
- * reported about the account's plan, and `null` goes back to that report.
+ * A TikTok account's post settings: `privacy` is one of TikTok's levels, the
+ * switches allow comments, Duets and Stitches. Each is optional, and what is
+ * left out keeps its stored value. Whether TikTok offers the level is checked
+ * again at publish, where creator_info is current.
+ */
+async function patchTiktok(
+	conn: typeof connections.$inferSelect,
+	settings: unknown,
+	locals: App.Locals,
+	owned: ReturnType<typeof and>
+) {
+	if (conn.platform !== 'tiktok')
+		return fail('TikTok settings only apply to a TikTok account', 400);
+	if (!settings || typeof settings !== 'object') return fail('tiktok must be an object', 400);
+	const input = settings as Record<string, unknown>;
+	const meta = parseJson<Record<string, unknown>>(conn.metaJson, {});
+	if (input.privacy !== undefined) {
+		if (!isTiktokPrivacy(input.privacy))
+			return fail('tiktok.privacy is not a TikTok privacy level', 400);
+		meta.tiktokPrivacy = input.privacy;
+	}
+	for (const [key, metaKey] of Object.entries(TIKTOK_SWITCHES)) {
+		if (input[key] === undefined) continue;
+		if (typeof input[key] !== 'boolean') return fail(`tiktok.${key} must be true or false`, 400);
+		meta[metaKey] = input[key];
+	}
+	const metaJson = JSON.stringify(meta);
+	await locals.db.update(connections).set({ metaJson, updatedAt: new Date() }).where(owned);
+	return ok({ connection: serializeConnection({ ...conn, metaJson }) });
+}
+
+/**
+ * Per-account settings. On an X account, the long-post switch: `true` or
+ * `false` overrides what X reported about the account's plan, and `null` goes
+ * back to that report. On a TikTok account, `tiktok` (see patchTiktok).
  * Session-only, like connecting: a key cannot change what an account may post.
  */
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	try {
 		const user = requireSession(locals.user, locals.authMethod);
-		const body = (await request.json().catch(() => null)) as { longPosts?: unknown } | null;
+		const body = (await request.json().catch(() => null)) as {
+			longPosts?: unknown;
+			tiktok?: unknown;
+		} | null;
+		if (body && Object.hasOwn(body, 'tiktok')) {
+			const owned = and(eq(connections.id, params.id), eq(connections.userId, user.id));
+			const conn = await first(locals.db.select().from(connections).where(owned));
+			if (!conn) return fail('Not found', 404);
+			if (isZernioConnection(conn.metaJson)) {
+				return fail('TikTok settings only apply to an account connected directly', 400);
+			}
+			if (conn.status === 'disconnected')
+				return fail('Account disconnected — reconnect it first', 409);
+			return await patchTiktok(conn, body.tiktok, locals, owned);
+		}
 		const longPosts = body?.longPosts;
-		if (!body || !Object.hasOwn(body, 'longPosts')) return fail('Send longPosts', 400);
+		if (!body || !Object.hasOwn(body, 'longPosts')) return fail('Send longPosts or tiktok', 400);
 		if (longPosts !== null && typeof longPosts !== 'boolean') {
 			return fail('longPosts must be true, false or null', 400);
 		}

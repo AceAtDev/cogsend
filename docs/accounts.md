@@ -13,9 +13,9 @@ These two connect with what you already have:
   Bluesky under Settings → Privacy and security → App passwords. Never use your
   main password.
 
-## LinkedIn, Threads, Instagram and X
+## LinkedIn, Threads, Instagram, TikTok and X
 
-These four need a developer app of your own before they can connect, because the
+These five need a developer app of your own before they can connect, because the
 platform issues the client id and secret the Worker uses. Until one is set up, the
 picker shows the platform with a **Needs setup** badge, and choosing it shows that
 platform's steps — the redirect URI to register and a form for the app's
@@ -29,7 +29,9 @@ dashboard; reload the page once they are on the Worker.
 
 Instagram connects only a Business or Creator account; a personal account is refused with a note on switching its type in Instagram's settings.
 
-If you would rather not set up an app, you can connect these through
+TikTok connects any account, but until TikTok audits your app it posts only to an account set to private in TikTok, and only as **Only me**; see [OAuth apps → TikTok](oauth-apps.md#tiktok).
+
+If you would rather not set up an app, you can connect LinkedIn, Threads, Instagram and X through
 [Zernio](zernio.md) instead.
 
 ## Long posts on X
@@ -39,6 +41,15 @@ An X account connected directly shows whether it can post long: **Long posts on,
 Some accounts that can post long, such as Verified Organizations, report no plan, so **Turn on** and **Turn off** let you decide. **Use what X reports** goes back to the plan. A reconnect keeps your choice. If X refuses a long post, CogSend turns long posts off for that account; turn them back on if it does have a paid plan.
 
 X accounts connected through [Zernio](zernio.md) stay at 280, since Zernio's X route stops there.
+
+## TikTok post settings
+
+A TikTok account connected directly shows its post settings under its name. TikTok's guidelines leave these to the creator, so CogSend picks nothing wider on its own:
+
+- **Who can see posts**: **Only me**, **Friends**, **Followers** or **Everyone**, as TikTok offers them for the account (a private account has no Everyone, a public one no Followers). It starts at **Only me**.
+- **Comments**, **Duet** and **Stitch**: off until you tick them. One the creator turned off in the TikTok app is greyed out and stays off.
+
+The settings apply to every post to that account, and a reconnect keeps them. CogSend reads the account's options from TikTok when you connect it and when you press **Verify**, and checks them again before each upload, so a choice TikTok no longer offers fails with a message rather than going out differently. Posting means agreeing to TikTok's [Music Usage Confirmation](https://www.tiktok.com/legal/page/global/music-usage-confirmation/en), which the settings line links to.
 
 ## When an account needs reconnecting
 

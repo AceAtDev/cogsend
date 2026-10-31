@@ -103,6 +103,8 @@ interface Env {
 	THREADS_APP_SECRET?: string;
 	INSTAGRAM_APP_ID?: string;
 	INSTAGRAM_APP_SECRET?: string;
+	TIKTOK_CLIENT_KEY?: string;
+	TIKTOK_CLIENT_SECRET?: string;
 	X_CLIENT_ID?: string;
 	X_CLIENT_SECRET?: string;
 	/** Local-dev only: skips 2FA. Honored only while the resolved URL is a

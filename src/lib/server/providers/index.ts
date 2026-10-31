@@ -4,6 +4,7 @@ import { instagramProvider } from './instagram';
 import { linkedinProvider } from './linkedin';
 import { mastodonProvider } from './mastodon';
 import { threadsProvider } from './threads';
+import { tiktokProvider } from './tiktok';
 export {
 	instagramProvider,
 	instagramAuthorizeUrl,
@@ -21,6 +22,7 @@ const providers: Record<PlatformId, PlatformProvider> = {
 	linkedin: linkedinProvider,
 	threads: threadsProvider,
 	instagram: instagramProvider,
+	tiktok: tiktokProvider,
 	x: xProvider
 };
 
@@ -72,6 +74,14 @@ export {
 	threadsVerify,
 	THREADS_MAX_CHARS
 } from './threads';
+export {
+	tiktokProvider,
+	tiktokAuthorizeUrl,
+	tiktokExchangeCode,
+	tiktokVerify,
+	tiktokChunkPlan,
+	TIKTOK_SCOPES
+} from './tiktok';
 export {
 	xProvider,
 	xAuthorizeUrl,

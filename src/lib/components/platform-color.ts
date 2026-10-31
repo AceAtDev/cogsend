@@ -8,6 +8,7 @@ export const PLATFORM_COLOR: Record<string, string> = {
 	linkedin: 'text-blue-600',
 	threads: 'text-stone-900',
 	instagram: 'text-pink-600',
+	tiktok: 'text-stone-900',
 	x: 'text-stone-900'
 };
 

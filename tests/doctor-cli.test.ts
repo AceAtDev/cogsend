@@ -79,7 +79,9 @@ function runDoctor(dir: string, env: Record<string, string> = {}) {
 describe('doctor CLI', () => {
 	it('reports the optional platforms, and that nothing is broken without them', () => {
 		const output = runDoctor(scratchCheckout(['APP_ENCRYPTION_KEY', 'SCHEDULER_SECRET']));
-		expect(output).toContain('LinkedIn, Threads, Instagram, X: no app credentials (optional)');
+		expect(output).toContain(
+			'LinkedIn, Threads, Instagram, TikTok, X: no app credentials (optional)'
+		);
 		expect(output).toContain('Mastodon and Bluesky can be connected');
 		// Exit 0: a deployment without app credentials is complete.
 		expect(output).not.toMatch(/✗/);
@@ -94,11 +96,11 @@ describe('doctor CLI', () => {
 				'LINKEDIN_CLIENT_SECRET'
 			])
 		);
-		expect(output).toContain('Threads, Instagram, X: no app credentials (optional)');
+		expect(output).toContain('Threads, Instagram, TikTok, X: no app credentials (optional)');
 		expect(output).toContain('LinkedIn can be connected');
 	});
 
-	it('reports all six platforms once every credential is set', () => {
+	it('reports all seven platforms once every credential is set', () => {
 		const output = runDoctor(
 			scratchCheckout([
 				'APP_ENCRYPTION_KEY',
@@ -109,11 +111,13 @@ describe('doctor CLI', () => {
 				'THREADS_APP_SECRET',
 				'INSTAGRAM_APP_ID',
 				'INSTAGRAM_APP_SECRET',
+				'TIKTOK_CLIENT_KEY',
+				'TIKTOK_CLIENT_SECRET',
 				'X_CLIENT_ID'
 			])
 		);
-		expect(output).toContain('LinkedIn, Threads, Instagram and X have app credentials');
-		expect(output).toContain('all six platforms can be connected');
+		expect(output).toContain('LinkedIn, Threads, Instagram, TikTok and X have app credentials');
+		expect(output).toContain('all seven platforms can be connected');
 	});
 
 	it('fails when commands reach another account than the deploy', () => {

@@ -39,6 +39,7 @@
 		linkedin: '#0a66c2',
 		threads: '#000000',
 		instagram: '#e4405f',
+		tiktok: '#000000',
 		x: '#000000'
 	};
 	const badgeLabel: Record<string, string> = {
@@ -47,6 +48,7 @@
 		linkedin: 'LinkedIn',
 		threads: 'Threads',
 		instagram: 'Instagram',
+		tiktok: 'TikTok',
 		x: 'X'
 	};
 	const bg = $derived(badgeBg[platform] ?? '#6b7280');

@@ -16,6 +16,7 @@ import {
 	validateLinkedinText,
 	validateMastodonText,
 	validateInstagramText,
+	validateTiktokText,
 	validateThreadsText,
 	validateXText
 } from '#lib/domain/validation/text.js';
@@ -107,6 +108,7 @@ export function validatePost(input: {
 		linkedin = validateLinkedinText(text),
 		threads = validateThreadsText(text),
 		instagram = validateInstagramText(text),
+		tiktok = validateTiktokText(text),
 		x = validateXText(text);
 	const issues =
 		platform && isPlatformId(platform)
@@ -120,6 +122,7 @@ export function validatePost(input: {
 		linkedin,
 		threads,
 		instagram,
+		tiktok,
 		x,
 		issues
 	};
@@ -204,10 +207,28 @@ async function makeMissingJpegCopies(ctx: OperationContext, draftId: string): Pr
 
 /**
  * Instagram refuses a post without a photo or video, and a few other shapes
- * the rest take. Every other platform's problems surface when it is sent, but
- * these are certain, so the request is refused before anything is written:
- * an API client learns now, not at the scheduled time.
+ * the rest take; TikTok takes nothing but one video. Every other platform's
+ * problems surface when it is sent, but these are certain, so the request is
+ * refused before anything is written: an API client learns now, not at the
+ * scheduled time.
  */
+async function refuseUnfitPosts(
+	ctx: OperationContext,
+	draftId: string,
+	conns: Array<{ platform: string }>
+) {
+	await refuseUnfitForInstagram(ctx, draftId, conns);
+	if (!conns.some((c) => c.platform === 'tiktok')) return;
+	const content = await buildNormalizedPost(ctx.db, draftId, 'tiktok');
+	const issues = getProvider('tiktok').validate(content);
+	if (issues.length) {
+		invalid(`TikTok: ${issues[0].message}`, 400, {
+			platform: 'tiktok',
+			issues: issues.map((issue) => issue.message)
+		});
+	}
+}
+
 async function refuseUnfitForInstagram(
 	ctx: OperationContext,
 	draftId: string,
@@ -275,7 +296,7 @@ export async function scheduleDraft(
 			alreadyPublished: already,
 			inFlight: flight
 		});
-	await refuseUnfitForInstagram(ctx, draftId, conns);
+	await refuseUnfitPosts(ctx, draftId, conns);
 	const ensured = await ensureTargets(ctx.db, draftId, conns, 'schedule', runAt, now);
 	const blocked = ensured.filter((i) => i.alreadyPublished || i.inFlight);
 	if (blocked.length)
@@ -464,7 +485,15 @@ export async function rescheduleDelivery(
 const ALLOWED_MEDIA_EXTENSIONS = new Set(['jpg', 'png', 'webp', 'gif', 'mp4']);
 // 12 bound parameters per media row; D1 caps a query at 100.
 const MEDIA_INSERT_CHUNK = 8;
-const VARIANT_PLATFORMS = new Set(['mastodon', 'bluesky', 'linkedin', 'threads', 'instagram', 'x']);
+const VARIANT_PLATFORMS = new Set([
+	'mastodon',
+	'bluesky',
+	'linkedin',
+	'threads',
+	'instagram',
+	'tiktok',
+	'x'
+]);
 const VISIBILITIES = new Set(['public', 'unlisted', 'private', 'direct']);
 
 /**
@@ -815,7 +844,7 @@ export async function setDraftVariant(
 	}
 	const platform = String(fields.platform || '');
 	if (!VARIANT_PLATFORMS.has(platform))
-		invalid('platform must be mastodon, bluesky, linkedin, threads, instagram, or x');
+		invalid('platform must be mastodon, bluesky, linkedin, threads, instagram, tiktok, or x');
 	const existing = await first(
 		ctx.db
 			.select()
@@ -942,7 +971,7 @@ export async function publishDraft(
 	const published = new Set(
 		classified.filter((item) => item.kind === 'published').map((item) => item.connectionId)
 	);
-	await refuseUnfitForInstagram(
+	await refuseUnfitPosts(
 		ctx,
 		draftId,
 		userConnections.filter((row) => !published.has(row.id))

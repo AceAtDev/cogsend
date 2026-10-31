@@ -49,6 +49,8 @@ APP_ENCRYPTION_KEY=
 # THREADS_APP_SECRET=
 # INSTAGRAM_APP_ID=
 # INSTAGRAM_APP_SECRET=
+# TIKTOK_CLIENT_KEY=
+# TIKTOK_CLIENT_SECRET=
 # X_CLIENT_ID=
 # X_CLIENT_SECRET=
 # Optional. Local dev only: skip the 2FA enrollment/verify flow. Honored only

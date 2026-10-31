@@ -1,7 +1,7 @@
 # OAuth apps and platform limits
 
 Mastodon and Bluesky connect with what you already have. LinkedIn, Threads,
-Instagram and X need an app registered at the provider first, because they issue the client id
+Instagram, TikTok and X need an app registered at the provider first, because they issue the client id
 and secret the Worker uses. If you would rather not register apps, the optional
 [Zernio provider](zernio.md) publishes to those platforms through Zernio's own.
 
@@ -14,6 +14,7 @@ Each one is the same three steps: create the app, add the redirect URI, give Cog
 | LinkedIn  | [LinkedIn Developer Portal](https://www.linkedin.com/developers/apps) | `{APP_URL}/api/connections/linkedin/callback`  | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` |
 | Threads   | [Meta for Developers](https://developers.facebook.com/apps/)          | `{APP_URL}/api/connections/threads/callback`   | `THREADS_APP_ID`, `THREADS_APP_SECRET`         |
 | Instagram | [Meta for Developers](https://developers.facebook.com/apps/)          | `{APP_URL}/api/connections/instagram/callback` | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`     |
+| TikTok    | [TikTok for Developers](https://developers.tiktok.com/apps/)          | `{APP_URL}/api/connections/tiktok/callback`    | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`    |
 | X         | [X Developer Portal](https://developer.x.com/en/portal/dashboard)     | `{APP_URL}/api/connections/x/callback`         | `X_CLIENT_ID`, `X_CLIENT_SECRET`               |
 
 The last step works three ways:
@@ -97,6 +98,25 @@ Instagram only lets Business and Creator accounts post through its API. A person
 
 Posting to an account you own needs no App Review. The token lasts 60 days and CogSend renews it when it publishes or when you press **Verify**; an account left untouched for longer shows as expired and needs **Reconnect**.
 
+### TikTok
+
+CogSend posts videos to TikTok through the Content Posting API's Direct Post, uploading the file from storage. Photo posts are not supported: TikTok pulls photos from a URL on a domain the app has verified with it, which an instance on `workers.dev` cannot do.
+
+1. Sign in at [TikTok for Developers](https://developers.tiktok.com/apps/) and create an app under **Manage apps**. TikTok asks for an icon, a description, and the app's terms of service and privacy policy URLs; for apps created after 9 September 2024 it also asks you to verify those URLs.
+2. Add the **Login Kit** product, choose **Web**, and enter the redirect URI as the **Redirect URI**. It must be `https`.
+3. Add the **Content Posting API** product and turn on **Direct Post** in its configuration.
+4. Under scopes, add `user.info.basic` and `video.publish`. `video.publish` also covers the creator info and post status CogSend reads, so `video.upload` is not needed.
+5. Copy the **Client key** and **Client secret** from the app's page.
+6. Give CogSend the credentials in the accounts dialog, or set the secrets:
+
+   ```sh
+   npm run secrets:put TIKTOK_CLIENT_KEY TIKTOK_CLIENT_SECRET
+   ```
+
+Until TikTok audits the app, it can post only to accounts set to private in TikTok, every post is visible to the creator alone (**Only me**), and at most five accounts can post through it in a day. A public account gets an error explaining this instead of a post. To post publicly, submit the app for TikTok's [Content Posting API audit](https://developers.tiktok.com/application/content-posting-api), which reviews how the app follows TikTok's [Content Sharing Guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines).
+
+The access token lasts a day and CogSend renews it before each publish and when you press **Verify**; the sign-in itself lasts a year, after which the account needs **Reconnect**.
+
 ### X
 
 1. Create a Project and an App in the [X Developer Portal](https://developer.x.com/en/portal/dashboard).
@@ -124,18 +144,21 @@ cannot succeed. Mastodon and Bluesky keep working either way.
 
 ## Platforms
 
-| Platform  | Auth                                                                     | Text                                         | Images                                                    | Video                                        | Threads                      |
-| --------- | ------------------------------------------------------------------------ | -------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- | ---------------------------- |
-| Mastodon  | OAuth (per instance)                                                     | instance max (default 500)                   | 4, 16MB                                                   | instance max (default 99MB)                  | yes                          |
-| Bluesky   | handle + app password                                                    | 300                                          | 4, 2MB                                                    | up to 10 min, 300MB                          | yes                          |
-| LinkedIn  | OAuth (`openid profile email w_member_social`)                           | 3000                                         | 4, 8MB (no WebP)                                          | 3 s to 30 min, 500MB                         | no — flattened into one post |
-| Threads   | OAuth (`threads_basic threads_content_publish` `threads_manage_replies`) | 500, max 5 links                             | 4 uploadable, 10 allowed, 8MB JPEG/PNG                    | up to 5 min, 1GB                             | yes                          |
-| Instagram | OAuth (`instagram_business_basic instagram_business_content_publish`)    | 2200, max 30 hashtags                        | required: 1 to 10, 8MB JPEG (PNG and WebP sent as a copy) | a Reel on its own: 3 s to 15 min, 300MB      | no — flattened into one post |
-| X         | OAuth 2.0 + PKCE                                                         | 280 (25,000 with a paid plan), max 1 cashtag | 4, 5MB (15MB GIF)                                         | 0.5 s to 2:20 (longer with X Premium), 512MB | yes                          |
+| Platform  | Auth                                                                     | Text                                         | Images                                                    | Video                                                                                                 | Threads                      |
+| --------- | ------------------------------------------------------------------------ | -------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Mastodon  | OAuth (per instance)                                                     | instance max (default 500)                   | 4, 16MB                                                   | instance max (default 99MB)                                                                           | yes                          |
+| Bluesky   | handle + app password                                                    | 300                                          | 4, 2MB                                                    | up to 10 min, 300MB                                                                                   | yes                          |
+| LinkedIn  | OAuth (`openid profile email w_member_social`)                           | 3000                                         | 4, 8MB (no WebP)                                          | 3 s to 30 min, 500MB                                                                                  | no — flattened into one post |
+| Threads   | OAuth (`threads_basic threads_content_publish` `threads_manage_replies`) | 500, max 5 links                             | 4 uploadable, 10 allowed, 8MB JPEG/PNG                    | up to 5 min, 1GB                                                                                      | yes                          |
+| Instagram | OAuth (`instagram_business_basic instagram_business_content_publish`)    | 2200, max 30 hashtags                        | required: 1 to 10, 8MB JPEG (PNG and WebP sent as a copy) | a Reel on its own: 3 s to 15 min, 300MB                                                               | no — flattened into one post |
+| TikTok    | OAuth (`user.info.basic video.publish`)                                  | 2200 (UTF-16 units: an emoji counts 2)       | not supported                                             | required: one video, up to the account's own limit (3 to 10 min), 23 to 60 fps, 360 to 4096 px a side | no — flattened into one post |
+| X         | OAuth 2.0 + PKCE                                                         | 280 (25,000 with a paid plan), max 1 cashtag | 4, 5MB (15MB GIF)                                         | 0.5 s to 2:20 (longer with X Premium), 512MB                                                          | yes                          |
 
 LinkedIn rejects WebP at publish time — upload JPEG, PNG or GIF.
 
 Instagram takes nothing but JPEG, and refuses a post with no photo or video. When you attach a PNG or WebP, the composer also stores a JPEG copy of it for Instagram; an image attached before 1.21, uploaded through the API without a copy, or too large for the copy to fit Instagram's 8 MB has to be attached again, or as a JPEG, before it can go there — unless the deployment has the [Images binding](configuration.md#faster-post-thumbnails), which makes the missing copy when the post is scheduled or published. GIFs cannot go to Instagram, and photos must be between 4:5 tall and 1.91:1 wide. Up to 10 photos go out as one carousel: Instagram allows 20, but more would not fit one run's calls on the Workers Free plan. A video goes out as a Reel, on its own. Posting is limited to 100 posts a day per account.
+
+TikTok takes one video per post and nothing else. Who can see it is set per account on the Accounts page and starts at **Only me**, so nothing is posted publicly until you choose it; comments, Duets and Stitches stay off until you allow them, and any the creator turned off in TikTok stay off. CogSend asks TikTok for the account's options before each upload, so a privacy level TikTok no longer offers, or a video longer than the account may post, fails before anything is sent. TikTok usually takes a minute or so to process a post and may hold it for moderation; a public post's link appears only once it passes. TikTok also limits how many posts an account makes in a day, about 15 across all apps.
 
 Threads and Instagram media are served to Meta through short-lived signed URLs (2h expiry,
 never linked publicly). Meta's crawler intermittently fails to fetch a URL that

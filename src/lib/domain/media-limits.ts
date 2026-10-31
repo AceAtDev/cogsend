@@ -244,6 +244,21 @@ export function instagramMediaProblems(media: InstagramMediaFacts[]): string[] {
 }
 
 /**
+ * What stops a post from going to TikTok, given the whole flattened post's
+ * media. Only a video goes: TikTok's photo posts are pulled from a URL on a
+ * domain the app has verified with TikTok, which an instance on workers.dev
+ * cannot do, while a video is uploaded straight from storage.
+ */
+export function tiktokMediaProblems(media: { mime: string }[]): string[] {
+	const videos = media.filter((m) => (m.mime || '').toLowerCase().startsWith('video/')).length;
+	if (videos === 0) {
+		return [media.length ? 'TikTok takes a video, not photos' : 'TikTok needs a video'];
+	}
+	if (videos > 1 || media.length > videos) return ['TikTok posts one video on its own'];
+	return [];
+}
+
+/**
  * Every platform takes one video per post, on its own: the upload routes
  * refuse anything else on a card so it cannot fail later at publish.
  */

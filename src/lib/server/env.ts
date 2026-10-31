@@ -32,6 +32,8 @@ const envSchema = z.object({
 	THREADS_APP_SECRET: z.string().min(1).optional(),
 	INSTAGRAM_APP_ID: z.string().min(1).optional(),
 	INSTAGRAM_APP_SECRET: z.string().min(1).optional(),
+	TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
+	TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
 	X_CLIENT_ID: z.string().min(1).optional(),
 	X_CLIENT_SECRET: z.string().min(1).optional(),
 	// Failure-digest email (Resend). All optional: when unset, the digest is
@@ -156,6 +158,9 @@ export async function envFromPlatform(
 		INSTAGRAM_APP_ID: asString(platformEnv?.INSTAGRAM_APP_ID) ?? fallback.INSTAGRAM_APP_ID,
 		INSTAGRAM_APP_SECRET:
 			asString(platformEnv?.INSTAGRAM_APP_SECRET) ?? fallback.INSTAGRAM_APP_SECRET,
+		TIKTOK_CLIENT_KEY: asString(platformEnv?.TIKTOK_CLIENT_KEY) ?? fallback.TIKTOK_CLIENT_KEY,
+		TIKTOK_CLIENT_SECRET:
+			asString(platformEnv?.TIKTOK_CLIENT_SECRET) ?? fallback.TIKTOK_CLIENT_SECRET,
 		X_CLIENT_ID: asString(platformEnv?.X_CLIENT_ID) ?? fallback.X_CLIENT_ID,
 		X_CLIENT_SECRET: asString(platformEnv?.X_CLIENT_SECRET) ?? fallback.X_CLIENT_SECRET,
 		RESEND_API_KEY: asString(platformEnv?.RESEND_API_KEY) ?? fallback.RESEND_API_KEY,

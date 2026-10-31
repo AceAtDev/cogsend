@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { connections, users } from '#lib/server/db/schema.js';
 import { newId, type AppDb } from '#lib/server/db/client.js';
 import { TEST_ENV, createTestDb } from '#lib/server/db/test.js';
-import { encryptJson } from '#lib/server/crypto.js';
+import { decryptJson, encryptJson } from '#lib/server/crypto.js';
 import { POST as verifyPOST } from '../src/routes/api/connections/[id]/verify/+server';
 
 /**
@@ -229,6 +229,97 @@ describe('POST /api/connections/[id]/verify — session only, gate before write'
 			expect(row.status).toBe('active');
 			expect(row.handle).toBe('@renamed');
 			expect(JSON.parse(row.metaJson ?? '{}').igUserId).toBe('2001');
+			vi.unstubAllGlobals();
+		});
+	});
+
+	describe('TikTok', () => {
+		const tiktokRow = async (expiresAt: number) =>
+			addConnection(ownerId, {
+				platform: 'tiktok',
+				handle: '@acme',
+				metaJson: JSON.stringify({ tiktokOpenId: 'open-1', tiktokPrivacy: 'SELF_ONLY' }),
+				credentialsEncrypted: await encryptJson(
+					{
+						accessToken: 'act.old',
+						refreshToken: 'rft.old',
+						clientId: 'tt-key',
+						clientSecret: 'tt-secret',
+						expiresAt,
+						tiktokOpenId: 'open-1',
+						tiktokUsername: 'acme'
+					},
+					TEST_ENV.APP_ENCRYPTION_KEY
+				)
+			});
+
+		it('expires the row when TikTok refuses the refresh token', async () => {
+			const conn = await tiktokRow(Date.now() - 1000);
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () =>
+					Response.json(
+						{ error: 'invalid_grant', error_description: 'Refresh token is invalid', log_id: 'l' },
+						{ status: 400 }
+					)
+				)
+			);
+			const res = await verify(conn);
+			expect(res.status).toBe(401);
+			expect((await statusOf(conn)).status).toBe('expired');
+			vi.unstubAllGlobals();
+		});
+
+		it('refreshes, then stores what creator_info reports and keeps the creator’s choice', async () => {
+			const conn = await tiktokRow(Date.now() + 5 * 60_000);
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (input: unknown) => {
+					const url = String(input);
+					if (url.endsWith('/oauth/token/'))
+						return Response.json({
+							access_token: 'act.new',
+							refresh_token: 'rft.new',
+							expires_in: 86400,
+							refresh_expires_in: 31536000
+						});
+					if (url.includes('/user/info/'))
+						return Response.json({
+							data: { user: { open_id: 'open-1', display_name: 'Acme' } },
+							error: { code: 'ok' }
+						});
+					return Response.json({
+						data: {
+							creator_username: 'acme_new',
+							creator_nickname: 'Acme Studio',
+							privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'],
+							max_video_post_duration_sec: 600
+						},
+						error: { code: 'ok' }
+					});
+				})
+			);
+			const res = await verify(conn);
+			expect(res.status).toBe(200);
+			const row = await statusOf(conn);
+			expect(row.status).toBe('active');
+			expect(row.handle).toBe('@acme_new');
+			expect(row.displayName).toBe('Acme Studio');
+			expect(JSON.parse(row.metaJson ?? '{}')).toMatchObject({
+				tiktokOpenId: 'open-1',
+				tiktokPrivacy: 'SELF_ONLY',
+				tiktokPrivacyOptions: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'],
+				tiktokMaxVideoSec: 600
+			});
+			const creds = await decryptJson<Record<string, unknown>>(
+				row.credentialsEncrypted,
+				TEST_ENV.APP_ENCRYPTION_KEY
+			);
+			expect(creds).toMatchObject({
+				accessToken: 'act.new',
+				refreshToken: 'rft.new',
+				tiktokUsername: 'acme_new'
+			});
 			vi.unstubAllGlobals();
 		});
 	});

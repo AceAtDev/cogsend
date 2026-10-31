@@ -27,6 +27,11 @@ export function humanizedCause(raw: string | null | undefined): string | null {
 	const s = raw.toLowerCase();
 	const oauthCode = OAUTH_CALLBACK_ERRORS[s.trim()];
 	if (oauthCode) return oauthCode;
+	// A TikTok token without the posting scope is answered like a dead one, but
+	// reconnecting only helps once the app itself has the scope.
+	if (s.startsWith('tiktok') && s.includes('scope_')) {
+		return 'TikTok did not grant this app permission to post — check the app has video.publish, then reconnect';
+	}
 	if (
 		s.includes('401') ||
 		s.includes('unauthorized') ||
