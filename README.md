@@ -47,6 +47,7 @@ Hosted schedulers usually charge per channel and keep your posts and tokens on t
 - **Preview links**: share a read-only link to a draft for feedback, no login needed, revocable and expiring
 - **Publish or schedule**: see results per account, then cancel, reschedule or retry from Posts
 - **Automatic retries**: temporary failures retry on their own, up to five attempts
+- **Calendar**: every post per account on a week or month grid, colour-coded and filtered by brand, with drag to reschedule
 - **Insights**: published against failed over 7, 30 or 90 days, and why posts failed
 - **Link previews**: cards for URLs in a post
 - **Secure by default**: encrypted credentials and 2FA on the admin account
@@ -113,7 +114,7 @@ Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
 **Use it**
 
 - [Writing and publishing](docs/composer.md): threads, per-platform overrides, images, video and alt text, scheduling
-- [Posts and Insights](docs/posts.md): the queue, what each post can do, and the delivery stats
+- [Posts and Insights](docs/posts.md): the queue, the calendar, what each post can do, and the delivery stats
 - [API](docs/api.md): personal API keys, every endpoint, and worked examples
 - [MCP server](docs/mcp.md): connecting Claude Code, Codex and other agents
 
