@@ -39,6 +39,8 @@ import type { FetchLike } from './providers/types';
 import { purgeExpiredMfaChallenges } from './totp';
 import { purgeExpiredSessions } from './auth';
 import { readAppSetting, writeAppSetting } from './app-settings';
+import { runNotifications, type NotifyRunResult } from './notify/run';
+import type { SmtpConnect } from './notify/smtp';
 
 export const HEARTBEAT_ID = 'default';
 /** Display-only. GitHub throttles the every-minute tick to ~1 run per 2h, so
@@ -485,6 +487,8 @@ export async function runSchedulerTick(
 		/** This request's subrequest count. Without one, the tick behaves as
 		 *  before and works through every due target. */
 		budget?: SubrequestBudget | null;
+		/** The notification emails' TCP connect; tests pass a fake server. */
+		connect?: SmtpConnect;
 	}
 ) {
 	await writeHeartbeat(db);
@@ -584,8 +588,20 @@ export async function runSchedulerTick(
 	} catch (err) {
 		console.error('[scheduler] failure digest failed', err);
 	}
+	// Last, on whatever budget the posts left: alerts and digests are never
+	// worth a post going out late, and a pass that does not fit resumes next tick.
+	let notifications: NotifyRunResult = { alerts: 0, digests: 0, failed: 0 };
+	try {
+		notifications = await runNotifications(db, env, {
+			budget,
+			connect: opts.connect,
+			fetchImpl: opts.fetchImpl
+		});
+	} catch (err) {
+		console.error('[scheduler] notifications failed', err);
+	}
 	const deferred = results.filter((r) => r.status === 'deferred').length;
-	return { processed: results.length - deferred, deferred, results, digest };
+	return { processed: results.length - deferred, deferred, results, digest, notifications };
 }
 
 export async function consumePublishJob(

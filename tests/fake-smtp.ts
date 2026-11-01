@@ -26,6 +26,16 @@ export interface FakeSmtpOptions {
 	hangUpAfterGreeting?: boolean;
 	/** Reply to the end of DATA. */
 	dataReply?: string;
+	/** Accept any username and password (several accounts sending through one fake). */
+	acceptAny?: boolean;
+}
+
+/** One delivered message: who authenticated, the envelope, the DATA. */
+export interface FakeDelivery {
+	user: string;
+	from: string;
+	recipients: string[];
+	data: string;
 }
 
 export interface FakeSmtp {
@@ -40,6 +50,8 @@ export interface FakeSmtp {
 	closed: number;
 	/** Whether a password ever crossed before TLS. */
 	authInClear: boolean;
+	/** Messages the server accepted, one per finished DATA. */
+	delivered: FakeDelivery[];
 }
 
 const encoder = new TextEncoder();
@@ -56,8 +68,10 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 		connects: [],
 		upgraded: false,
 		closed: 0,
-		authInClear: false
+		authInClear: false,
+		delivered: []
 	};
+	let current: FakeDelivery = { user: '', from: '', recipients: [], data: '' };
 	let secure = false;
 	let mode: 'command' | 'data' | 'login-user' | 'login-pass' = 'command';
 	let loginUser = '';
@@ -81,6 +95,8 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 
 	function check(user: string, pass: string): string[] {
 		if (!secure) state.authInClear = true;
+		current.user = user;
+		if (opts.acceptAny) return ['235 2.7.0 Accepted'];
 		return user === username && pass === password ? ['235 2.7.0 Accepted'] : authFailed();
 	}
 
@@ -88,9 +104,12 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 		if (mode === 'data') {
 			if (line === '.') {
 				mode = 'command';
+				state.delivered.push({ ...current, recipients: [...current.recipients] });
+				current = { user: current.user, from: '', recipients: [], data: '' };
 				return [opts.dataReply ?? '250 2.0.0 OK  1793498089 x1-20020a05.1 - gsmtp'];
 			}
 			state.data += `${line}\r\n`;
+			current.data += `${line}\r\n`;
 			return [];
 		}
 		state.commands.push(line);
@@ -122,6 +141,7 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 				return ['504 5.7.4 Unrecognized authentication type'];
 			}
 			case 'MAIL':
+				current.from = /<([^>]*)>/.exec(line)?.[1] ?? '';
 				return ['250 2.1.0 OK'];
 			case 'RCPT': {
 				const address = /<([^>]*)>/.exec(line)?.[1] ?? '';
@@ -132,6 +152,7 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 					];
 				}
 				state.recipients.push(address);
+				current.recipients.push(address);
 				return ['250 2.1.5 OK'];
 			}
 			case 'DATA':
@@ -201,6 +222,8 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 		state.connects.push({ ...address, secureTransport: options.secureTransport });
 		if (opts.connectError) throw new Error(opts.connectError);
 		secure = options.secureTransport === 'on';
+		mode = 'command';
+		current = { user: '', from: '', recipients: [], data: '' };
 		const s = socket() as SmtpSocket & { _push: (t: string) => void; _end: () => void };
 		if (!opts.silent && !opts.openError) {
 			s._push('220 smtp.gmail.com ESMTP x1-20020a05 - gsmtp\r\n');
@@ -209,4 +232,35 @@ export function fakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtp {
 		return s;
 	};
 	return state;
+}
+
+/** The text/plain part of a delivered message, decoded. */
+export function textPart(data: string): string {
+	return mimePart(data, 'text/plain');
+}
+
+export function htmlPart(data: string): string {
+	return mimePart(data, 'text/html');
+}
+
+function mimePart(data: string, type: string): string {
+	const boundary = /boundary="([^"]+)"/.exec(data)?.[1];
+	if (!boundary) return '';
+	const part = data.split(`--${boundary}`).find((p) => p.includes(`Content-Type: ${type}`));
+	if (!part) return '';
+	const b64 = part.split('\r\n\r\n')[1]?.replace(/\r\n/g, '') ?? '';
+	const bin = atob(b64);
+	return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+
+/** The decoded Subject header of a delivered message. */
+export function subjectOf(data: string): string {
+	const m = /^Subject: (.*(?:\r\n .*)*)/m.exec(data);
+	if (!m) return '';
+	const value = m[1];
+	if (!value.startsWith('=?UTF-8?B?')) return value;
+	const bytes = value
+		.split('\r\n ')
+		.flatMap((w) => [...Uint8Array.from(atob(w.slice(10, -2)), (c) => c.charCodeAt(0))]);
+	return new TextDecoder().decode(Uint8Array.from(bytes));
 }
