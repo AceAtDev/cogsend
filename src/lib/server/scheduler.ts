@@ -43,6 +43,8 @@ import { purgeExpiredMfaChallenges } from './totp';
 import { purgeExpiredSessions } from './auth';
 import { readAppSetting, writeAppSetting } from './app-settings';
 import { collectDueMetrics, type MetricsTickResult } from './metrics';
+import { runNotifications, type NotifyRunResult } from './notify/run';
+import type { SmtpConnect } from './notify/smtp';
 
 export const HEARTBEAT_ID = 'default';
 /** Display-only. GitHub throttles the every-minute tick to ~1 run per 2h, so
@@ -496,6 +498,8 @@ export async function runSchedulerTick(
 		/** This request's subrequest count. Without one, the tick behaves as
 		 *  before and works through every due target. */
 		budget?: SubrequestBudget | null;
+		/** The notification emails' TCP connect; tests pass a fake server. */
+		connect?: SmtpConnect;
 	}
 ) {
 	await writeHeartbeat(db);
@@ -603,6 +607,19 @@ export async function runSchedulerTick(
 	} catch (err) {
 		console.error('[scheduler] failure digest failed', err);
 	}
+	// After the publish pass and the review sweep, on whatever budget the posts
+	// left: alerts and digests are never worth a post going out late, and a pass
+	// that does not fit resumes next tick.
+	let notifications: NotifyRunResult = { alerts: 0, digests: 0, failed: 0 };
+	try {
+		notifications = await runNotifications(db, env, {
+			budget,
+			connect: opts.connect,
+			fetchImpl: opts.fetchImpl
+		});
+	} catch (err) {
+		console.error('[scheduler] notifications failed', err);
+	}
 	// Last, so it only spends what publishing and alerting left over, and never
 	// throws: a platform's stats endpoint being down is no reason to fail a tick.
 	let metrics: MetricsTickResult | null = null;
@@ -618,6 +635,7 @@ export async function runSchedulerTick(
 		results,
 		digest,
 		reviewAlerts,
+		notifications,
 		metrics
 	};
 }

@@ -78,3 +78,9 @@ secrets (the app no-ops without them), plus an optional `NOTIFY_FROM` sender on 
 domain verified in Resend. At most one digest is sent per 24h window, covering
 failures newer than the last digest. Posts that are still retrying are not
 emailed.
+
+For more than that (a daily digest at your own time, prompt alerts for failures
+and expired accounts, several recipients choosing what each gets) set up
+[Email notifications](notifications.md) in Settings instead. They send from a
+Gmail account of your own, need no Worker secret, and run on the same tick after
+the posts.

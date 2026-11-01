@@ -87,8 +87,10 @@ This path needs no GitHub App and no Workers Builds, and nothing to configure in
    `wrangler.jsonc`. Nothing to set up — unless the account had no trigger slot
    left, in which case the deploy says so and **Settings → Scheduled publishing**
    has the tick URL and a token for an external cron.
-4. Optional: `RESEND_API_KEY` + `NOTIFY_EMAIL` for failure digests, and the
-   instance name under **Settings → Instance**.
+4. Optional: email notifications under **Settings → Email notifications**
+   ([Email notifications](notifications.md)) or `RESEND_API_KEY` +
+   `NOTIFY_EMAIL` for failure digests, and the instance name under
+   **Settings → Instance**.
 
 ## Check it worked
 

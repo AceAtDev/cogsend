@@ -200,6 +200,14 @@ export function satisfiedMigrations(state) {
 				tables.has('activity_log')
 			)
 		],
+		[
+			'0025_notifications.sql',
+			all(
+				tables.has('notification_settings'),
+				tables.has('notification_recipients'),
+				tables.has('notification_alerts')
+			)
+		],
 		['0026_briefs_slots.sql', all(tables.has('brand_briefs'), tables.has('posting_schedules'))],
 		[
 			'0027_post_metrics.sql',

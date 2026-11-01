@@ -8,6 +8,7 @@
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import CopyButton from '#lib/components/CopyButton.svelte';
 	import UpdatePanel from '#lib/components/UpdatePanel.svelte';
+	import NotificationsPanel from '#lib/components/NotificationsPanel.svelte';
 	import { markUpdateSeen, noteRelease } from '#lib/components/update-notice.svelte.js';
 	import { humanizeError } from '#lib/domain/human-error.js';
 	import { sessionExpiredIfUnauthorized } from '#lib/components/session-expired.js';
@@ -1095,6 +1096,8 @@
 				</div>
 			</form>
 		</div>
+
+		<NotificationsPanel />
 
 		<div
 			class="min-w-0 rounded-[2rem] border border-stone-200/80 bg-white p-6 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.06)] sm:p-8"
