@@ -79,6 +79,9 @@ export {
 	tiktokAuthorizeUrl,
 	tiktokExchangeCode,
 	tiktokVerify,
+	tiktokCreatorInfo,
+	tiktokCannotPostReason,
+	creatorMeta as tiktokCreatorMeta,
 	tiktokChunkPlan,
 	TIKTOK_SCOPES
 } from './tiktok';

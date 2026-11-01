@@ -3,9 +3,15 @@ import type { PageServerLoad } from './$types';
 import { batchQueries } from '#lib/server/db/client.js';
 import { connections, drafts, publishTargets } from '#lib/server/db/schema.js';
 import { requireUser } from '#lib/server/require.js';
+import { isFullyVerified } from '#lib/server/auth.js';
+import { instanceFacts, publicHomepageEnabled } from '#lib/server/legal.js';
 import { schedulerHealth } from '#lib/server/scheduler.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	// The hook lets a signed-out visitor this far only with PUBLIC_HOMEPAGE on.
+	if (!isFullyVerified(locals.user) && publicHomepageEnabled(locals.env)) {
+		return { publicHome: await instanceFacts(locals) };
+	}
 	const user = requireUser(locals.user);
 	const ownedConnections = () =>
 		locals.db
@@ -47,6 +53,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ n: number }[]
 	];
 	return {
+		publicHome: null,
 		user: locals.user,
 		displayName: user.displayName ?? null,
 		scheduledCount: scheduledRows[0]?.n ?? 0,

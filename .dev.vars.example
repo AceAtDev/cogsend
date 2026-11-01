@@ -53,6 +53,14 @@ APP_ENCRYPTION_KEY=
 # TIKTOK_CLIENT_SECRET=
 # X_CLIENT_ID=
 # X_CLIENT_SECRET=
+# Optional. TikTok's URL-prefix signature file name or token, served at
+# /tiktok<token>.txt so TikTok can verify the instance's address.
+# TIKTOK_SITE_VERIFICATION=
+# Optional. The public contact address shown on /legal/terms and /legal/privacy.
+# LEGAL_CONTACT_EMAIL=
+# Optional. Set to 1 to show signed-out visitors a public page about the
+# instance at / instead of the sign-in page (the Website URL TikTok asks for).
+# PUBLIC_HOMEPAGE=1
 # Optional. Local dev only: skip the 2FA enrollment/verify flow. Honored only
 # when the instance resolves to a localhost URL — never on a real host.
 # Set to 1 to enable.

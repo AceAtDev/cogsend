@@ -34,6 +34,17 @@ const envSchema = z.object({
 	INSTAGRAM_APP_SECRET: z.string().min(1).optional(),
 	TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
 	TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
+	// TikTok's URL-prefix signature (the token in the file TikTok hands out,
+	// the file name, or its contents): served at /tiktok<token>.txt so TikTok
+	// can verify the instance's address, and the sign that it did.
+	TIKTOK_SITE_VERIFICATION: z.string().optional(),
+	// Who to contact about this instance, shown on /legal/terms and
+	// /legal/privacy. Public: put an address meant to be seen.
+	LEGAL_CONTACT_EMAIL: z.string().optional(),
+	// Opt-in: signed-out visitors to / see a public page about the instance,
+	// with its terms and privacy policy, instead of the sign-in redirect.
+	// Platform app reviews (TikTok's) want a website that is not a login page.
+	PUBLIC_HOMEPAGE: z.string().optional(),
 	X_CLIENT_ID: z.string().min(1).optional(),
 	X_CLIENT_SECRET: z.string().min(1).optional(),
 	// Failure-digest email (Resend). All optional: when unset, the digest is
@@ -161,6 +172,10 @@ export async function envFromPlatform(
 		TIKTOK_CLIENT_KEY: asString(platformEnv?.TIKTOK_CLIENT_KEY) ?? fallback.TIKTOK_CLIENT_KEY,
 		TIKTOK_CLIENT_SECRET:
 			asString(platformEnv?.TIKTOK_CLIENT_SECRET) ?? fallback.TIKTOK_CLIENT_SECRET,
+		TIKTOK_SITE_VERIFICATION:
+			asString(platformEnv?.TIKTOK_SITE_VERIFICATION) ?? fallback.TIKTOK_SITE_VERIFICATION,
+		LEGAL_CONTACT_EMAIL: asString(platformEnv?.LEGAL_CONTACT_EMAIL) ?? fallback.LEGAL_CONTACT_EMAIL,
+		PUBLIC_HOMEPAGE: asString(platformEnv?.PUBLIC_HOMEPAGE) ?? fallback.PUBLIC_HOMEPAGE,
 		X_CLIENT_ID: asString(platformEnv?.X_CLIENT_ID) ?? fallback.X_CLIENT_ID,
 		X_CLIENT_SECRET: asString(platformEnv?.X_CLIENT_SECRET) ?? fallback.X_CLIENT_SECRET,
 		RESEND_API_KEY: asString(platformEnv?.RESEND_API_KEY) ?? fallback.RESEND_API_KEY,
