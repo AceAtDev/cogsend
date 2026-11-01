@@ -143,3 +143,20 @@ declare module 'cloudflare:workers' {
 	export const env: Env;
 	export function waitUntil(promise: Promise<unknown>): void;
 }
+
+/** Outbound TCP, for the notification emails' SMTP client (tests alias it to
+ *  tests/cloudflare-sockets.ts and pass a fake socket instead). */
+declare module 'cloudflare:sockets' {
+	interface Socket {
+		readonly readable: ReadableStream<Uint8Array>;
+		readonly writable: WritableStream<Uint8Array>;
+		readonly opened: Promise<unknown>;
+		readonly closed: Promise<void>;
+		close(): Promise<void>;
+		startTls(): Socket;
+	}
+	export function connect(
+		address: { hostname: string; port: number } | string,
+		options?: { secureTransport?: 'off' | 'on' | 'starttls'; allowHalfOpen?: boolean }
+	): Socket;
+}

@@ -70,6 +70,9 @@ export default defineConfig({
 					alias: {
 						'cloudflare:workers': fileURLToPath(
 							new URL('./tests/cloudflare-workers.ts', import.meta.url)
+						),
+						'cloudflare:sockets': fileURLToPath(
+							new URL('./tests/cloudflare-sockets.ts', import.meta.url)
 						)
 					}
 				},
