@@ -372,3 +372,64 @@ export const mcpIdempotency = sqliteTable(
 		index('mcp_idempotency_expires_idx').on(t.expiresAt)
 	]
 );
+
+// A function, so each table gets its own column builders.
+const metricColumns = () => ({
+	likes: integer('likes'),
+	comments: integer('comments'),
+	shares: integer('shares'),
+	quotes: integer('quotes'),
+	views: integer('views'),
+	impressions: integer('impressions'),
+	clicks: integer('clicks')
+});
+
+/** One row per published delivery: latest counts and the snapshot plan (0027). */
+export const deliveryMetrics = sqliteTable(
+	'delivery_metrics',
+	{
+		targetId: text('target_id')
+			.primaryKey()
+			.references(() => publishTargets.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		platform: text('platform').notNull(),
+		publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
+		/** How many of the 1h/24h/7d snapshots are taken. */
+		stage: integer('stage').notNull().default(0),
+		/** NULL: nothing more is scheduled (a refresh on demand still works). */
+		nextDueAt: integer('next_due_at', { mode: 'timestamp_ms' }),
+		state: text('state').notNull().default('pending'),
+		stateDetail: text('state_detail'),
+		failures: integer('failures').notNull().default(0),
+		...metricColumns(),
+		collectedAt: integer('collected_at', { mode: 'timestamp_ms' }),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		index('delivery_metrics_due_idx').on(t.nextDueAt),
+		index('delivery_metrics_user_published_idx').on(t.userId, t.publishedAt)
+	]
+);
+
+/** Every read of a delivery's counts, with when it was taken (0027). */
+export const deliveryMetricSnapshots = sqliteTable(
+	'delivery_metric_snapshots',
+	{
+		id: text('id').primaryKey(),
+		targetId: text('target_id')
+			.notNull()
+			.references(() => publishTargets.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		kind: text('kind').notNull(),
+		collectedAt: integer('collected_at', { mode: 'timestamp_ms' }).notNull(),
+		...metricColumns()
+	},
+	(t) => [
+		index('delivery_metric_snapshots_target_idx').on(t.targetId, t.collectedAt),
+		index('delivery_metric_snapshots_user_idx').on(t.userId)
+	]
+);

@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 + 0027 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -272,6 +272,45 @@ CREATE TABLE IF NOT EXISTS \`mcp_idempotency\` (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_idempotency_user_key_uq\` ON \`mcp_idempotency\` (\`user_id\`, \`key\`);
 CREATE INDEX IF NOT EXISTS \`mcp_idempotency_expires_idx\` ON \`mcp_idempotency\` (\`expires_at\`);
+
+CREATE TABLE IF NOT EXISTS \`delivery_metrics\` (
+	\`target_id\` text PRIMARY KEY NOT NULL REFERENCES \`publish_targets\`(\`id\`) ON DELETE CASCADE,
+	\`user_id\` text NOT NULL REFERENCES \`users\`(\`id\`) ON DELETE CASCADE,
+	\`platform\` text NOT NULL,
+	\`published_at\` integer NOT NULL,
+	\`stage\` integer NOT NULL DEFAULT 0,
+	\`next_due_at\` integer,
+	\`state\` text NOT NULL DEFAULT 'pending',
+	\`state_detail\` text,
+	\`failures\` integer NOT NULL DEFAULT 0,
+	\`likes\` integer,
+	\`comments\` integer,
+	\`shares\` integer,
+	\`quotes\` integer,
+	\`views\` integer,
+	\`impressions\` integer,
+	\`clicks\` integer,
+	\`collected_at\` integer,
+	\`updated_at\` integer NOT NULL
+);
+CREATE INDEX IF NOT EXISTS \`delivery_metrics_due_idx\` ON \`delivery_metrics\` (\`next_due_at\`);
+CREATE INDEX IF NOT EXISTS \`delivery_metrics_user_published_idx\` ON \`delivery_metrics\` (\`user_id\`, \`published_at\`);
+CREATE TABLE IF NOT EXISTS \`delivery_metric_snapshots\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`target_id\` text NOT NULL REFERENCES \`publish_targets\`(\`id\`) ON DELETE CASCADE,
+	\`user_id\` text NOT NULL REFERENCES \`users\`(\`id\`) ON DELETE CASCADE,
+	\`kind\` text NOT NULL,
+	\`collected_at\` integer NOT NULL,
+	\`likes\` integer,
+	\`comments\` integer,
+	\`shares\` integer,
+	\`quotes\` integer,
+	\`views\` integer,
+	\`impressions\` integer,
+	\`clicks\` integer
+);
+CREATE INDEX IF NOT EXISTS \`delivery_metric_snapshots_target_idx\` ON \`delivery_metric_snapshots\` (\`target_id\`, \`collected_at\`);
+CREATE INDEX IF NOT EXISTS \`delivery_metric_snapshots_user_idx\` ON \`delivery_metric_snapshots\` (\`user_id\`);
 `;
 
 async function execStatements(d1: D1Database, sql: string) {
@@ -488,6 +527,44 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_by text REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS invites_code_uq ON invites (code_hash);
+CREATE TABLE IF NOT EXISTS delivery_metrics (
+	target_id text PRIMARY KEY NOT NULL REFERENCES publish_targets(id) ON DELETE CASCADE,
+	user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	platform text NOT NULL,
+	published_at integer NOT NULL,
+	stage integer NOT NULL DEFAULT 0,
+	next_due_at integer,
+	state text NOT NULL DEFAULT 'pending',
+	state_detail text,
+	failures integer NOT NULL DEFAULT 0,
+	likes integer,
+	comments integer,
+	shares integer,
+	quotes integer,
+	views integer,
+	impressions integer,
+	clicks integer,
+	collected_at integer,
+	updated_at integer NOT NULL
+);
+CREATE INDEX IF NOT EXISTS delivery_metrics_due_idx ON delivery_metrics (next_due_at);
+CREATE INDEX IF NOT EXISTS delivery_metrics_user_published_idx ON delivery_metrics (user_id, published_at);
+CREATE TABLE IF NOT EXISTS delivery_metric_snapshots (
+	id text PRIMARY KEY NOT NULL,
+	target_id text NOT NULL REFERENCES publish_targets(id) ON DELETE CASCADE,
+	user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	kind text NOT NULL,
+	collected_at integer NOT NULL,
+	likes integer,
+	comments integer,
+	shares integer,
+	quotes integer,
+	views integer,
+	impressions integer,
+	clicks integer
+);
+CREATE INDEX IF NOT EXISTS delivery_metric_snapshots_target_idx ON delivery_metric_snapshots (target_id, collected_at);
+CREATE INDEX IF NOT EXISTS delivery_metric_snapshots_user_idx ON delivery_metric_snapshots (user_id);
 `;
 
 /**
