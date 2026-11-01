@@ -972,7 +972,9 @@ export function tiktokAuthorizeUrl(
 		scope: scopes.join(','),
 		response_type: 'code',
 		redirect_uri: tiktokCallbackUrl(appUrl),
-		state
+		state,
+		// Always show TikTok's consent page, even when this user already granted access.
+		disable_auto_auth: '1'
 	});
 	return `${AUTHORIZE_URL}?${params.toString()}`;
 }

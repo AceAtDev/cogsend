@@ -196,7 +196,8 @@ describe('TikTok OAuth', () => {
 			scope: 'user.info.basic,video.publish,video.list',
 			response_type: 'code',
 			redirect_uri: 'https://social.example/api/connections/tiktok/callback',
-			state: 'st4te'
+			state: 'st4te',
+			disable_auto_auth: '1'
 		});
 	});
 
