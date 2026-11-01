@@ -17,9 +17,13 @@ import {
 	draftShares,
 	drafts,
 	draftVariants,
+	notificationAlerts,
+	notificationRecipients,
+	notificationSettings,
 	publishTargets,
 	users
 } from '#lib/server/db/schema.js';
+import { addRecipient, saveSettings } from '#lib/server/notify/store.js';
 import { createTestAdmin, createTestDb, TEST_ENV } from '#lib/server/db/test.js';
 import { createShare } from '#lib/server/draft-shares.js';
 import { deleteUserAndData } from '#lib/server/user-data.js';
@@ -66,6 +70,10 @@ import * as adminUsersRoute from '../src/routes/api/admin/users/+server';
 import * as adminUserRoute from '../src/routes/api/admin/users/[id]/+server';
 import * as adminInvitesRoute from '../src/routes/api/admin/invites/+server';
 import * as adminRegistrationRoute from '../src/routes/api/admin/registration/+server';
+import * as notificationsRoute from '../src/routes/api/notifications/+server';
+import * as notificationRecipientsRoute from '../src/routes/api/notifications/recipients/+server';
+import * as notificationRecipientRoute from '../src/routes/api/notifications/recipients/[id]/+server';
+import * as notificationTestRoute from '../src/routes/api/notifications/test/+server';
 
 /**
  * Two members on one instance, Alice and Bob. Everything here is Bob reaching
@@ -95,7 +103,8 @@ const a = {
 	mediaKey: '1700000000000-aaaaaaaaaaaaaaaa.jpg',
 	mediaId: '',
 	shareToken: '',
-	apiKey: ''
+	apiKey: '',
+	recipient: ''
 };
 const b = {
 	draft: '',
@@ -105,7 +114,8 @@ const b = {
 	brand: '',
 	mediaKey: '1700000000001-bbbbbbbbbbbbbbbb.jpg',
 	shareToken: '',
-	apiKey: ''
+	apiKey: '',
+	recipient: ''
 };
 
 function sessionUser(row: { id: string; email: string }, role: 'admin' | 'member'): SessionUser {
@@ -207,7 +217,14 @@ async function seed(owner: SessionUser, mediaKey: string) {
 	});
 	const share = await createShare(db, TEST_ENV.APP_ENCRYPTION_KEY, draft, 86_400_000);
 	const apiKey = (await rotateApiKey(db, owner.id)).raw;
+	const name = owner.email.split('@')[0];
+	await saveSettings(db, TEST_ENV, owner.id, {
+		senderEmail: `${name}.bot@gmail.com`,
+		appPassword: `${name}-app-password-16`
+	});
+	const recipient = (await addRecipient(db, owner.id, `${name}-team@example.com`, ['failures']))!;
 	return {
+		recipient: recipient.id,
 		connection,
 		tiktok,
 		brand,
@@ -281,7 +298,18 @@ async function aliceSnapshot() {
 	const keys = await db.select().from(apiKeys).where(eq(apiKeys.userId, alice.id));
 	const ownBrands = await db.select().from(brands).where(eq(brands.userId, alice.id));
 	const [tiktok] = await db.select().from(connections).where(eq(connections.id, a.tiktok));
+	const notify = {
+		settings: await db
+			.select()
+			.from(notificationSettings)
+			.where(eq(notificationSettings.userId, alice.id)),
+		recipients: await db
+			.select()
+			.from(notificationRecipients)
+			.where(eq(notificationRecipients.userId, alice.id))
+	};
 	return JSON.stringify({
+		notify,
 		draft,
 		conn,
 		tiktok,
@@ -628,6 +656,53 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		expect(await aliceSnapshot()).toBe(before);
 	});
 
+	it('cannot read or change her notification sender, schedule or recipients', async () => {
+		const before = await aliceSnapshot();
+		if (via === 'session') {
+			const own = await call(notificationsRoute.GET, bobAs(), { method: 'GET' });
+			expect(own.status).toBe(200);
+			const text = await own.text();
+			expect(text).toContain('bob.bot@gmail.com');
+			expect(text).toContain('bob-team@example.com');
+			expect(text).not.toContain('alice');
+			expect(text).not.toContain(a.recipient);
+		}
+		for (const attempt of [
+			() =>
+				call(notificationRecipientRoute.PATCH, bobAs(), {
+					method: 'PATCH',
+					params: { id: a.recipient },
+					body: { subscriptions: ['digest'] }
+				}),
+			() =>
+				call(notificationRecipientRoute.DELETE, bobAs(), {
+					method: 'DELETE',
+					params: { id: a.recipient }
+				}),
+			// A test email may only go to Bob's own trusted addresses.
+			() =>
+				call(notificationTestRoute.POST, bobAs(), {
+					body: { to: 'alice-team@example.com' }
+				})
+		]) {
+			const res = await attempt();
+			expect([400, 401, 403, 404]).toContain(res.status);
+		}
+		// His own writes land on his own rows only.
+		await call(notificationsRoute.PATCH, bobAs(), {
+			method: 'PATCH',
+			body: {
+				digestTime: '06:00',
+				senderEmail: 'bob.other@gmail.com',
+				appPassword: 'bob-new-pass-16x'
+			}
+		});
+		await call(notificationRecipientsRoute.POST, bobAs(), {
+			body: { email: 'alice-team@example.com' }
+		});
+		expect(await aliceSnapshot()).toBe(before);
+	});
+
 	it('cannot read her TikTok creator info', async () => {
 		const before = await aliceSnapshot();
 		const res = await call(creatorInfoRoute.GET, personaOf(bob), {
@@ -959,13 +1034,25 @@ describe('deleting an account', () => {
 				.select()
 				.from(mcpConfirmations)
 				.where(eq(mcpConfirmations.userId, bob.id)),
-			keys: await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, bob.id))
+			keys: await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, bob.id)),
+			notify: [
+				...(await db
+					.select()
+					.from(notificationSettings)
+					.where(eq(notificationSettings.userId, bob.id))),
+				...(await db
+					.select()
+					.from(notificationRecipients)
+					.where(eq(notificationRecipients.userId, bob.id))),
+				...(await db.select().from(notificationAlerts).where(eq(notificationAlerts.userId, bob.id)))
+			]
 		});
 		const had = await bobRows();
 		expect(had.brands.length).toBeGreaterThan(0);
 		expect(had.keys.length).toBeGreaterThan(0);
+		expect(had.notify.length).toBeGreaterThan(0);
 		expect((await deleteUserAndData(db, media, bob.id)).done).toBe(true);
-		expect(await bobRows()).toEqual({ brands: [], confirmations: [], keys: [] });
+		expect(await bobRows()).toEqual({ brands: [], confirmations: [], keys: [], notify: [] });
 		expect(
 			(await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, alice.id))).length
 		).toBeGreaterThan(0);
