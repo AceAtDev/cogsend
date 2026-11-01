@@ -2,19 +2,10 @@ import { createOAuthCallback } from '#lib/server/oauth-callback.js';
 import { decryptSecret } from '#lib/server/crypto.js';
 import { tiktokExchangeCode } from '#lib/server/providers/index.js';
 
-/** What the operator chose on the Accounts page, which a reconnect keeps. */
-const SETTINGS = ['tiktokPrivacy', 'tiktokAllowComment', 'tiktokAllowDuet', 'tiktokAllowStitch'];
-
 export const GET = createOAuthCallback({
 	platform: 'tiktok',
 	pendingMarker: 'tiktok',
 	accountIdKey: 'tiktokOpenId',
-	reconcileMeta(incoming, existing) {
-		const kept = Object.fromEntries(
-			SETTINGS.filter((key) => existing[key] !== undefined).map((key) => [key, existing[key]])
-		);
-		return { ...incoming, ...kept };
-	},
 	async complete({ pending, code, env }) {
 		const clientSecret = await decryptSecret(pending.clientSecretEnc, env.APP_ENCRYPTION_KEY);
 		const exchanged = await tiktokExchangeCode({

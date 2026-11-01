@@ -37,6 +37,11 @@ import { isPinnedAppUrl } from '#lib/domain/app-url.js';
 import { readStoredAppUrl, rememberAppUrl } from '#lib/server/app-settings.js';
 import { carriesCredential, isCrossSiteForgery } from '#lib/server/csrf.js';
 import { verifyTickToken } from '#lib/server/tick-token.js';
+import { publicHomepageEnabled } from '#lib/server/legal.js';
+import {
+	isTiktokVerificationFile,
+	tiktokVerificationBody
+} from '#lib/domain/tiktok-verification.js';
 import { authorizeMcpRequest } from '#lib/server/mcp-auth.js';
 import {
 	rateLimitBucket,
@@ -47,6 +52,14 @@ import {
 
 export function isPublicPath(path: string): boolean {
 	if (path === '/login' || path === '/login/setup-2fa' || path === '/login/verify') return true;
+	// The terms, the privacy policy and TikTok's signature file: platform app
+	// reviews read them without an account.
+	if (
+		path === '/legal/terms' ||
+		path === '/legal/privacy' ||
+		isTiktokVerificationFile(path.slice(1))
+	)
+		return true;
 	if (
 		path === '/api/health' ||
 		path.startsWith('/api/media/public/') ||
@@ -70,6 +83,18 @@ export function isPublicPath(path: string): boolean {
 	if (path.startsWith('/api/auth/totp/enroll') || path.startsWith('/api/auth/totp/verify'))
 		return true;
 	return false;
+}
+
+/** TikTok's signature file for `name`, or a 404 when its token is not configured. */
+export function tiktokVerificationResponse(
+	env: { TIKTOK_SITE_VERIFICATION?: string },
+	name: string
+): Response {
+	const body = tiktokVerificationBody(env.TIKTOK_SITE_VERIFICATION, name);
+	if (!body) return new Response('Not found', { status: 404 });
+	return new Response(body, {
+		headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }
+	});
 }
 
 function withPageSecurity(path: string, response: Response, secure: boolean): Response {
@@ -171,6 +196,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 		);
 	}
 	event.locals.env = appEnv;
+	// TikTok's URL-prefix signature file, answered before anything else: an
+	// exact body and never a redirect, which TikTok counts as a failure.
+	if (isTiktokVerificationFile(path.slice(1))) {
+		return withPageSecurity(path, tiktokVerificationResponse(appEnv, path.slice(1)), secureRequest);
+	}
 	// Fail closed in prod when the R2 binding is missing: persisting draft_media
 	// rows against a per-request in-memory Map silently loses bytes on next
 	// request. DEV keeps the memory fallback for local runs without R2.
@@ -381,7 +411,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return withPageSecurity(path, await resolve(event), secureRequest);
 	}
 
-	if (!isFullyVerified(user) && !isPublicPath(path)) {
+	const publicHome = path === '/' && publicHomepageEnabled(event.locals.env);
+	if (!isFullyVerified(user) && !isPublicPath(path) && !publicHome) {
 		if (path.startsWith('/api/')) return deny(path, 401, { error: 'Unauthorized' }, secureRequest);
 		return deny(path, 303, { error: 'Unauthorized' }, secureRequest, '/login');
 	}

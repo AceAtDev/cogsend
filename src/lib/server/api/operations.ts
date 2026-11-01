@@ -57,6 +57,13 @@ import {
 	publishTarget
 } from '#lib/server/publish.js';
 import { humanizedCause } from '#lib/domain/human-error.js';
+import {
+	parseTiktokChoice,
+	readTiktokChoices,
+	tiktokChoiceProblem,
+	TIKTOK_PRIVACY_MISSING_MESSAGE,
+	type TiktokPostChoice
+} from '#lib/domain/tiktok.js';
 import type { SubrequestBudget } from '#lib/server/budget.js';
 import { randomHex } from '#lib/domain/bytes.js';
 import { MAX_VIDEO_BYTES, validateImageUpload } from '#lib/domain/media-limits.js';
@@ -204,20 +211,25 @@ async function makeMissingJpegCopies(ctx: OperationContext, draftId: string): Pr
 	return false;
 }
 
+type PostConnection = {
+	id: string;
+	platform: string;
+	handle: string | null;
+	metaJson: string;
+};
+
 /**
  * Instagram refuses a post without a photo or video, and a few other shapes
- * the rest take; TikTok takes nothing but one video. Every other platform's
- * problems surface when it is sent, but these are certain, so the request is
- * refused before anything is written: an API client learns now, not at the
- * scheduled time.
+ * the rest take; TikTok takes nothing but one video, and only with the
+ * choices its guidelines leave to the creator made for that account. Every
+ * other platform's problems surface when it is sent, but these are certain, so
+ * the request is refused before anything is written: an API client learns
+ * now, not at the scheduled time.
  */
-async function refuseUnfitPosts(
-	ctx: OperationContext,
-	draftId: string,
-	conns: Array<{ platform: string }>
-) {
+async function refuseUnfitPosts(ctx: OperationContext, draftId: string, conns: PostConnection[]) {
 	await refuseUnfitForInstagram(ctx, draftId, conns);
-	if (!conns.some((c) => c.platform === 'tiktok')) return;
+	const tiktoks = conns.filter((c) => c.platform === 'tiktok');
+	if (!tiktoks.length) return;
 	const content = await buildNormalizedPost(ctx.db, draftId, 'tiktok');
 	const issues = getProvider('tiktok').validate(content);
 	if (issues.length) {
@@ -226,12 +238,126 @@ async function refuseUnfitPosts(
 			issues: issues.map((issue) => issue.message)
 		});
 	}
+	const choices = await storedTiktokChoices(ctx, draftId);
+	const durationMs = content.media?.find((m) => m.video)?.video?.durationMs;
+	for (const conn of tiktoks) {
+		const meta = parseJson<{ tiktokPrivacyOptions?: string[]; tiktokMaxVideoSec?: number }>(
+			conn.metaJson,
+			{}
+		);
+		const problem = tiktokChoiceProblem(
+			choices[conn.id],
+			{ privacyOptions: meta.tiktokPrivacyOptions, maxVideoSec: meta.tiktokMaxVideoSec },
+			durationMs
+		);
+		if (!problem) continue;
+		const who = conn.handle ? ` (${conn.handle})` : '';
+		invalid(`TikTok${who}: ${problem}`, 400, {
+			platform: 'tiktok',
+			connectionId: conn.id,
+			code:
+				problem === TIKTOK_PRIVACY_MISSING_MESSAGE ? 'tiktok_privacy_required' : 'tiktok_options',
+			issues: [problem]
+		});
+	}
+}
+
+async function storedTiktokChoices(
+	ctx: OperationContext,
+	draftId: string
+): Promise<Record<string, TiktokPostChoice>> {
+	const variant = await first(
+		ctx.db
+			.select()
+			.from(draftVariants)
+			.where(and(eq(draftVariants.draftId, draftId), eq(draftVariants.platform, 'tiktok')))
+	);
+	return readTiktokChoices(parseJson<{ tiktok?: unknown }>(variant?.optionsJson, {}).tiktok);
+}
+
+/**
+ * The `tiktok` field of a publish or schedule request: one set of choices for
+ * every TikTok account in it, or an object keyed by connection id. Null when
+ * the request carries none, and the draft's stored choices apply.
+ */
+function tiktokChoicesFromRequest(
+	raw: unknown,
+	tiktokIds: string[]
+): Record<string, TiktokPostChoice> | null {
+	if (raw === undefined || raw === null) return null;
+	if (typeof raw !== 'object' || Array.isArray(raw)) invalid('tiktok must be an object');
+	const entries = Object.entries(raw as Record<string, unknown>);
+	const perAccount = entries.length > 0 && entries.every(([key]) => tiktokIds.includes(key));
+	const out: Record<string, TiktokPostChoice> = {};
+	if (perAccount) {
+		for (const [id, value] of entries) {
+			const parsed = parseTiktokChoice(value);
+			if (!parsed.ok) invalid(`tiktok.${id}: ${parsed.error}`);
+			out[id] = parsed.choice;
+		}
+		return out;
+	}
+	const parsed = parseTiktokChoice(raw);
+	if (!parsed.ok) invalid(`tiktok: ${parsed.error}`);
+	for (const id of tiktokIds) out[id] = parsed.choice;
+	return out;
+}
+
+/** Keep the request's TikTok choices on the draft, where publish reads them. */
+async function saveTiktokChoices(
+	ctx: OperationContext,
+	draftId: string,
+	choices: Record<string, TiktokPostChoice>
+) {
+	const existing = await first(
+		ctx.db
+			.select()
+			.from(draftVariants)
+			.where(and(eq(draftVariants.draftId, draftId), eq(draftVariants.platform, 'tiktok')))
+	);
+	const options = parseJson<Record<string, unknown>>(existing?.optionsJson, {});
+	const optionsJson = JSON.stringify({
+		...options,
+		tiktok: { ...readTiktokChoices(options.tiktok), ...choices }
+	});
+	const now = new Date();
+	if (existing) {
+		await ctx.db
+			.update(draftVariants)
+			.set({ optionsJson, updatedAt: now })
+			.where(eq(draftVariants.id, existing.id));
+		return;
+	}
+	await ctx.db.insert(draftVariants).values({
+		id: newId(),
+		draftId,
+		platform: 'tiktok',
+		body: null,
+		optionsJson,
+		createdAt: now,
+		updatedAt: now
+	});
+}
+
+/** Apply a request's `tiktok` choices, if it sent any, before the post is checked. */
+async function takeTiktokChoices(
+	ctx: OperationContext,
+	draftId: string,
+	raw: unknown,
+	conns: PostConnection[]
+) {
+	const tiktokIds = conns.filter((c) => c.platform === 'tiktok').map((c) => c.id);
+	if (raw !== undefined && raw !== null && !tiktokIds.length) {
+		invalid('tiktok options were sent, but no TikTok account is in connectionIds');
+	}
+	const choices = tiktokChoicesFromRequest(raw, tiktokIds);
+	if (choices) await saveTiktokChoices(ctx, draftId, choices);
 }
 
 async function refuseUnfitForInstagram(
 	ctx: OperationContext,
 	draftId: string,
-	conns: Array<{ platform: string }>
+	conns: PostConnection[]
 ) {
 	if (!conns.some((c) => c.platform === 'instagram')) return;
 	const deferred = await makeMissingJpegCopies(ctx, draftId);
@@ -265,7 +391,12 @@ export async function scheduleDraft(
 	);
 	if (!draft) invalid('Not found', 404);
 	if (!body || typeof body !== 'object') invalid('Invalid JSON body');
-	const input = body as { connectionIds?: unknown; runAt?: unknown; cancelOthers?: unknown };
+	const input = body as {
+		connectionIds?: unknown;
+		runAt?: unknown;
+		cancelOthers?: unknown;
+		tiktok?: unknown;
+	};
 	const now = new Date();
 	if (connectionIdsOverflow(input.connectionIds)) invalid('Too many connections (max 10)');
 	if (input.cancelOthers !== undefined && typeof input.cancelOthers !== 'boolean')
@@ -295,6 +426,7 @@ export async function scheduleDraft(
 			alreadyPublished: already,
 			inFlight: flight
 		});
+	await takeTiktokChoices(ctx, draftId, input.tiktok, conns);
 	await refuseUnfitPosts(ctx, draftId, conns);
 	const ensured = await ensureTargets(ctx.db, draftId, conns, 'schedule', runAt, now);
 	const blocked = ensured.filter((i) => i.alreadyPublished || i.inFlight);
@@ -700,7 +832,7 @@ export async function duplicateDraft(ctx: OperationContext, userId: string, draf
 							draftId: newDraftId,
 							platform: variant.platform,
 							body: variant.body,
-							optionsJson: variant.optionsJson,
+							optionsJson: withoutTiktokChoices(variant.optionsJson),
 							createdAt: now,
 							updatedAt: now
 						}))
@@ -784,6 +916,17 @@ export async function duplicateDraft(ctx: OperationContext, userId: string, draf
 }
 
 // Bad options would otherwise surface only at publish, as a provider error. Mirrors provider.validate.
+/**
+ * A copy starts without the TikTok choices: TikTok wants them made for each
+ * post, and a duplicate is a new one.
+ */
+function withoutTiktokChoices(optionsJson: string): string {
+	const options = parseJson<Record<string, unknown>>(optionsJson, {});
+	if (!('tiktok' in options)) return optionsJson;
+	delete options.tiktok;
+	return JSON.stringify(options);
+}
+
 function validateVariantOptions(options: unknown): string | null {
 	if (options === undefined) return null;
 	if (!options || typeof options !== 'object' || Array.isArray(options))
@@ -801,6 +944,14 @@ function validateVariantOptions(options: unknown): string | null {
 			value.threadSegments.some((segment) => typeof segment !== 'string'))
 	)
 		return 'threadSegments must be an array of strings';
+	if (value.tiktok !== undefined) {
+		if (!value.tiktok || typeof value.tiktok !== 'object' || Array.isArray(value.tiktok))
+			return 'options.tiktok must be an object keyed by connection id';
+		for (const [id, choice] of Object.entries(value.tiktok as Record<string, unknown>)) {
+			const parsed = parseTiktokChoice(choice);
+			if (!parsed.ok) return `options.tiktok.${id}: ${parsed.error}`;
+		}
+	}
 	return null;
 }
 
@@ -970,11 +1121,14 @@ export async function publishDraft(
 	const published = new Set(
 		classified.filter((item) => item.kind === 'published').map((item) => item.connectionId)
 	);
-	await refuseUnfitPosts(
+	const unpublished = userConnections.filter((row) => !published.has(row.id));
+	await takeTiktokChoices(
 		ctx,
 		draftId,
-		userConnections.filter((row) => !published.has(row.id))
+		(requestBody as Record<string, unknown>).tiktok,
+		unpublished
 	);
+	await refuseUnfitPosts(ctx, draftId, unpublished);
 	const ensured = await ensureTargets(ctx.db, draftId, userConnections, 'now', null, now);
 	const results = [];
 	let stopped: string | null = null;

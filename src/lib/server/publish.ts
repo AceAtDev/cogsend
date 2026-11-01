@@ -12,6 +12,7 @@ import {
 import { decodeImageDimensions } from './image-dimensions';
 import { coverKey, type StoredImageMeta, type StoredVideoMeta } from './media';
 import { parsePollConfig } from '#lib/domain/poll.js';
+import { readTiktokChoices } from '#lib/domain/tiktok.js';
 import { signPublicMediaUrl, type PublicMediaVariant } from './public-media';
 import { resolvePublishSegments } from '#lib/domain/thread-segments.js';
 import { targetRecordKey } from '#lib/domain/tid.js';
@@ -122,16 +123,21 @@ export function statusAfterFailedPublish(opts: {
 	return opts.retryable ? 'scheduled' : 'failed';
 }
 
+/**
+ * The post as one platform receives it. `connectionId` adds what was chosen
+ * for that account alone (TikTok's per-post privacy and disclosure).
+ */
 export async function buildNormalizedPost(
 	db: AppDb,
 	draftId: string,
-	platform: string
+	platform: string,
+	connectionId?: string
 ): Promise<NormalizedPost> {
 	const draft = await first(db.select().from(drafts).where(eq(drafts.id, draftId)));
 	if (!draft) throw new Error('Draft not found');
 	const variants = await db.select().from(draftVariants).where(eq(draftVariants.draftId, draftId));
 	const media = await db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
-	return normalizeDraftContent(draft, variants, media, platform);
+	return normalizeDraftContent(draft, variants, media, platform, connectionId);
 }
 
 type ContentMedia = Pick<
@@ -148,7 +154,8 @@ export function normalizeDraftContent(
 	draft: { baseBody: string },
 	variants: Array<{ platform: string; body: string | null; optionsJson: string | null }>,
 	mediaRows: ContentMedia[],
-	platform: string
+	platform: string,
+	connectionId?: string
 ): NormalizedPost {
 	const media = [...mediaRows].sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -188,6 +195,10 @@ export function normalizeDraftContent(
 		langs: Array.isArray(options.langs) ? (options.langs as string[]) : undefined,
 		poll: parsePollConfig(options.poll) ?? undefined
 	};
+	if (platform === 'tiktok' && connectionId) {
+		const choice = readTiktokChoices(options.tiktok)[connectionId];
+		if (choice) postOptions.tiktok = choice;
+	}
 
 	const segmentsOpt = options.threadSegments as string[] | undefined;
 	if (segmentsOpt && segmentsOpt.length > 1) {
@@ -288,6 +299,19 @@ export function publicMediaUrlFor(
 		return `${base}/${variant ? `${variant}/` : ''}${encodeURIComponent(storageKey)}`;
 	}
 	return signPublicMediaUrl(env.APP_ENCRYPTION_KEY, env.APP_URL, storageKey, Date.now(), variant);
+}
+
+/**
+ * A media URL on the instance's own address, for a platform that only pulls
+ * from an address the operator verified with it. Set TIKTOK_SITE_VERIFICATION
+ * is the sign that TikTok verified the instance's root URL prefix; a public
+ * media origin is a different host, so the signed Worker route is used even
+ * when one is configured.
+ */
+export function verifiedMediaUrlFor(env: AppEnv, storageKey: string): Promise<string> | null {
+	if (!env.TIKTOK_SITE_VERIFICATION?.trim() || !env.APP_URL.startsWith('https://')) return null;
+	if (isLocalAppUrl(env.APP_URL)) return null;
+	return signPublicMediaUrl(env.APP_ENCRYPTION_KEY, env.APP_URL, storageKey, Date.now());
 }
 
 /** Normalized https origin, or null when unset/malformed (fall back). */
@@ -493,7 +517,7 @@ export async function publishTarget(
 	let prebuilt: NormalizedPost | null = null;
 	if (options.budget && !options.mustTry && knownPlatform) {
 		try {
-			prebuilt = await buildNormalizedPost(db, target.draftId, knownPlatform);
+			prebuilt = await buildNormalizedPost(db, target.draftId, knownPlatform, target.connectionId);
 			const needed =
 				publishCallEstimate(knownEstimateKey ?? knownPlatform, prebuilt) + PUBLISH_RESERVE_CALLS;
 			if (options.budget.remaining < needed) {
@@ -628,7 +652,8 @@ export async function publishTarget(
 		);
 		const meta = parseJson<ConnectionMeta>(conn.metaJson, {});
 		const provider = providerFor(conn);
-		const built = prebuilt ?? (await buildNormalizedPost(db, target.draftId, conn.platform));
+		const built =
+			prebuilt ?? (await buildNormalizedPost(db, target.draftId, conn.platform, conn.id));
 		const content = provider.mediaByUrl ? built : await hydrateMedia(built, store);
 
 		const issues = provider.validate(content, {
@@ -708,6 +733,7 @@ export async function publishTarget(
 					allowLocalHosts: isLocalAppUrl(env.APP_URL),
 					mediaUrlFor: (storageKey: string, variant?: PublicMediaVariant) =>
 						publicMediaUrlFor(env, storageKey, variant),
+					verifiedMediaUrlFor: (storageKey: string) => verifiedMediaUrlFor(env, storageKey),
 					mediaReader: mediaReaderFor(store),
 					callsLeft: () => options.budget?.remaining ?? Infinity,
 					timeLeft: () =>

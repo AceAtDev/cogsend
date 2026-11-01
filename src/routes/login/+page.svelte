@@ -1,4 +1,5 @@
 <script lang="ts">
+	import LegalFooter from '#lib/components/LegalFooter.svelte';
 	import { goto } from '$app/navigation';
 	import favicon from '#lib/assets/favicon.svg';
 
@@ -217,5 +218,6 @@
 				Use the email and password you set when you ran <code>npm run setup</code>
 			</p>
 		{/if}
+		<LegalFooter class="mt-8" />
 	</div>
 </div>

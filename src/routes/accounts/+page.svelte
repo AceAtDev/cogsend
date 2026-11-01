@@ -28,7 +28,6 @@
 	import { ZERNIO_API_KEYS_URL } from '#lib/domain/zernio.js';
 	import { zernioLink } from '#lib/domain/zernio-links.js';
 	import { isPaidXSubscription } from '#lib/domain/x-limits.js';
-	import { tiktokPrivacyChoices, tiktokPrivacyLabel, tiktokPrivacyOf } from '#lib/domain/tiktok.js';
 	import { BRAND_COLORS, UNBRANDED_COLOR } from '#lib/domain/channel-keys.js';
 
 	let { data } = $props();
@@ -49,14 +48,6 @@
 			maxCharacters?: number;
 			xSubscription?: string;
 			longPosts?: boolean;
-			tiktokPrivacy?: string;
-			tiktokPrivacyOptions?: string[];
-			tiktokAllowComment?: boolean;
-			tiktokAllowDuet?: boolean;
-			tiktokAllowStitch?: boolean;
-			tiktokCommentDisabled?: boolean;
-			tiktokDuetDisabled?: boolean;
-			tiktokStitchDisabled?: boolean;
 		} | null;
 	};
 	type Brand = { id: string; name: string; slug: string; color: string };
@@ -701,38 +692,6 @@
 		}
 	}
 
-	let savingTiktok = $state<string | null>(null);
-
-	/** One TikTok setting at a time; the rest keep what is stored. */
-	async function setTiktok(
-		account: Connection,
-		change: {
-			privacy?: string;
-			allowComment?: boolean;
-			allowDuet?: boolean;
-			allowStitch?: boolean;
-		}
-	) {
-		savingTiktok = account.id;
-		err = null;
-		try {
-			const res = await fetch(`/api/connections/${account.id}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ tiktok: change })
-			});
-			const payload = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(payload.error || 'Could not change the TikTok settings');
-			connections = connections.map((c) =>
-				c.id === account.id ? { ...c, metaJson: payload.connection.metaJson } : c
-			);
-		} catch (e) {
-			err = humanizeError(e instanceof Error ? e.message : 'Could not change the TikTok settings');
-		} finally {
-			savingTiktok = null;
-		}
-	}
-
 	onMount(() => {
 		const params = page.url.searchParams;
 		const connected = params.get('connected');
@@ -928,50 +887,13 @@
 									</p>
 								{/if}
 								{#if account.platform === 'tiktok' && !viaZernio(account) && !needsReconnect}
-									{@const meta = account.metaJson ?? {}}
-									<div
-										class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] font-medium text-stone-500"
+									<p
+										class="mt-1 text-[12px] font-medium text-stone-500"
 										data-testid="tiktok-settings-{account.id}"
 									>
-										<label class="flex items-center gap-1">
-											<span>Who can see posts</span>
-											<select
-												value={tiktokPrivacyOf(meta)}
-												onchange={(e) => setTiktok(account, { privacy: e.currentTarget.value })}
-												disabled={savingTiktok === account.id}
-												class="rounded border border-stone-300 bg-white px-1 py-0.5 text-[12px] font-bold text-stone-900"
-											>
-												{#each tiktokPrivacyChoices(meta) as level (level)}
-													<option value={level}>{tiktokPrivacyLabel(level)}</option>
-												{/each}
-											</select>
-										</label>
-										{#each [{ key: 'allowComment', label: 'Comments', allowed: meta.tiktokAllowComment, off: meta.tiktokCommentDisabled }, { key: 'allowDuet', label: 'Duet', allowed: meta.tiktokAllowDuet, off: meta.tiktokDuetDisabled }, { key: 'allowStitch', label: 'Stitch', allowed: meta.tiktokAllowStitch, off: meta.tiktokStitchDisabled }] as option (option.key)}
-											<label
-												class="flex items-center gap-1"
-												title={option.off
-													? 'Turned off in the TikTok app for this account'
-													: undefined}
-											>
-												<input
-													type="checkbox"
-													checked={option.allowed === true && !option.off}
-													disabled={option.off === true || savingTiktok === account.id}
-													onchange={(e) =>
-														setTiktok(account, { [option.key]: e.currentTarget.checked })}
-												/>
-												<span>{option.label}</span>
-											</label>
-										{/each}
-										<span class="basis-full text-[11px] text-stone-400">
-											By posting, you agree to TikTok's <a
-												href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
-												target="_blank"
-												rel="noopener noreferrer"
-												class="underline">Music Usage Confirmation</a
-											>. Videos can take a few minutes to appear after publishing.
-										</span>
-									</div>
+										Who can see each post, its comments, Duets and Stitches, and whether it is
+										promotional are chosen per post in the composer, as TikTok asks.
+									</p>
 								{/if}
 							</div>
 						</div>

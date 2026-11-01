@@ -1,7 +1,11 @@
 import { tiktokMediaProblems } from '#lib/domain/media-limits.js';
-import { tiktokPrivacyLabel, tiktokPrivacyOf } from '#lib/domain/tiktok.js';
+import {
+	tiktokChoiceProblem,
+	tiktokPostInfo,
+	TIKTOK_PRIVACY_MISSING_MESSAGE,
+	type TiktokPrivacy
+} from '#lib/domain/tiktok.js';
 import { TIKTOK_MAX_CHARS, validateTiktokText } from '#lib/domain/validation/text.js';
-import { formatDuration } from '#lib/domain/video-rules.js';
 import { singlePost } from './flatten';
 import { providerFetch } from './timed-fetch';
 import { processingError, ProviderError, resumedVideoState, unconfirmedPostError } from './types';
@@ -10,6 +14,7 @@ import type {
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	NormalizedPost,
 	PlatformProvider,
 	PublishResult,
 	ValidationIssue
@@ -70,6 +75,9 @@ const RETRIED_FAIL_REASONS = new Set(['internal', 'spam_risk_too_many_posts']);
 export const UNAUDITED_MESSAGE =
 	'TikTok only lets an app it has not audited post to a private account, visible to the creator alone. Make the TikTok account private, or have the app audited by TikTok (docs: OAuth apps → TikTok)';
 
+const URL_UNVERIFIED_MESSAGE =
+	"TikTok has not verified this instance's address for the app — verify the URL prefix under URL properties (docs: OAuth apps → TikTok)";
+
 type TiktokErrorFields = { code?: string; message?: string };
 
 function parseTiktokError(body: string): TiktokErrorFields {
@@ -115,9 +123,11 @@ export function tiktokApiError(prefix: string, status: number, body: string): Pr
 			return new ProviderError(UNAUDITED_MESSAGE, { status, code: 'forbidden', detail });
 		case 'privacy_level_option_mismatch':
 			return new ProviderError(
-				'TikTok does not offer the privacy chosen for this account — choose another on the Accounts page',
+				'TikTok does not offer the privacy chosen for this post — choose another in the composer',
 				{ status, code: 'forbidden', detail }
 			);
+		case 'url_ownership_unverified':
+			return new ProviderError(URL_UNVERIFIED_MESSAGE, { status, code: 'forbidden', detail });
 		case 'spam_risk_too_many_posts':
 			return new ProviderError(
 				"TikTok's daily post limit for this account is reached — it is tried again in an hour",
@@ -151,6 +161,24 @@ export function tiktokApiError(prefix: string, status: number, body: string): Pr
 		return new ProviderError(message, { status, code: 'upstream', detail });
 	}
 	return new ProviderError(message, { status, code: 'forbidden', detail });
+}
+
+/**
+ * creator_info's answers for a creator who may not post right now (TikTok
+ * sends them with HTTP 200), worded for the composer, which stops there.
+ */
+const CANNOT_POST: Record<string, string> = {
+	spam_risk_too_many_posts: 'This TikTok account has reached its daily post limit',
+	spam_risk_user_banned_from_posting: 'TikTok is not letting this account post right now',
+	reached_active_user_cap:
+		'This TikTok app has reached its daily limit of accounts that post through it'
+};
+
+/** Why creator_info said the creator cannot post at the moment, or null for any other failure. */
+export function tiktokCannotPostReason(err: unknown): string | null {
+	if (!(err instanceof ProviderError) || !err.detail) return null;
+	const { code } = parseTiktokError(err.detail);
+	return (code && CANNOT_POST[code]) || null;
 }
 
 /** `data` of a TikTok answer, or the classified error. `error.code` is "ok" on success. */
@@ -195,7 +223,11 @@ export interface TiktokCreator {
 	maxVideoSec?: number;
 }
 
-async function creatorInfo(token: string, fetchImpl: FetchLike): Promise<TiktokCreator> {
+/** creator_info: who the post goes to and what TikTok lets them post right now. */
+export async function tiktokCreatorInfo(
+	token: string,
+	fetchImpl: FetchLike = providerFetch
+): Promise<TiktokCreator> {
 	const data = await tiktokData<Record<string, unknown>>(
 		await apiPost('/post/publish/creator_info/query/', token, undefined, fetchImpl),
 		'TikTok creator info'
@@ -358,36 +390,37 @@ function failedPost(reason: string | undefined): 'restart' {
 	});
 }
 
+/**
+ * `post_info` from the creator's own choices for this post, checked against a
+ * creator_info read moments ago: TikTok's guidelines want the choice made per
+ * post, with no default, so a post without one is refused rather than sent
+ * with something CogSend picked.
+ */
 function postInfo(
 	text: string,
-	meta: ConnectionMeta | undefined,
+	content: NormalizedPost,
 	creator: TiktokCreator,
 	video: MediaAttachment
 ): Record<string, unknown> {
-	const privacy = tiktokPrivacyOf(meta);
-	const patch = creatorMeta(creator);
-	if (creator.privacyOptions.length && !creator.privacyOptions.includes(privacy)) {
+	const choice = content.options?.tiktok;
+	const problem = tiktokChoiceProblem(choice, creator, video.video?.durationMs);
+	if (problem) {
 		throw new ProviderError(
-			`TikTok does not offer “${tiktokPrivacyLabel(privacy)}” for this account now — choose another privacy on the Accounts page`,
-			{ code: 'forbidden', metaPatch: patch, detail: creator.privacyOptions.join(',') }
+			problem === TIKTOK_PRIVACY_MISSING_MESSAGE
+				? `${problem}: open the post in the composer and pick who can see it`
+				: problem,
+			{
+				code: 'forbidden',
+				metaPatch: creatorMeta(creator),
+				detail: creator.privacyOptions.join(',')
+			}
 		);
 	}
-	const durationMs = video.video?.durationMs;
-	if (creator.maxVideoSec && durationMs && durationMs > creator.maxVideoSec * 1000 + 500) {
-		throw new ProviderError(
-			`TikTok lets this account post videos up to ${formatDuration(creator.maxVideoSec * 1000)} — this one is ${formatDuration(durationMs)}`,
-			{ code: 'forbidden', metaPatch: patch }
-		);
-	}
-	return {
-		privacy_level: privacy,
-		// A setting the creator turned off in TikTok stays off whatever was
-		// chosen here.
-		disable_comment: !meta?.tiktokAllowComment || creator.commentDisabled,
-		disable_duet: !meta?.tiktokAllowDuet || creator.duetDisabled,
-		disable_stitch: !meta?.tiktokAllowStitch || creator.stitchDisabled,
-		...(text ? { title: text } : {})
-	};
+	return tiktokPostInfo(
+		choice as NonNullable<typeof choice> & { privacy: TiktokPrivacy },
+		creator,
+		text
+	);
 }
 
 export const tiktokProvider: PlatformProvider = {
@@ -422,7 +455,7 @@ export const tiktokProvider: PlatformProvider = {
 		return issues;
 	},
 
-	async publish(content, creds, meta, fetchImpl = providerFetch, opts): Promise<PublishResult> {
+	async publish(content, creds, _meta, fetchImpl = providerFetch, opts): Promise<PublishResult> {
 		const token = creds.accessToken;
 		if (!token) {
 			throw new ProviderError('TikTok credentials are missing a token (reconnect)', {
@@ -439,8 +472,14 @@ export const tiktokProvider: PlatformProvider = {
 				code: 'forbidden'
 			});
 		}
+		if (!content.options?.tiktok?.privacy) {
+			throw new ProviderError(
+				`${TIKTOK_PRIVACY_MISSING_MESSAGE}: open the post in the composer and pick who can see it`,
+				{ code: 'forbidden' }
+			);
+		}
 		const storageKey = video.storageKey;
-		const reader = requireMediaReader(opts?.mediaReader);
+		const pullUrl = opts?.verifiedMediaUrlFor ? await opts.verifiedMediaUrlFor(storageKey) : null;
 		const callsLeft = opts?.callsLeft ?? (() => Infinity);
 		const timeLeft = opts?.timeLeft ?? (() => Infinity);
 		const startedAt = opts?.resume?.pending?.startedAt;
@@ -452,10 +491,62 @@ export const tiktokProvider: PlatformProvider = {
 			);
 		};
 
+		/**
+		 * TikTok's guidelines want a video already on a server pulled from
+		 * there, which needs the URL on an address verified with TikTok. The
+		 * state that comes back has nothing left to send, only a status to
+		 * wait for. Null when TikTok has not verified the address: the same
+		 * video then goes up from storage instead.
+		 */
+		async function beginPull(info: Record<string, unknown>): Promise<UploadState | null> {
+			let res: Response;
+			try {
+				res = await apiPost(
+					'/post/publish/video/init/',
+					token!,
+					{ post_info: info, source_info: { source: 'PULL_FROM_URL', video_url: pullUrl } },
+					fetchImpl
+				);
+			} catch {
+				// No answer may still have started a download that publishes, and
+				// a second init would post twice.
+				throw unconfirmedPostError('TikTok', new Error('no answer to the pull request'));
+			}
+			let data: { publish_id?: unknown };
+			try {
+				data = await tiktokData<{ publish_id?: unknown }>(res, 'TikTok upload start');
+			} catch (err) {
+				if (err instanceof ProviderError && err.message === URL_UNVERIFIED_MESSAGE) return null;
+				// TikTok's own failure may have come after the download started.
+				if (err instanceof ProviderError && err.code === 'upstream') {
+					throw unconfirmedPostError('TikTok', err);
+				}
+				throw err;
+			}
+			if (typeof data.publish_id !== 'string' || !data.publish_id) {
+				throw new ProviderError('TikTok returned no publish id', { code: 'upstream' });
+			}
+			return {
+				publishId: data.publish_id,
+				uploadUrl: '',
+				size: 0,
+				chunkSize: 0,
+				count: 0,
+				next: 0,
+				sent: true,
+				confirmed: true
+			};
+		}
+
 		/** A new upload. Starting one publishes nothing, so a lost answer here is safe to redo. */
 		async function begin(): Promise<UploadState> {
-			const creator = await creatorInfo(token!, fetchImpl);
-			const info = postInfo(text, meta, creator, video!);
+			const creator = await tiktokCreatorInfo(token!, fetchImpl);
+			const info = postInfo(text, content, creator, video!);
+			if (pullUrl) {
+				const pulled = await beginPull(info);
+				if (pulled) return pulled;
+			}
+			const reader = requireMediaReader(opts?.mediaReader);
 			const size = await storedVideoSize(reader, storageKey);
 			const plan = tiktokChunkPlan(size);
 			const data = await tiktokData<{ publish_id?: unknown; upload_url?: unknown }>(
@@ -520,7 +611,12 @@ export const tiktokProvider: PlatformProvider = {
 					park(current, PART_RETRY_MS);
 				}
 				const [start, end] = tiktokChunkRange(current, current.size, current.next);
-				const slice = await readVideoSlice(reader, storageKey, start, end);
+				const slice = await readVideoSlice(
+					requireMediaReader(opts?.mediaReader),
+					storageKey,
+					start,
+					end
+				);
 				const last = current.next === current.count - 1;
 				let res: Response;
 				try {
@@ -773,7 +869,7 @@ const NO_POSTING_MESSAGE =
  */
 async function creatorAtConnect(token: string, fetchImpl: FetchLike) {
 	try {
-		return await creatorInfo(token, fetchImpl);
+		return await tiktokCreatorInfo(token, fetchImpl);
 	} catch (err) {
 		if (err instanceof ProviderError && err.code === 'auth') {
 			throw Object.assign(new Error(NO_POSTING_MESSAGE), { status: 401 });

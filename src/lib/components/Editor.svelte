@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { afterNavigate, beforeNavigate, goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import {
 		Image as ImageIcon,
 		Trash2,
@@ -55,6 +55,17 @@
 	import MediaFit from './video/MediaFit.svelte';
 	import MediaPreview from './MediaPreview.svelte';
 	import SharePreview from './SharePreview.svelte';
+	import TiktokConsent from './TiktokConsent.svelte';
+	import { coverUrl } from '#lib/domain/media-layout.js';
+	import TiktokPostPanel from './TiktokPostPanel.svelte';
+	import {
+		readTiktokChoices,
+		tiktokAccountProblem,
+		tiktokNeedsBrandedConsent,
+		TIKTOK_PROCESSING_NOTE,
+		type TiktokCreatorState,
+		type TiktokPostChoice
+	} from '#lib/domain/tiktok.js';
 	import VideoCover from './video/VideoCover.svelte';
 	import { makeJpegCopy, makePreview, shrinkToFit } from '#lib/components/shrink-image.js';
 	import { persistMediaLayout, type MediaMove } from '#lib/domain/media-sync.js';
@@ -197,7 +208,7 @@
 		variants?: Array<{
 			platform: string;
 			body?: string | null;
-			optionsJson?: { visibility?: string; spoilerText?: string; poll?: unknown };
+			optionsJson?: { visibility?: string; spoilerText?: string; poll?: unknown; tiktok?: unknown };
 		}>;
 		media?: MediaItem[];
 		targets?: TargetSnapshot[];
@@ -243,7 +254,10 @@
 	let seededVisibility = initialSettings?.mastoVisibility ?? 'public';
 	let seededCw = '';
 	let seededPoll: PollConfig | null = null;
+	let seededTiktok: Record<string, TiktokPostChoice> = {};
 	for (const variant of seededDraft?.variants || []) {
+		if (variant.platform === 'tiktok')
+			seededTiktok = readTiktokChoices(variant.optionsJson?.tiktok);
 		if (variant.platform === 'mastodon' && variant.optionsJson) {
 			const visibility = variant.optionsJson.visibility;
 			if (
@@ -326,6 +340,10 @@
 	let returnToPosts = false;
 	// Snapshot on purpose: defaults apply to a fresh editor only.
 	let mastoVisibility = $state(seededVisibility);
+	// TikTok's choices are made per post and per account, and start empty:
+	// its guidelines allow no default.
+	let tiktokChoices = $state<Record<string, TiktokPostChoice>>(seededTiktok);
+	let tiktokCreators = $state<Record<string, TiktokCreatorState>>({});
 	let mastoCW = $state(seededCw);
 	let mastoPoll = $state<PollConfig | null>(seededPoll);
 	let focusedSegment = $state(0);
@@ -638,6 +656,83 @@
 		if (!selectedPlatforms.has('tiktok')) return null;
 		return tiktokMediaProblems(media)[0] ?? null;
 	});
+	const tiktokAccounts = $derived(
+		connections.filter((c) => selected.has(c.id) && c.platform === 'tiktok')
+	);
+	const tiktokVideo = $derived.by(() => {
+		const item = media.find((m) => (m.mime || '').startsWith('video/'));
+		if (!item) return null;
+		return {
+			src: item.previewUrl || `/api/media/${encodeURIComponent(item.storageKey)}`,
+			poster: coverUrl(item),
+			durationMs: item.meta?.durationMs ?? null
+		};
+	});
+	const tiktokCaption = $derived(
+		flattenThreadBody(effectivePlatformBody(baseBody, overrides, 'tiktok'))
+	);
+	/** The first TikTok account a post cannot go to yet, and why. */
+	const tiktokBlocker = $derived.by(() => {
+		for (const account of tiktokAccounts) {
+			const problem = tiktokAccountProblem(
+				tiktokCreators[account.id],
+				tiktokChoices[account.id],
+				tiktokVideo?.durationMs
+			);
+			if (problem) return { connectionId: account.id, problem };
+		}
+		return null;
+	});
+	const tiktokBranded = (ids: string[]) =>
+		ids.some((id) => {
+			const choice = tiktokChoices[id];
+			return (
+				platformOf(id) === 'tiktok' && choice !== undefined && tiktokNeedsBrandedConsent(choice)
+			);
+		});
+
+	/**
+	 * creator_info, read when a TikTok account is picked: the guidelines want
+	 * the latest when the post screen renders, so it is read once per account
+	 * each time the composer opens, and again on Try again.
+	 */
+	async function loadTiktokCreator(connectionId: string) {
+		tiktokCreators = { ...tiktokCreators, [connectionId]: { status: 'loading' } };
+		let next: TiktokCreatorState;
+		try {
+			const res = await fetch(`/api/connections/${encodeURIComponent(connectionId)}/creator-info`);
+			const data = await res.json().catch(() => ({}));
+			if (res.ok && data.canPost && data.creator) {
+				next = { status: 'ready', creator: data.creator };
+			} else if (res.ok && data.canPost === false) {
+				next = {
+					status: 'cannot_post',
+					reason: String(data.reason || 'TikTok is not taking posts')
+				};
+			} else {
+				next = {
+					status: 'error',
+					message: humanizeError(String(data.error || 'Could not read the TikTok account'))
+				};
+			}
+		} catch {
+			next = { status: 'error', message: 'Could not reach the server to read the TikTok account' };
+		}
+		tiktokCreators = { ...tiktokCreators, [connectionId]: next };
+	}
+
+	$effect(() => {
+		for (const account of tiktokAccounts) {
+			if (!untrack(() => tiktokCreators[account.id])) void loadTiktokCreator(account.id);
+		}
+	});
+
+	function setTiktokChoice(connectionId: string, choice: TiktokPostChoice) {
+		if (editLocked) return;
+		tiktokChoices = { ...tiktokChoices, [connectionId]: choice };
+		markDirty();
+	}
+
 	const overSelectedLimit = $derived(
 		isOverSelectedPlatformLimit({
 			selectedPlatforms,
@@ -724,6 +819,7 @@
 			v: mastoVisibility,
 			c: mastoCW,
 			p: mastoPoll,
+			t: tiktokChoices,
 			s: [...selected].sort(),
 			m: media.map((m) => ({ i: m.id, a: m.altText || '', s: m.segmentIndex ?? 0 }))
 		});
@@ -805,6 +901,8 @@
 		mastoVisibility = initialSettings?.mastoVisibility ?? 'public';
 		mastoCW = '';
 		mastoPoll = null;
+		tiktokChoices = {};
+		tiktokCreators = {};
 		activeTab = 'global';
 		focusedSegment = 0;
 		scheduleOpen = false;
@@ -852,7 +950,8 @@
 					media,
 					visibility: mastoVisibility,
 					cw: mastoCW,
-					poll: mastoPoll
+					poll: mastoPoll,
+					tiktok: tiktokChoices
 				}
 			: null;
 		// A failure belongs to the draft the editor is on. Clear a stale one when
@@ -918,7 +1017,9 @@
 			let loadedVisibility = initialSettings?.mastoVisibility ?? 'public';
 			let loadedCw = '';
 			let loadedPoll: PollConfig | null = null;
+			let loadedTiktok: Record<string, TiktokPostChoice> = {};
 			for (const v of d.variants || []) {
+				if (v.platform === 'tiktok') loadedTiktok = readTiktokChoices(v.optionsJson?.tiktok);
 				if (v.platform === 'mastodon' && v.optionsJson) {
 					if (v.optionsJson.visibility) loadedVisibility = v.optionsJson.visibility;
 					if (v.optionsJson.spoilerText) loadedCw = v.optionsJson.spoilerText;
@@ -937,6 +1038,7 @@
 				const keepVisibility = mastoVisibility !== before.visibility;
 				const keepCw = mastoCW !== before.cw;
 				const keepPoll = mastoPoll !== before.poll;
+				const keepTiktok = tiktokChoices !== before.tiktok;
 				const keepSelection = selectionTouched;
 				mergedCleanly =
 					!keepBody &&
@@ -945,6 +1047,7 @@
 					!keepVisibility &&
 					!keepCw &&
 					!keepPoll &&
+					!keepTiktok &&
 					!keepSelection;
 				if (!keepBody) baseBody = main;
 				// Platform bodies the user did not touch still come from the
@@ -954,6 +1057,7 @@
 				if (!keepVisibility) mastoVisibility = loadedVisibility;
 				if (!keepCw) mastoCW = loadedCw;
 				if (!keepPoll) mastoPoll = loadedPoll;
+				if (!keepTiktok) tiktokChoices = loadedTiktok;
 			} else {
 				baseBody = main;
 				overrides = loadedOverrides;
@@ -961,6 +1065,7 @@
 				mastoVisibility = loadedVisibility;
 				mastoCW = loadedCw;
 				mastoPoll = loadedPoll;
+				tiktokChoices = loadedTiktok;
 			}
 
 			// Selection precedence: the draft's own saved selection wins; older
@@ -1022,6 +1127,7 @@
 		mastoVisibility: string;
 		mastoCW: string;
 		mastoPoll: PollConfig | null;
+		tiktokChoices: Record<string, TiktokPostChoice>;
 		selectedConnectionIds: string[];
 	};
 
@@ -1032,6 +1138,7 @@
 			mastoVisibility,
 			mastoCW,
 			mastoPoll,
+			tiktokChoices,
 			selectedConnectionIds: [...selected]
 		},
 		navigate = true
@@ -1085,6 +1192,7 @@
 			mastoVisibility,
 			mastoCW,
 			mastoPoll,
+			tiktokChoices,
 			selectedConnectionIds: [...selected]
 		},
 		// Which variants this post has stored, taken when its save began.
@@ -1097,6 +1205,7 @@
 		// Worker invocation.
 		const writes = PLATFORM_ORDER.map((platform) => {
 			const customized = isPlatformCustomized(snap.overrides, platform);
+			const tiktokOptions = platform === 'tiktok' && Object.keys(snap.tiktokChoices).length > 0;
 			const options =
 				platform === 'mastodon'
 					? {
@@ -1104,11 +1213,13 @@
 							spoilerText: snap.mastoCW || undefined,
 							poll: snap.mastoPoll ?? undefined
 						}
-					: {};
+					: tiktokOptions
+						? { tiktok: snap.tiktokChoices }
+						: {};
 			const mastodonOptions =
 				platform === 'mastodon' &&
 				Boolean(snap.mastoCW || snap.mastoVisibility !== 'public' || snap.mastoPoll);
-			if (customized || mastodonOptions) {
+			if (customized || mastodonOptions || tiktokOptions) {
 				// Mark at dispatch, not on response: if the write commits but
 				// the response is lost, a later save must still be allowed to
 				// DELETE the row instead of leaving a stale variant that would
@@ -1196,6 +1307,7 @@
 			mastoVisibility,
 			mastoCW,
 			mastoPoll,
+			tiktokChoices,
 			selectedConnectionIds: [...selected]
 		};
 		try {
@@ -1319,6 +1431,10 @@
 			showToast(tiktokMediaProblem, 'warn');
 			return;
 		}
+		if (tiktokBlocker && connectionIds.includes(tiktokBlocker.connectionId)) {
+			showToast(`TikTok: ${tiktokBlocker.problem}`, 'warn');
+			return;
+		}
 		const sizeProblem = mediaSizeProblem(
 			connectionIds.map(platformOf).filter((p) => p !== undefined),
 			media
@@ -1440,7 +1556,9 @@
 			targets: $state.snapshot(targets) as TargetSnapshot[]
 		});
 		clearPostConfirm();
-		const message = `Publishing to ${connectionIds.length} ${connectionIds.length === 1 ? 'account' : 'accounts'}`;
+		const message = `Publishing to ${connectionIds.length} ${connectionIds.length === 1 ? 'account' : 'accounts'}${
+			connectionIds.some((cid) => platformOf(cid) === 'tiktok') ? `. ${TIKTOK_PROCESSING_NOTE}` : ''
+		}`;
 		// Text typed while the save ran is not part of what goes out. Keep it
 		// on screen: the sending lock says it waits, and the autosave stores it.
 		if (dirty) {
@@ -1823,6 +1941,10 @@
 		}
 		if (tiktokMediaProblem) {
 			showToast(tiktokMediaProblem, 'warn');
+			return;
+		}
+		if (tiktokBlocker) {
+			showToast(`TikTok: ${tiktokBlocker.problem}`, 'warn');
 			return;
 		}
 		const sizeProblem = mediaSizeProblem(selectedPlatforms, media);
@@ -3729,6 +3851,18 @@
 				</div>
 			{/each}
 		</div>
+		{#if tiktokAccounts.length && !publishedLock}
+			<TiktokPostPanel
+				accounts={tiktokAccounts}
+				choices={tiktokChoices}
+				creators={tiktokCreators}
+				caption={tiktokCaption}
+				video={tiktokVideo}
+				disabled={editLocked}
+				onChange={setTiktokChoice}
+				onRetry={(id) => void loadTiktokCreator(id)}
+			/>
+		{/if}
 	</div>
 
 	<!-- Floating Bottom Action Dock: nothing to send once the post is published, or while it sends -->
@@ -3912,7 +4046,8 @@
 						type="button"
 						data-testid="publish-now"
 						class="flex cursor-pointer items-center gap-2 rounded-l-full px-6 py-2.5 text-[13px] font-bold transition-all hover:bg-stone-800 disabled:opacity-60"
-						disabled={publishing || unscheduling}
+						disabled={publishing || unscheduling || Boolean(tiktokBlocker)}
+						title={tiktokBlocker ? `TikTok: ${tiktokBlocker.problem}` : undefined}
 						aria-busy={publishButtonBusy}
 						onclick={() => void onPublish()}
 					>
@@ -3993,12 +4128,24 @@
 								{/each}
 							</div>
 
+							{#if pendingAccounts.some((a) => a.platform === 'tiktok')}
+								<TiktokConsent
+									branded={tiktokBranded(pendingPublish.connectionIds)}
+									class="mb-3 px-2 text-center"
+								/>
+							{/if}
 							<button
 								type="button"
 								bind:this={publishNowBtn}
 								data-testid="confirm-dialog-ok"
 								class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-full bg-stone-900 py-2.5 text-[13px] font-bold text-white shadow-sm transition-all hover:bg-stone-800 disabled:opacity-60"
-								disabled={pendingPublish?.saving || !pendingPublish?.draftId}
+								disabled={pendingPublish?.saving ||
+									!pendingPublish?.draftId ||
+									Boolean(
+										tiktokBlocker &&
+										pendingPublish?.connectionIds.includes(tiktokBlocker.connectionId)
+									)}
+								title={tiktokBlocker ? `TikTok: ${tiktokBlocker.problem}` : undefined}
 								onclick={confirmPublish}
 							>
 								{pendingPublish?.saving ? 'Saving…' : 'Publish Now'}
@@ -4148,11 +4295,18 @@
 								</p>
 							{/if}
 
+							{#if tiktokAccounts.length}
+								<TiktokConsent
+									branded={tiktokBranded(tiktokAccounts.map((a) => a.id))}
+									class="mb-3 px-2 text-center"
+								/>
+							{/if}
 							<button
 								type="button"
 								data-testid="schedule-confirm"
 								class="w-full cursor-pointer rounded-full bg-stone-900 py-2.5 text-[13px] font-bold text-white shadow-sm transition-all hover:bg-stone-800 disabled:opacity-60"
-								disabled={publishing || unscheduling}
+								disabled={publishing || unscheduling || Boolean(tiktokBlocker)}
+								title={tiktokBlocker ? `TikTok: ${tiktokBlocker.problem}` : undefined}
 								onclick={() => void onSchedule()}
 							>
 								{hasSchedule ? 'Update schedule' : 'Confirm Schedule'}

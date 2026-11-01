@@ -60,7 +60,19 @@ One photo goes out as a photo post, two to ten as a carousel, and a video on its
 
 ## TikTok
 
-TikTok takes one video and nothing else, so with a TikTok account selected a post without a video shows **TikTok needs a video**, and one with photos **TikTok takes a video, not photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two. Who can see the post, and whether it takes comments, Duets and Stitches, are set per account on the [Accounts](accounts.md#tiktok-post-settings) page.
+TikTok takes one video and nothing else, so with a TikTok account selected a post without a video shows **TikTok needs a video**, and one with photos **TikTok takes a video, not photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two.
+
+Selecting a TikTok account opens a **Post to TikTok** panel under the post, laid out as TikTok's [Content Sharing Guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines) require. It reads the account from TikTok each time the composer opens it, and shows:
+
+- a preview of the video and the caption as they will go out, and which account it is going to (its TikTok nickname and avatar);
+- **Who can see this video**, with no level chosen until you pick one, offering only the levels TikTok reports for the account (a public account has Everyone, Friends and Only me; a private one Followers, Friends and Only me);
+- **Allow comments**, **Allow Duet** and **Allow Stitch**, all off until you tick them; one the creator turned off in TikTok's privacy settings is greyed out;
+- **Disclose video content**, off until you turn it on. Then choose **Your brand** (the video is labelled _Promotional content_), **Branded content** (labelled _Paid partnership_), or both. Branded content cannot be **Only me**: with Only me chosen it is greyed out, and with it ticked Only me is;
+- the declaration TikTok asks for before posting: _By posting, you agree to TikTok's Music Usage Confirmation_, or _Branded Content Policy and Music Usage Confirmation_ when the post is branded content. The publish and schedule confirmations repeat it.
+
+Publish and Schedule stay disabled, with the reason on hover, until every TikTok account has a privacy level, a disclosed post has a brand choice, the video fits the longest the account may post, and TikTok is letting the account post at all: an account at TikTok's daily limit says so and to try again later. With two TikTok accounts selected, each has its own choices. They are saved with the draft, so a scheduled post goes out with what was chosen when it was scheduled, and **Duplicate** starts the copy without them.
+
+After publishing, TikTok can take a few minutes to process the video before it shows on the profile; the result says so, and **Posts** shows it as **Processing** until TikTok reports it published.
 
 A URL in a card shows the link preview it will produce, while you write.
 

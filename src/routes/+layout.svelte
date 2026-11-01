@@ -52,6 +52,8 @@
 	const isShareRoute = $derived(page.url.pathname.startsWith('/p/'));
 	// A week of seven columns does not fit the reading width the other pages use.
 	const isWideRoute = $derived(page.url.pathname === '/calendar');
+	// The legal pages read the same signed in or out.
+	const isLegalRoute = $derived(page.url.pathname.startsWith('/legal/'));
 
 	// Write starts a new post. On the compose page it only shows while a post
 	// is open there, and before the editor has mounted the URL is the guess.
@@ -159,7 +161,7 @@
 	>Skip to content</a
 >
 
-{#if isLoginRoute || isShareRoute || !userEmail}
+{#if isLoginRoute || isShareRoute || isLegalRoute || !userEmail}
 	{@render children()}
 {:else}
 	<div class="min-h-dvh bg-stone-50 font-sans text-stone-900 selection:bg-stone-200">
