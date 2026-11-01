@@ -1986,17 +1986,21 @@ export async function planDraftTiktok(
 	refs: ChannelRef[] | undefined,
 	input: TiktokOptionsInput | undefined
 ): Promise<TiktokPlan> {
+	const draft = draftId
+		? await first(
+				agent.ctx.db
+					.select({ selected: drafts.selectedConnectionIds })
+					.from(drafts)
+					.where(and(eq(drafts.id, draftId), eq(drafts.userId, agent.userId)))
+			)
+		: null;
+	// Someone else's draft, or none: saving it answers 404, so read nothing of it.
+	if (draftId && !draft) return { choices: {}, problems: [], missing: [] };
 	const dir = await loadChannels(agent.ctx.db, agent.userId);
 	let channels: Channel[] = [];
 	if (refs?.length) channels = resolveRefs(refs, dir, 'channels', false).channels;
-	else if (draftId) {
-		const draft = await first(
-			agent.ctx.db
-				.select({ selected: drafts.selectedConnectionIds })
-				.from(drafts)
-				.where(and(eq(drafts.id, draftId), eq(drafts.userId, agent.userId)))
-		);
-		const selected = parseJson<unknown>(draft?.selected, null);
+	else if (draft) {
+		const selected = parseJson<unknown>(draft.selected, null);
 		const ids = Array.isArray(selected) ? selected : [];
 		channels = dir.channels.filter((c) => ids.includes(c.connectionId));
 	}
