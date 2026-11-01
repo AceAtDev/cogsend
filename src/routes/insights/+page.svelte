@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { ChartColumn, X } from '@lucide/svelte';
 	import AccountAvatar from '#lib/components/AccountAvatar.svelte';
+	import PerformanceSection from '#lib/components/insights/PerformanceSection.svelte';
 	import { humanizeError } from '#lib/domain/human-error.js';
 	import { sessionExpiredIfUnauthorized } from '#lib/components/session-expired.js';
 	import { displayHandle, platformName } from '#lib/domain/platforms.js';
@@ -861,6 +862,8 @@
 				</p>
 			{/if}
 		</div>
+
+		<PerformanceSection days={range} initial={pageData.performance ?? null} />
 
 		<p class="mt-5 text-[12px] leading-relaxed font-medium text-stone-500">
 			From your publish history. Times are local.
