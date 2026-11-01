@@ -117,6 +117,8 @@ describe('metrics leave out what review or a pause held back', () => {
 		expect(report.top.map((p) => p.excerpt)).toEqual(['went out']);
 		const top = await topPosts(h.db, h.user.id, { days: 7, now });
 		expect(top.map((p) => p.excerpt)).toEqual(['went out']);
+		// When it went out, not when its counts were read (an hour later here).
+		expect(top[0].collectedAt! - top[0].publishedAt).toBe(H);
 	});
 
 	it('answers get_performance and get_post without metrics for held deliveries', async () => {

@@ -562,12 +562,17 @@ export async function refreshDeliveryMetrics(
 				remotePostId: publishTargets.remotePostId,
 				updatedAt: publishTargets.updatedAt,
 				platform: connections.platform,
-				connStatus: connections.status,
+				// Every result column needs its own name: D1 collapses duplicates
+				// (publish_targets.status, connections.status, both updated_at).
+				connStatus: sql<string>`${connections.status}`.as('conn_status'),
 				credentialsEncrypted: connections.credentialsEncrypted,
 				metaJson: connections.metaJson,
 				instanceUrl: connections.instanceUrl,
 				connectionId: connections.id,
-				existing: deliveryMetrics
+				metricsPublishedAt: deliveryMetrics.publishedAt,
+				stage: deliveryMetrics.stage,
+				failures: deliveryMetrics.failures,
+				collectedAt: deliveryMetrics.collectedAt
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(drafts.id, publishTargets.draftId))
@@ -579,7 +584,7 @@ export async function refreshDeliveryMetrics(
 	if (target.status !== 'published')
 		throw new MetricsRefreshError('Only a published delivery has metrics', 409);
 	const view = () => loadDeliveryMetrics(db, userId, targetId);
-	const last = target.existing?.collectedAt?.getTime() ?? null;
+	const last = target.collectedAt?.getTime() ?? null;
 	if (last !== null && now - last < MANUAL_REFRESH_MIN_MS && now >= last)
 		return { refreshed: false, reason: 'Read less than five minutes ago.', metrics: await view() };
 	const backoff = await readBackoff(db, now);
@@ -593,9 +598,9 @@ export async function refreshDeliveryMetrics(
 		targetId: target.id,
 		userId,
 		platform: target.platform,
-		publishedAt: target.existing?.publishedAt ?? target.updatedAt,
-		stage: target.existing?.stage ?? 0,
-		failures: target.existing?.failures ?? 0,
+		publishedAt: target.metricsPublishedAt ?? target.updatedAt,
+		stage: target.stage ?? 0,
+		failures: target.failures ?? 0,
 		remotePostId: target.remotePostId,
 		connectionId: target.connectionId,
 		connStatus: target.connStatus,

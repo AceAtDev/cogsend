@@ -210,7 +210,6 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 				targetId: publishTargets.id,
 				draftId: publishTargets.draftId,
 				connectionId: publishTargets.connectionId,
-				publishedAt: publishTargets.updatedAt,
 				remoteUrl: publishTargets.remoteUrl,
 				title: drafts.title,
 				baseBody: drafts.baseBody,
@@ -220,7 +219,7 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 			.innerJoin(drafts, eq(drafts.id, publishTargets.draftId))
 			.innerJoin(deliveryMetrics, eq(deliveryMetrics.targetId, publishTargets.id))
 			.where(and(...topWhere))
-			.orderBy(order, desc(publishTargets.updatedAt))
+			.orderBy(order, desc(deliveryMetrics.publishedAt))
 			.limit(limit)
 	])) as [
 		{ id: string; platform: string; handle: string | null; status: string; metaJson: string }[],
@@ -229,7 +228,6 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 			targetId: string;
 			draftId: string;
 			connectionId: string;
-			publishedAt: Date;
 			remoteUrl: string | null;
 			title: string | null;
 			baseBody: string;
@@ -335,7 +333,8 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 			brand: who.brand.name,
 			platform: who.platform,
 			handle: who.handle,
-			publishedAt: row.publishedAt.getTime(),
+			// From the metrics row: a second updated_at beside it collapses on D1.
+			publishedAt: row.m.publishedAt.getTime(),
 			collectedAt: row.m.collectedAt?.getTime() ?? null,
 			permalink: row.remoteUrl,
 			excerpt: draftExcerpt(text, 140),
