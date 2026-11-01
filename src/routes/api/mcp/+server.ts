@@ -1,4 +1,9 @@
-import { createMcpHandler, isJsonContentType, McpServer } from '@modelcontextprotocol/server';
+import {
+	createMcpHandler,
+	isJsonContentType,
+	McpServer,
+	ResourceTemplate
+} from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit';
 import { humanizedCause } from '#lib/domain/human-error.js';
@@ -47,6 +52,10 @@ import {
 	type AgentContext
 } from '#lib/server/api/agent-operations.js';
 import { IDEMPOTENCY_KEY_PATTERN, withIdempotency } from '#lib/server/api/mcp-safety.js';
+import { getBrandBriefOp, listSlotsOp } from '#lib/server/api/agent-slots.js';
+import { briefMarkdown } from '#lib/domain/brand-brief.js';
+import { loadBriefs } from '#lib/server/brand-briefs.js';
+import { listBrandRows } from '#lib/server/brands.js';
 import { loadChannels } from '#lib/server/brands.js';
 import { resolveChannelRef, candidateLines, type ChannelRef } from '#lib/domain/channel-keys.js';
 import { loadPlatformRequirements } from '#lib/server/platform-requirements.js';
@@ -90,6 +99,27 @@ const runAt = z.union([
 			timeZone: z.string().min(1).max(64).describe('IANA zone, such as "Europe/Berlin".')
 		})
 		.strict()
+]);
+// schedule_posts and reschedule_posts also take a slot: the account's next
+// open posting slot, which the server picks so an agent never invents a time.
+const slotRunAt = z.union([
+	runAt,
+	z
+		.object({
+			slot: z.literal('next'),
+			after: z
+				.string()
+				.min(10)
+				.max(40)
+				.optional()
+				.describe(
+					'Look from here on: a day such as "2026-11-10" (from midnight in the operator’s zone) or an ISO 8601 time with an offset. Default: now.'
+				)
+		})
+		.strict()
+		.describe(
+			'The next open posting slot of each channel, after the given time. "next_slot" is the same from now.'
+		)
 ]);
 const dryRun = z
 	.boolean()
@@ -398,7 +428,7 @@ function createServer(event: RequestEvent) {
 			title: 'List brands and channels',
 			annotation: annotations.read,
 			description:
-				'Call this first. Lists every brand with its connected channels (channel key such as "jobjob.linkedin", platform, @handle, display name, status, brand colour), the server time now in UTC and in the operator’s time zone, and a one-line requirements summary per platform in use. Every other tool targets channels by these exact keys; work out relative dates ("next Tuesday 9am") from the `now` returned here. A bare platform name is never a valid target when two brands post there. Do not use it to read posts: list_posts does that.',
+				'Call this first. Lists every brand with its connected channels (channel key such as "jobjob.linkedin", platform, @handle, display name, status, brand colour), each brand’s brief at a glance (which sections exist; get_brand_brief reads it), each channel’s posting slots and limits with its next open slot, the server time now in UTC and in the operator’s time zone, and a one-line requirements summary per platform in use. Every other tool targets channels by these exact keys; work out relative dates ("next Tuesday 9am") from the `now` returned here. A bare platform name is never a valid target when two brands post there. Do not use it to read posts: list_posts does that.',
 			outputSchema: loose({
 				now: instant,
 				timeZone: z.string(),
@@ -417,6 +447,90 @@ function createServer(event: RequestEvent) {
 		},
 		z.object({}).strict(),
 		(_input, agent) => listChannelsOp(agent)
+	);
+
+	register(
+		'get_brand_brief',
+		{
+			scope: 'read',
+			title: 'Read a brand’s brief',
+			annotation: annotations.read,
+			description:
+				'Reads the brief the operator wrote for a brand: voice and tone, audience, do and don’t, links, hashtags, calls to action, and notes per platform, as sections and as one markdown document, with each channel’s posting slots and limits. Read it before drafting anything for a brand and follow it in every post; when a brand has no brief, ask the operator rather than guessing a voice. Name the brand by slug or name, or a channel key to get that channel’s brand with its platform note picked out; with neither it returns every brand. Unbranded channels have no brief. It never changes anything: the operator edits briefs in Accounts.',
+			outputSchema: loose({
+				timeZone: z.string(),
+				brands: z.array(
+					loose({
+						name: z.string(),
+						slug: z.string(),
+						hasBrief: z.boolean(),
+						markdown: z.string(),
+						brief: loose({ sections: z.record(z.string(), z.string()) })
+					})
+				),
+				summary: z.string()
+			}),
+			example: { brand: 'jobjob' },
+			examples: [{ brand: 'jobjob' }, { channel: 'jobjob.linkedin' }, {}]
+		},
+		z
+			.object({
+				brand: z.string().min(1).max(80).optional().describe('Brand slug or exact name.'),
+				channel: channelRef
+					.optional()
+					.describe('A channel key: returns its brand’s brief and that platform’s note.')
+			})
+			.strict(),
+		(input, agent) => getBrandBriefOp(agent, input)
+	);
+
+	register(
+		'list_slots',
+		{
+			scope: 'read',
+			title: 'List open posting slots',
+			annotation: annotations.read,
+			description:
+				'Lists the open posting slots of channels between from and to (default the next 7 days, at most 60), in the operator’s time zone with UTC, plus each channel’s weekly slots and limits (max posts a day, minimum minutes between posts). A slot is open when no post on that channel is within 15 minutes of it (or within its minimum gap) and its day is not full; posts held for review count too. Use it to plan a week of posts, or pass runAt "next_slot" to schedule_posts and let the server pick. Without channels it covers every active channel, or one brand’s with brand. It does not list posts: list_posts does that.',
+			outputSchema: loose({
+				now: instant,
+				timeZone: z.string(),
+				channels: z.array(
+					loose({
+						channel: loose({ key: z.string() }),
+						openSlots: z.array(instant),
+						nextOpenSlot: instant.nullable()
+					})
+				),
+				summary: z.string()
+			}),
+			example: { channels: ['jobjob.linkedin'], from: '2026-11-09', to: '2026-11-15' },
+			examples: [
+				{ channels: ['jobjob.linkedin'], from: '2026-11-09', to: '2026-11-15' },
+				{ brand: 'jobjob', limit: 3 },
+				{}
+			]
+		},
+		z
+			.object({
+				channels: channelRefs.optional(),
+				brand: z.string().min(1).max(80).optional().describe('Brand slug or name.'),
+				from: z
+					.string()
+					.min(10)
+					.max(40)
+					.optional()
+					.describe('A day ("2026-11-09") or an ISO time with offset; default now.'),
+				to: z
+					.string()
+					.min(10)
+					.max(40)
+					.optional()
+					.describe('A day (through its end) or an ISO time with offset; default from + 7 days.'),
+				limit: z.number().int().min(1).max(50).default(10).describe('Open slots per channel.')
+			})
+			.strict(),
+		(input, agent) => listSlotsOp(agent, input)
 	);
 
 	register(
@@ -576,7 +690,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create and schedule posts',
 			annotation: annotations.schedule,
-			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt. Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
+			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt (a time, or "next_slot" for each channel’s next open posting slot, which respects the channel’s max posts a day and minimum gap; a time that breaks those limits is refused with the next allowed one). Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				now: instant,
@@ -604,6 +718,17 @@ function createServer(event: RequestEvent) {
 						}
 					],
 					idempotencyKey: 'jobjob-2026-11-03-roles'
+				},
+				{
+					posts: [
+						{ channels: ['jobjob.linkedin'], text: 'Tip of the week', runAt: 'next_slot' },
+						{
+							channels: ['jobjob.linkedin'],
+							text: 'Second tip',
+							runAt: { slot: 'next', after: '2026-11-10' }
+						}
+					],
+					dryRun: true
 				},
 				{
 					posts: [
@@ -676,7 +801,7 @@ function createServer(event: RequestEvent) {
 									.max(4)
 									.optional(),
 								draftId: id.optional(),
-								runAt,
+								runAt: slotRunAt,
 								tiktok: tiktokOptions
 							})
 							.strict()
@@ -698,18 +823,22 @@ function createServer(event: RequestEvent) {
 			title: 'Change post times',
 			annotation: annotations.reschedule,
 			description:
-				'Moves scheduled deliveries to a new time, leaving their channels and content alone. Each item names one delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels) and the new runAt; up to 20 items, all checked before any is changed. Repeating the same call is safe. Failed deliveries are rescheduled too; published, publishing and cancelled ones are refused. Use move_post to change channels and publish_now to send immediately.',
+				'Moves scheduled deliveries to a new time, leaving their channels and content alone. Each item names one delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels) and the new runAt, or "next_slot" for each channel’s next open posting slot; up to 20 items, all checked against the channels’ posting limits before any is changed. Repeating the same call is safe. Failed deliveries are rescheduled too; published, publishing and cancelled ones are refused. Use move_post to change channels and publish_now to send immediately.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				deliveries: z.array(loose({ deliveryId: z.string(), channel: channelOut })),
 				warnings: z.array(z.string())
 			}),
-			example: { items: [{ postId: 'POST_ID', runAt: TIME_EXAMPLE }] }
+			example: { items: [{ postId: 'POST_ID', runAt: TIME_EXAMPLE }] },
+			examples: [
+				{ items: [{ postId: 'POST_ID', runAt: TIME_EXAMPLE }] },
+				{ items: [{ deliveryId: 'DELIVERY_ID', runAt: 'next_slot' }], dryRun: true }
+			]
 		},
 		z
 			.object({
 				items: z
-					.array(z.object({ ...deliverySelector, runAt }).strict())
+					.array(z.object({ ...deliverySelector, runAt: slotRunAt }).strict())
 					.min(1)
 					.max(20),
 				dryRun
@@ -1159,6 +1288,47 @@ function createServer(event: RequestEvent) {
 						uri: uri.href,
 						mimeType: 'application/json',
 						text: JSON.stringify({ platforms, store, attach: attachLimits(ctx) })
+					}
+				]
+			};
+		}
+	);
+	server.registerResource(
+		'brand-brief',
+		new ResourceTemplate('cogsend://brands/{slug}/brief', {
+			list: async () => {
+				const user = requireUser(event.locals.user);
+				requireScope(event.locals, 'read');
+				const rows = await listBrandRows(event.locals.db, user.id);
+				return {
+					resources: rows.map((b) => ({
+						uri: `cogsend://brands/${b.slug}/brief`,
+						name: `${b.name} brief`,
+						mimeType: 'text/markdown'
+					}))
+				};
+			}
+		}),
+		{
+			title: 'Brand brief',
+			description:
+				'A brand’s brief as markdown: voice, audience, do and don’t, links, hashtags, calls to action and platform notes (get_brand_brief with the brand).',
+			mimeType: 'text/markdown'
+		},
+		async (uri, variables) => {
+			const user = requireUser(event.locals.user);
+			requireScope(event.locals, 'read');
+			const slug = String(variables.slug ?? '').toLowerCase();
+			const rows = await listBrandRows(event.locals.db, user.id);
+			const brand = rows.find((b) => b.slug === slug);
+			if (!brand) throw new ApiOperationError(`No brand "${slug}"`, 404);
+			const brief = (await loadBriefs(event.locals.db, user.id)).get(brand.id);
+			return {
+				contents: [
+					{
+						uri: uri.href,
+						mimeType: 'text/markdown',
+						text: briefMarkdown(brand.name, brief ?? { sections: {}, platformNotes: {} })
 					}
 				]
 			};

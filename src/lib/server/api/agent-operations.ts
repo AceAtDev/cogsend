@@ -68,6 +68,15 @@ import {
 } from '#lib/server/api/agent-tiktok.js';
 import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
 import {
+	channelExtras,
+	limitRefusal,
+	noSlotLine,
+	parseAgentRunAt,
+	type AgentRunAt,
+	type LimitRefusal
+} from '#lib/server/api/agent-slots.js';
+import { createSlotPlanner } from '#lib/server/posting-slots.js';
+import {
 	consumeConfirmation,
 	hashPayload,
 	issueConfirmation,
@@ -277,6 +286,7 @@ function nowView(agent: AgentContext) {
 export async function listChannelsOp(agent: AgentContext) {
 	const { ctx, userId, timeZone } = agent;
 	const dir = await loadChannels(ctx.db, userId);
+	const extras = await channelExtras(agent, dir.channels);
 	const groups = [
 		...dir.brands.map((b) => ({ name: b.name, slug: b.slug, color: b.color, id: b.id })),
 		{ name: 'Unbranded', slug: UNBRANDED_SLUG, color: UNBRANDED_COLOR, id: null as string | null }
@@ -285,7 +295,10 @@ export async function listChannelsOp(agent: AgentContext) {
 			name: b.name,
 			slug: b.slug,
 			color: b.color,
-			channels: dir.channels.filter((c) => c.brand.id === b.id).map(channelView)
+			brief: extras.briefOf(b.id),
+			channels: dir.channels
+				.filter((c) => c.brand.id === b.id)
+				.map((c) => ({ ...channelView(c), posting: extras.postingOf(c.connectionId) }))
 		}))
 		.filter((b) => b.channels.length || b.slug !== UNBRANDED_SLUG);
 	const platforms = PLATFORM_ORDER.filter((p) => dir.channels.some((c) => c.platform === p)).map(
@@ -294,13 +307,25 @@ export async function listChannelsOp(agent: AgentContext) {
 	const lines = groups.map((g) => {
 		const list = g.channels.length
 			? g.channels
-					.map(
-						(c) =>
-							`  ${c.key} — ${c.handle ?? '(no handle)'}${c.status === 'active' ? '' : ` [${c.status}]`}`
-					)
+					.map((c) => {
+						const line = `  ${c.key} — ${c.handle ?? '(no handle)'}${c.status === 'active' ? '' : ` [${c.status}]`}`;
+						if (!c.posting) return line;
+						const rules = [
+							c.posting.slots ? `slots ${c.posting.slots}` : null,
+							c.posting.maxPerDay !== null ? `max ${c.posting.maxPerDay}/day` : null,
+							c.posting.minGapMinutes !== null ? `${c.posting.minGapMinutes} min apart` : null,
+							c.posting.nextOpenSlot ? `next open ${c.posting.nextOpenSlot.display}` : null
+						].filter(Boolean);
+						return `${line}\n    posting: ${rules.join('; ')}`;
+					})
 					.join('\n')
 			: '  (no channels)';
-		return `${g.name}:\n${list}`;
+		const brief = g.brief
+			? g.brief.hasBrief
+				? ` brief: ${[...g.brief.sections, ...g.brief.platformNotes.map((p) => `${p} notes`)].join(', ')} (read it with get_brand_brief)`
+				: ' no brief yet'
+			: '';
+		return `${g.name}:${brief}\n${list}`;
 	});
 	const now = nowView(agent);
 	return {
@@ -311,7 +336,8 @@ export async function listChannelsOp(agent: AgentContext) {
 		summary: [
 			`Now: ${now.display} (${now.utc}).`,
 			...lines,
-			'Target channels by key exactly as listed. A bare platform such as "instagram" is refused when more than one channel posts there.'
+			'Target channels by key exactly as listed. A bare platform such as "instagram" is refused when more than one channel posts there.',
+			'Before writing for a brand, read its brief with get_brand_brief. Use list_slots or runAt "next_slot" for times on channels with posting slots.'
 		].join('\n')
 	};
 }
@@ -323,7 +349,7 @@ export interface ScheduleInputPost {
 	variants?: Array<{ for: string; text: string }>;
 	media?: Array<{ url: string; altText?: string }>;
 	draftId?: string;
-	runAt: RunAtInput;
+	runAt: AgentRunAt;
 	tiktok?: TiktokOptionsInput;
 }
 
@@ -353,6 +379,10 @@ interface PostPlan {
 	bodies: Map<string, string>;
 	/** connection id -> TikTok choices, for every TikTok channel of the post. */
 	tiktok: Record<string, TiktokPostChoice>;
+	/** `next_slot`: look from this instant on. */
+	slotAfter: Date | null;
+	/** connection id -> the slot it was given; set only for `next_slot`. */
+	times: Map<string, Date>;
 }
 
 type MediaRow = typeof draftMedia.$inferSelect;
@@ -383,7 +413,7 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 		problems.push(...resolved.problems);
 		unresolved.push(...resolved.unresolved);
 		deliveries += post.channels.length;
-		const when = parseRunAt(post.runAt, now, timeZone);
+		const when = parseAgentRunAt(post.runAt, now, timeZone);
 		if (!when.ok) problems.push(`${at}.runAt: ${when.message}`);
 		if (post.text === undefined && !post.draftId)
 			problems.push(`${at}: send text, or a draftId whose text and media should be scheduled.`);
@@ -458,7 +488,13 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 		plans.push({
 			index,
 			title: post.title ?? draft?.title ?? null,
-			runAt: when.ok ? (when.now ? { now: true } : { now: false, utc: when.utc }) : { now: true },
+			runAt: !when.ok
+				? { now: true }
+				: when.kind === 'now'
+					? { now: true }
+					: when.kind === 'at'
+						? { now: false, utc: when.utc }
+						: { now: false, utc: when.after },
 			sourceDraftId: draft?.id ?? null,
 			baseBody: post.text ?? null,
 			mediaUrls: post.media ?? [],
@@ -466,7 +502,9 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 			issues: new Map(),
 			mediaSummary: mediaSummary(mediaRows, post.media?.length ?? 0),
 			bodies: new Map(),
-			tiktok: {}
+			tiktok: {},
+			slotAfter: when.ok && when.kind === 'slot' ? when.after : null,
+			times: new Map()
 		});
 		const plan = plans[plans.length - 1];
 		if (draft) await checkPlannedContent(agent, plan, draft.baseBody, draftVariantRows, mediaRows);
@@ -496,22 +534,89 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 					);
 	}
 	problems.push(...tiktokProblems);
+	const cadence = problems.length ? { problems: [], refusals: [] } : await planSlots(agent, plans);
+	problems.push(...cadence.problems);
 	if (problems.length) {
 		const onlyTiktok = problems.length === tiktokProblems.length;
 		fail(problems[0], {
 			code: unresolved.length
 				? 'channel_unresolved'
-				: !onlyTiktok
-					? 'invalid_posts'
-					: tiktokMissing.length
-						? 'tiktok_privacy_required'
-						: 'tiktok_options',
+				: cadence.problems.length
+					? 'posting_limit'
+					: !onlyTiktok
+						? 'invalid_posts'
+						: tiktokMissing.length
+							? 'tiktok_privacy_required'
+							: 'tiktok_options',
 			problems,
 			unresolved,
+			...(cadence.refusals.length ? { limits: cadence.refusals } : {}),
 			...(tiktokMissing.length ? { tiktokMissing } : {})
 		});
 	}
 	return { dir, plans };
+}
+
+/**
+ * Cadence for a whole batch, in two passes over one planner: every explicit
+ * time is checked against the account's limits and reserved first, then each
+ * `next_slot` post takes the earliest open slot per channel in batch order.
+ * Explicit times go first so a slot post never takes the time another post of
+ * the same call asked for by name.
+ */
+async function planSlots(
+	agent: AgentContext,
+	plans: PostPlan[]
+): Promise<{ problems: string[]; refusals: LimitRefusal[] }> {
+	const ids = plans.flatMap((p) => p.groups.flatMap((g) => g.channels.map((c) => c.connectionId)));
+	if (!ids.length) return { problems: [], refusals: [] };
+	const planner = await createSlotPlanner(agent.ctx.db, agent.userId, {
+		timeZone: agent.timeZone,
+		now: agent.now,
+		connectionIds: ids,
+		to: Math.max(...plans.map((p) => (p.runAt.now ? agent.now.getTime() : p.runAt.utc.getTime())))
+	});
+	const problems: string[] = [];
+	const refusals: LimitRefusal[] = [];
+	for (const plan of plans) {
+		if (plan.slotAfter) continue;
+		const at = plan.runAt.now ? agent.now.getTime() : plan.runAt.utc.getTime();
+		for (const group of plan.groups)
+			for (const channel of group.channels) {
+				const refused = limitRefusal(planner, channel, at, `posts[${plan.index}]`);
+				if (refused) {
+					problems.push(refused.line);
+					refusals.push(refused.refusal);
+				} else planner.reserve(channel.connectionId, at);
+			}
+	}
+	for (const plan of plans) {
+		if (!plan.slotAfter) continue;
+		for (const group of plan.groups)
+			for (const channel of group.channels) {
+				const at = planner.hasSlots(channel.connectionId)
+					? planner.nextOpenSlot(channel.connectionId, plan.slotAfter.getTime())
+					: null;
+				if (at === null) {
+					problems.push(noSlotLine(planner, channel, `posts[${plan.index}]`));
+					continue;
+				}
+				planner.reserve(channel.connectionId, at);
+				plan.times.set(channel.connectionId, new Date(at));
+			}
+		if (plan.times.size)
+			plan.runAt = {
+				now: false,
+				utc: new Date(Math.min(...[...plan.times.values()].map((d) => d.getTime())))
+			};
+	}
+	return { problems, refusals };
+}
+
+/** When this channel of the post goes out: its own slot, else the post's time. */
+function timeOf(plan: PostPlan, connectionId: string): Date | null {
+	if (plan.runAt.now) return null;
+	return plan.times.get(connectionId) ?? plan.runAt.utc;
 }
 
 /**
@@ -626,6 +731,7 @@ function scheduleHashInput(input: ScheduleInput, plans: PostPlan[]) {
 		posts: input.posts,
 		resolved: plans.map((p) => ({
 			runAt: p.runAt.now ? 'now' : p.runAt.utc.toISOString(),
+			slots: Object.fromEntries([...p.times].map(([id, at]) => [id, at.toISOString()])),
 			groups: p.groups.map((g) => ({
 				channels: g.channels.map((c) => c.connectionId),
 				variants: g.variants
@@ -673,7 +779,7 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 				g.channels.map((channel) => ({
 					label: `posts[${p.index}]`,
 					channel,
-					at: p.runAt.now ? null : p.runAt.utc
+					at: timeOf(p, channel.connectionId)
 				}))
 			)
 		)
@@ -703,6 +809,12 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 		deliveries: plan.groups.flatMap((g) =>
 			g.channels.map((c) => ({
 				channel: channelView(c),
+				...(plan.times.has(c.connectionId)
+					? {
+							runAt: describeInstant(plan.times.get(c.connectionId)!, timeZone),
+							slot: true as const
+						}
+					: {}),
 				text: draftExcerpt(plan.bodies.get(c.connectionId) ?? plan.baseBody ?? '', 160),
 				textLength: (plan.bodies.get(c.connectionId) ?? plan.baseBody ?? '').length,
 				...(plan.tiktok[c.connectionId]
@@ -715,7 +827,7 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 	const previewLines = preview.flatMap((p) =>
 		p.deliveries.map(
 			(d) =>
-				`posts[${p.index}] → ${d.channel.key} ${d.channel.handle ?? ''} at ${p.runAt.now ? 'NOW' : p.runAt.display}: "${d.text}" (${p.media})${'tiktok' in d ? ` [TikTok: ${d.tiktok}]` : ''}`
+				`posts[${p.index}] → ${d.channel.key} ${d.channel.handle ?? ''} at ${p.runAt.now ? 'NOW' : 'runAt' in d && d.runAt ? `${d.runAt.display} (next open slot)` : p.runAt.display}: "${d.text}" (${p.media})${'tiktok' in d ? ` [TikTok: ${d.tiktok}]` : ''}`
 		)
 	);
 	const consent = tiktokConsentLine(plans.flatMap((p) => Object.values(p.tiktok)));
@@ -786,6 +898,7 @@ interface DeliveryOut {
 	runAt: InstantView | null;
 	permalink?: string | null;
 	error?: string | null;
+	slot?: boolean;
 }
 
 async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: string[]) {
@@ -877,20 +990,29 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 					});
 				continue;
 			}
-			const scheduled = await scheduleDraft(ctx, userId, draftId, {
-				connectionIds: ids,
-				runAt: plan.runAt.utc.toISOString(),
-				...tiktokFor(plan.tiktok, ids)
-			});
-			scheduledAny = true;
-			for (const t of scheduled.targets)
-				out.deliveries.push({
-					deliveryId: t.id,
-					postId: draftId,
-					channel: channelView(byId.get(t.connectionId)!),
-					status: t.status,
-					runAt: view(t.scheduledFor, timeZone)
+			// Slot posts can give each channel its own time: one call per time.
+			const byTime = new Map<number, string[]>();
+			for (const id of ids) {
+				const at = timeOf(plan, id)!.getTime();
+				byTime.set(at, [...(byTime.get(at) ?? []), id]);
+			}
+			for (const [at, subset] of byTime) {
+				const scheduled = await scheduleDraft(ctx, userId, draftId, {
+					connectionIds: subset,
+					runAt: new Date(at).toISOString(),
+					...tiktokFor(plan.tiktok, subset)
 				});
+				scheduledAny = true;
+				for (const t of scheduled.targets)
+					out.deliveries.push({
+						deliveryId: t.id,
+						postId: draftId,
+						channel: channelView(byId.get(t.connectionId)!),
+						status: t.status,
+						runAt: view(t.scheduledFor, timeZone),
+						...(plan.times.has(t.connectionId) ? { slot: true } : {})
+					});
+			}
 		}
 	} catch (err) {
 		if (!scheduledAny) {
@@ -1045,20 +1167,21 @@ async function selectDeliveries(
 
 export async function reschedulePostsOp(
 	agent: AgentContext,
-	input: { items: Array<DeliverySelector & { runAt: RunAtInput }>; dryRun?: boolean }
+	input: { items: Array<DeliverySelector & { runAt: AgentRunAt }>; dryRun?: boolean }
 ) {
 	const { ctx, userId, timeZone, now } = agent;
 	const problems: string[] = [];
-	const times = input.items.map((item, i) => {
+	const times = input.items.map((item, i): { at: Date } | { after: Date } | null => {
 		if (typeof item.runAt === 'string' && item.runAt.trim().toLowerCase() === 'now') {
 			problems.push(
 				`items[${i}].runAt: "now" is not a reschedule; publish_now sends a post immediately.`
 			);
 			return null;
 		}
-		const parsed = parseRunAt(item.runAt, now, timeZone);
+		const parsed = parseAgentRunAt(item.runAt, now, timeZone);
 		if (!parsed.ok) problems.push(`items[${i}].runAt: ${parsed.message}`);
-		return parsed.ok ? parsed.utc : null;
+		if (!parsed.ok || parsed.kind === 'now') return null;
+		return parsed.kind === 'slot' ? { after: parsed.after } : { at: parsed.utc };
 	});
 	if (problems.length) fail(problems[0], { code: 'invalid_time', problems });
 	const { dir, picked } = await selectDeliveries(agent, input.items, 'items', WAITING);
@@ -1077,11 +1200,65 @@ export async function reschedulePostsOp(
 				);
 		}
 	if (blocked.length) fail(blocked[0], { code: 'not_reschedulable', problems: blocked }, 409);
-	const changes = picked.flatMap(({ item, rows }) =>
-		rows.map((row) => ({ item, row, to: times[item]!, channel: viewOf(row.connectionId) }))
-	);
-	const ignore = changes.map((c) => c.row.id);
 	const channelById = new Map(dir.channels.map((c) => [c.connectionId, c]));
+	const moving = picked.flatMap(({ item, rows }) => rows.map((row) => ({ item, row })));
+	const ignore = moving.map((m) => m.row.id);
+	const explicitTimes = times.flatMap((t) => (t && 'at' in t ? [t.at.getTime()] : []));
+	const planner = await createSlotPlanner(ctx.db, userId, {
+		timeZone,
+		now,
+		connectionIds: moving.map((m) => m.row.connectionId),
+		to: explicitTimes.length ? Math.max(...explicitTimes) : undefined,
+		ignore
+	});
+	// As in schedule_posts: named times first, then slots in item order.
+	const target = new Map<string, Date>();
+	const cadence: string[] = [];
+	const refusals: LimitRefusal[] = [];
+	for (const pass of ['at', 'after'] as const)
+		for (const { item, row } of moving) {
+			const want = times[item]!;
+			if (!(pass in want)) continue;
+			const channel = channelById.get(row.connectionId);
+			if ('at' in want) {
+				target.set(row.id, want.at);
+				if (!channel) continue;
+				const refused = limitRefusal(planner, channel, want.at.getTime(), `items[${item}]`);
+				if (refused) {
+					cadence.push(refused.line);
+					refusals.push(refused.refusal);
+				} else planner.reserve(row.connectionId, want.at.getTime());
+				continue;
+			}
+			if (!channel) {
+				cadence.push(
+					`items[${item}]: the account of delivery ${row.id} is disconnected, so it has no slots. Send an explicit runAt.`
+				);
+				continue;
+			}
+			const at = planner.hasSlots(row.connectionId)
+				? planner.nextOpenSlot(row.connectionId, want.after.getTime())
+				: null;
+			if (at === null) {
+				cadence.push(noSlotLine(planner, channel, `items[${item}]`));
+				continue;
+			}
+			planner.reserve(row.connectionId, at);
+			target.set(row.id, new Date(at));
+		}
+	if (cadence.length)
+		fail(cadence[0], {
+			code: refusals.length ? 'posting_limit' : 'no_slot',
+			problems: cadence,
+			limits: refusals
+		});
+	const changes = moving.map(({ item, row }) => ({
+		item,
+		row,
+		to: target.get(row.id)!,
+		slot: 'after' in times[item]!,
+		channel: viewOf(row.connectionId)
+	}));
 	const warnings = await conflictWarnings(
 		agent,
 		changes
@@ -1103,7 +1280,8 @@ export async function reschedulePostsOp(
 			channel: change.channel,
 			status: input.dryRun ? change.row.status : 'scheduled',
 			before: view(change.row.scheduledFor, timeZone),
-			after: describeInstant(change.to, timeZone)
+			after: describeInstant(change.to, timeZone),
+			...(change.slot ? { slot: true } : {})
 		});
 	}
 	return {
@@ -1119,7 +1297,7 @@ export async function reschedulePostsOp(
 			`${input.dryRun ? 'DRY RUN — would move' : 'Rescheduled'} ${out.length} deliver${out.length === 1 ? 'y' : 'ies'}:`,
 			...out.map(
 				(d) =>
-					`${d.channel.key} ${d.channel.handle ?? ''}: ${d.before?.display ?? 'unscheduled'} → ${d.after.display} (delivery ${d.deliveryId})`
+					`${d.channel.key} ${d.channel.handle ?? ''}: ${d.before?.display ?? 'unscheduled'} → ${d.after.display}${d.slot ? ' (next open slot)' : ''} (delivery ${d.deliveryId})`
 			),
 			...warnings.map((w) => `Warning: ${w}`)
 		].join('\n')
@@ -1207,6 +1385,23 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 			);
 	}
 	if (problems.length) fail(problems[0], { code: 'invalid_move', problems, example });
+	const planner = await createSlotPlanner(ctx.db, userId, {
+		timeZone,
+		now,
+		connectionIds: to.map((c) => c.connectionId),
+		to: runAt!.getTime()
+	});
+	const cadence = to.flatMap((c) => {
+		const refused = limitRefusal(planner, c, runAt!.getTime(), 'to');
+		return refused ? [refused] : [];
+	});
+	if (cadence.length)
+		fail(cadence[0].line, {
+			code: 'posting_limit',
+			problems: cadence.map((r) => r.line),
+			limits: cadence.map((r) => r.refusal),
+			example
+		});
 	const check = await checkDraft(
 		ctx,
 		userId,
@@ -1958,7 +2153,9 @@ export async function validateChannelsOp(
 		issues: new Map(),
 		mediaSummary: '',
 		bodies: new Map(),
-		tiktok: {}
+		tiktok: {},
+		slotAfter: null,
+		times: new Map()
 	};
 	let mediaRows: MediaRow[] = [];
 	if (input.draftId) {

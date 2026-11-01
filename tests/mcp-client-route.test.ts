@@ -8,6 +8,8 @@ import { createMcpHarness, data, inHours, text } from './mcp-harness';
 
 const expectedTools = [
 	'list_channels',
+	'get_brand_brief',
+	'list_slots',
 	'list_posts',
 	'get_post',
 	'get_platform_requirements',
@@ -31,6 +33,8 @@ const read = {
 };
 const expectedAnnotations: Record<string, Record<string, boolean>> = {
 	list_channels: read,
+	get_brand_brief: read,
+	list_slots: read,
 	list_posts: read,
 	get_post: read,
 	get_platform_requirements: read,
