@@ -11,6 +11,7 @@ import {
 	apiKeys,
 	brands,
 	connections,
+	deliveryMetrics,
 	mcpConfirmations,
 	mcpIdempotency,
 	draftMedia,
@@ -51,6 +52,10 @@ import * as rescheduleRoute from '../src/routes/api/targets/[id]/reschedule/+ser
 import * as bulkRoute from '../src/routes/api/targets/bulk/+server';
 import * as queueRoute from '../src/routes/api/queue/+server';
 import * as insightsRoute from '../src/routes/api/insights/+server';
+import * as performanceRoute from '../src/routes/api/insights/performance/+server';
+import * as metricsRoute from '../src/routes/api/targets/[id]/metrics/+server';
+import * as insightsPage from '../src/routes/insights/+page.server';
+import * as postsPage from '../src/routes/posts/+page.server';
 import * as keyRoute from '../src/routes/api/key/+server';
 import * as mcpRoute from '../src/routes/api/mcp/+server';
 import * as settingsRoute from '../src/routes/api/settings/+server';
@@ -92,6 +97,7 @@ const a = {
 	tiktok: '',
 	brand: '',
 	target: '',
+	published: '',
 	mediaKey: '1700000000000-aaaaaaaaaaaaaaaa.jpg',
 	mediaId: '',
 	shareToken: '',
@@ -101,6 +107,7 @@ const b = {
 	draft: '',
 	connection: '',
 	target: '',
+	published: '',
 	tiktok: '',
 	brand: '',
 	mediaKey: '1700000000001-bbbbbbbbbbbbbbbb.jpg',
@@ -205,6 +212,38 @@ async function seed(owner: SessionUser, mediaKey: string) {
 		createdAt: now,
 		updatedAt: now
 	});
+	// A published delivery with metrics: the counts are a number nobody else has.
+	const publishedDraft = newId();
+	await db.insert(drafts).values({
+		id: publishedDraft,
+		userId: owner.id,
+		baseBody: `secret words of ${owner.email}, already out`,
+		status: 'published',
+		createdAt: now,
+		updatedAt: now
+	});
+	const published = newId();
+	await db.insert(publishTargets).values({
+		id: published,
+		draftId: publishedDraft,
+		connectionId: tiktok,
+		status: 'published',
+		remotePostId: '7300000000000000009',
+		remoteUrl: 'https://www.tiktok.com/@x/video/7300000000000000009',
+		createdAt: now,
+		updatedAt: now
+	});
+	await db.insert(deliveryMetrics).values({
+		targetId: published,
+		userId: owner.id,
+		platform: 'tiktok',
+		publishedAt: now,
+		state: 'ok',
+		views: owner.email.startsWith('alice') ? 987654 : 123,
+		likes: 5,
+		collectedAt: now,
+		updatedAt: now
+	});
 	const share = await createShare(db, TEST_ENV.APP_ENCRYPTION_KEY, draft, 86_400_000);
 	const apiKey = (await rotateApiKey(db, owner.id)).raw;
 	return {
@@ -214,6 +253,7 @@ async function seed(owner: SessionUser, mediaKey: string) {
 		draft,
 		mediaId,
 		target,
+		published,
 		shareToken: share.token,
 		apiKey
 	};
@@ -281,7 +321,12 @@ async function aliceSnapshot() {
 	const keys = await db.select().from(apiKeys).where(eq(apiKeys.userId, alice.id));
 	const ownBrands = await db.select().from(brands).where(eq(brands.userId, alice.id));
 	const [tiktok] = await db.select().from(connections).where(eq(connections.id, a.tiktok));
+	const metrics = await db
+		.select()
+		.from(deliveryMetrics)
+		.where(eq(deliveryMetrics.userId, alice.id));
 	return JSON.stringify({
+		metrics,
 		draft,
 		conn,
 		tiktok,
@@ -440,6 +485,14 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 			'verify her account',
 			() => call(verifyRoute.POST, bobAs(), { params: { id: a.connection }, body: {} })
 		],
+		[
+			'read her delivery metrics',
+			() => call(metricsRoute.GET, bobAs(), { method: 'GET', params: { id: a.published } })
+		],
+		[
+			'refresh her delivery metrics',
+			() => call(metricsRoute.POST, bobAs(), { params: { id: a.published } })
+		],
 		['cancel her delivery', () => call(cancelRoute.POST, bobAs(), { params: { id: a.target } })],
 		['retry her delivery', () => call(retryRoute.POST, bobAs(), { params: { id: a.target } })],
 		[
@@ -496,7 +549,8 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 			call(draftsRoute.GET, bobAs(), { method: 'GET' }),
 			call(queueRoute.GET, bobAs(), { method: 'GET' }),
 			call(connectionsRoute.GET, bobAs(), { method: 'GET' }),
-			call(insightsRoute.GET, bobAs(), { method: 'GET', search: '?days=30' })
+			call(insightsRoute.GET, bobAs(), { method: 'GET', search: '?days=30' }),
+			call(performanceRoute.GET, bobAs(), { method: 'GET', search: '?days=30' })
 		]);
 		for (const res of lists) {
 			expect(res.status).toBe(200);
@@ -504,6 +558,8 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 			expect(text).not.toContain(a.draft);
 			expect(text).not.toContain(a.connection);
 			expect(text).not.toContain('alice');
+			expect(text).not.toContain('987654');
+			expect(text).not.toContain(a.published);
 		}
 		const drafts = await (await call(draftsRoute.GET, bobAs(), { method: 'GET' })).json();
 		expect(JSON.stringify(drafts)).toContain(b.draft);
@@ -522,6 +578,7 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		};
 		const attempts: Array<[string, Record<string, unknown>]> = [
 			['get_post', { postId: a.draft, response_format: 'detailed' }],
+			['get_performance', { channels: [a.tiktok] }],
 			['validate_post', { draftId: a.draft }],
 			['get_platform_requirements', { channels: [a.connection] }],
 			['schedule_posts', { posts: [{ channels: [a.connection], text: 'pwned', runAt: later }] }],
@@ -561,6 +618,13 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		const upcoming = await mcpCall(bobKey, 'list_posts', { status: ['failed', 'scheduled'] });
 		expect(JSON.stringify(upcoming)).not.toContain(a.target);
 		expect(JSON.stringify(upcoming)).toContain(b.target);
+		const performance = JSON.stringify(
+			await mcpCall(bobKey, 'get_performance', { response_format: 'detailed' })
+		);
+		expect(performance).not.toContain('987654');
+		expect(performance).not.toContain(a.published);
+		expect(performance).not.toContain('alice');
+		expect(performance).toContain(b.published);
 		const channels = await mcpCall(bobKey, 'list_channels', {});
 		const text = JSON.stringify(channels);
 		expect(text).not.toContain(a.connection);
@@ -636,6 +700,22 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		});
 		expect(res.status).toBe(404);
 		expect(await aliceSnapshot()).toBe(before);
+	});
+
+	it('sees only his own metrics on Insights and Posts', async () => {
+		const event = {
+			locals: { db, env: TEST_ENV, user: bob },
+			url: new URL('https://cogsend.example/insights?days=30')
+		};
+		for (const loaded of [
+			await insightsPage.load(event as never),
+			await postsPage.load(event as never)
+		]) {
+			const text = JSON.stringify(loaded);
+			expect(text).not.toContain('987654');
+			expect(text).not.toContain(a.published);
+			expect(text).not.toContain('secret words of alice');
+		}
 	});
 
 	it('sees only his own posts, accounts and brands on the calendar', async () => {
@@ -745,6 +825,12 @@ describe('the same requests from Alice herself', () => {
 		expect(
 			(await call(draftRoute.GET, asAlice, { method: 'GET', params: { id: a.draft } })).status
 		).toBe(200);
+		const metrics = await call(metricsRoute.GET, asAlice, {
+			method: 'GET',
+			params: { id: a.published }
+		});
+		expect(metrics.status).toBe(200);
+		expect(JSON.stringify(await metrics.json())).toContain('987654');
 		expect(
 			(await call(mediaRoute.GET, asAlice, { method: 'GET', params: { key: a.mediaKey } })).status
 		).toBe(200);

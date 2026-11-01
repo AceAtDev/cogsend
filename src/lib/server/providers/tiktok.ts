@@ -6,6 +6,7 @@ import {
 	type TiktokPrivacy
 } from '#lib/domain/tiktok.js';
 import { TIKTOK_MAX_CHARS, validateTiktokText } from '#lib/domain/validation/text.js';
+import { TIKTOK_RECONNECT_MESSAGE } from '#lib/domain/metrics.js';
 import { singlePost } from './flatten';
 import { providerFetch } from './timed-fetch';
 import {
@@ -832,10 +833,7 @@ export async function tiktokMetrics(
 	if (!creds.accessToken)
 		throw new MetricsError('reconnect', 'TikTok sign-in is missing — reconnect');
 	if (creds.scopes && !creds.scopes.includes(TIKTOK_METRICS_SCOPE))
-		throw new MetricsError(
-			'reconnect',
-			'TikTok was not asked for video.list — reconnect to enable metrics'
-		);
+		throw new MetricsError('reconnect', TIKTOK_RECONNECT_MESSAGE);
 	const out = new Map<string, MetricsOutcome>();
 	const videoIds: string[] = [];
 	for (const id of ids.slice(0, TIKTOK_METRICS_BATCH)) {
