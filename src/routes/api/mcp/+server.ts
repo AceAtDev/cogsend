@@ -52,6 +52,8 @@ import { resolveChannelRef, candidateLines, type ChannelRef } from '#lib/domain/
 import { loadPlatformRequirements } from '#lib/server/platform-requirements.js';
 import { requireScope, requireUser } from '#lib/server/require.js';
 import { TIKTOK_PRIVACY_LEVELS } from '#lib/domain/tiktok.js';
+import { PERFORMANCE_SORTS } from '#lib/domain/metrics.js';
+import { getPerformanceOp } from '#lib/server/api/agent-metrics.js';
 
 const id = z.string().min(1).max(128);
 const anyPlatform = z.enum(PLATFORM_IDS as [PlatformId, ...PlatformId[]]);
@@ -458,7 +460,7 @@ function createServer(event: RequestEvent) {
 			title: 'Get one post',
 			annotation: annotations.read,
 			description:
-				'One post by postId: its text, per-platform variants, media (with mediaId for edit_media) and every delivery with channel key, @handle, status and local and UTC time. With response_format "detailed" it also returns full text and checks the post against every channel it still goes to, listing what a platform would refuse. Use list_posts to find post ids; use this before move_post or publish_now to see what will go out.',
+				'One post by postId: its text, per-platform variants, media (with mediaId for edit_media) and every delivery with channel key, @handle, status and local and UTC time; a published delivery also carries its latest metrics (counts, when read, or why there are none). With response_format "detailed" it also returns full text and checks the post against every channel it still goes to, listing what a platform would refuse. Use list_posts to find post ids; use this before move_post or publish_now to see what will go out.',
 			outputSchema: loose({
 				now: instant,
 				post: loose({
@@ -472,6 +474,64 @@ function createServer(event: RequestEvent) {
 		},
 		z.object({ postId: id, response_format: responseFormat }).strict(),
 		(input, agent) => getPostOp(agent, input)
+	);
+
+	register(
+		'get_performance',
+		{
+			scope: 'read',
+			title: 'How published posts performed',
+			annotation: annotations.read,
+			description:
+				'How published posts performed over a range of publish dates (default: the last 30 days): totals per brand and per channel, and the top deliveries by the chosen count, each with its channel key, publish time, counts and text excerpt. Use it to learn which posts, channels and formats work before drafting new ones. Counts come from snapshots about 1h, 24h and 7d after publishing, so a post from the last hour may have none yet. Bluesky, Mastodon, TikTok and LinkedIn company pages report counts; Instagram, Threads and X are not collected yet. Use get_post for one post’s latest counts.',
+			outputSchema: loose({
+				now: instant,
+				range: loose({ from: instant, to: instant }),
+				sort: z.string(),
+				totals: z.record(z.string(), z.unknown()),
+				brands: z.array(loose({ brand: z.string(), posts: z.number() })),
+				channels: z.array(loose({ channel: z.string(), platform: z.string(), posts: z.number() })),
+				top: z.array(loose({ postId: z.string(), channel: z.string(), engagement: z.number() })),
+				summary: z.string()
+			}),
+			example: { brand: 'jobjob', from: '2026-10-01', to: '2026-10-31', sort: 'engagement' },
+			examples: [
+				{ brand: 'jobjob', from: '2026-10-01', to: '2026-10-31', sort: 'engagement' },
+				{ channels: ['465cal.tiktok'], sort: 'views', limit: 5 },
+				{ from: '2026-10-24T00:00:00+02:00', sort: 'recent', response_format: 'detailed' }
+			]
+		},
+		z
+			.object({
+				brand: z.string().min(1).max(80).optional().describe('Brand slug or name.'),
+				channels: channelRefs.optional().describe('Only these channels.'),
+				from: z
+					.string()
+					.min(10)
+					.max(40)
+					.optional()
+					.describe(
+						'Published at or after: a day such as "2026-10-01" (start of that day in the operator’s zone) or ISO 8601 with an offset. Default: 30 days before `to`.'
+					),
+				to: z
+					.string()
+					.min(10)
+					.max(40)
+					.optional()
+					.describe(
+						'Published before: a day (the whole day is included) or ISO 8601. Default: now.'
+					),
+				sort: z
+					.enum(PERFORMANCE_SORTS)
+					.default('engagement')
+					.describe(
+						'Order of the top list. engagement = likes + comments + shares + quotes; views (TikTok) and impressions (LinkedIn) list only posts that report them; recent = newest first.'
+					),
+				limit: z.number().int().min(1).max(50).default(10).describe('How many top posts.'),
+				response_format: responseFormat
+			})
+			.strict(),
+		(input, agent) => getPerformanceOp(agent, input)
 	);
 
 	register(

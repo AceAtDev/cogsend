@@ -18,6 +18,7 @@ import {
 import { draftExcerpt } from '#lib/domain/excerpt.js';
 import {
 	engagementOf,
+	metricLabel,
 	metricsSupport,
 	PLATFORM_METRICS,
 	type MetricCounts,
@@ -29,6 +30,8 @@ import { isZernioConnection } from '#lib/domain/zernio.js';
 import { batchQueries, parseJson, type AppDb } from './db/client';
 import { connections, deliveryMetrics, draftVariants, drafts, publishTargets } from './db/schema';
 import { loadChannels } from './brands';
+import type { DeliveryMetricsView } from './metrics';
+import { describeInstant } from '#lib/domain/zoned-time.js';
 
 const TOTAL_KEYS = [
 	'likes',
@@ -377,4 +380,31 @@ export async function topPosts(
 		sort: opts.sort ?? 'engagement'
 	});
 	return report.top;
+}
+
+/** One line of counts in the platform's own words: "12 likes, 3 reposts, 1 reply". */
+export function countsLine(platform: string, counts: MetricCounts): string {
+	const keys = PLATFORM_METRICS[platform] ?? TOTAL_KEYS;
+	const parts = keys
+		.filter((k) => typeof counts[k] === 'number')
+		.map((k) => `${counts[k]} ${metricLabel(platform, k).toLowerCase()}`);
+	return parts.join(', ');
+}
+
+/** A delivery's metrics as an agent reads them: counts, when read, and why not when not. */
+export function metricsOut(m: DeliveryMetricsView, timeZone: string) {
+	const counts = m.counts ?? null;
+	const summary =
+		counts && m.collectedAt
+			? `${countsLine(m.platform, counts)} (read ${describeInstant(m.collectedAt, timeZone).display})`
+			: (m.message ?? m.state);
+	return {
+		state: m.state,
+		counts,
+		engagement: counts ? engagementOf(counts) : null,
+		collectedAt: m.collectedAt ? describeInstant(m.collectedAt, timeZone) : null,
+		nextReadAt: m.nextAt ? describeInstant(m.nextAt, timeZone) : null,
+		note: m.state === 'ok' ? null : m.message,
+		summary
+	};
 }
