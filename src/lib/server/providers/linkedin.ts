@@ -8,6 +8,7 @@ import type {
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	MetricsOutcome,
 	NormalizedPost,
 	PlatformProvider,
 	PublishResult,
@@ -15,6 +16,8 @@ import type {
 } from './types';
 import {
 	mediaByteLength,
+	MetricsError,
+	metricsErrorForStatus,
 	processingError,
 	ProviderError,
 	resumedVideoState,
@@ -30,6 +33,7 @@ import {
 } from './video';
 import { LINKEDIN_MAX_IMAGE_BYTES, LINKEDIN_MAX_IMAGES } from '#lib/domain/media-limits.js';
 import { providerFetch } from './timed-fetch';
+import { LINKEDIN_PERSONAL_MESSAGE } from '#lib/domain/metrics.js';
 
 export const LINKEDIN_MAX_CHARS = 3000;
 export { LINKEDIN_MAX_IMAGE_BYTES, LINKEDIN_MAX_IMAGES } from '#lib/domain/media-limits.js';
@@ -476,6 +480,9 @@ async function resolveArticleCard(
 	return { source: url, title, description, ...(thumbnail ? { thumbnail } : {}) };
 }
 
+/** The docs give no maximum per request; 20 keeps the URL short. */
+export const LINKEDIN_METRICS_BATCH = 20;
+
 export const linkedinProvider: PlatformProvider = {
 	id: 'linkedin',
 	capabilities: {
@@ -719,8 +726,125 @@ export const linkedinProvider: PlatformProvider = {
 			refreshToken: data.refresh_token || creds.refreshToken,
 			expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : creds.expiresAt
 		};
-	}
+	},
+
+	metricsBatchSize: LINKEDIN_METRICS_BATCH,
+	fetchMetrics: (ids, creds, meta, fetchImpl) => linkedinMetrics(ids, creds, meta, fetchImpl)
 };
+
+/**
+ * What a company-page connection has to ask for. Share statistics name
+ * rw_organization_admin, held by a page ADMINISTRATOR; r_organization_social
+ * reads the page's posts and w_organization_social posts as the page. Asked
+ * only when a company page is connected: a personal profile keeps
+ * w_member_social alone, and LinkedIn reports no post statistics for it.
+ */
+export const LINKEDIN_COMPANY_PAGE_SCOPES = [
+	'r_organization_social',
+	'w_organization_social',
+	'rw_organization_admin'
+] as const;
+
+/**
+ * Lifetime organic counts of company-page posts from
+ * organizationalEntityShareStatistics. Share and UGC post URNs take different
+ * parameters, so each kind is its own request. A post with no activity is left
+ * out of the answer, and LinkedIn documents that as all-zero counts.
+ */
+export async function linkedinMetrics(
+	urns: string[],
+	creds: ConnectionCredentials,
+	meta: ConnectionMeta | undefined,
+	fetchImpl: FetchLike = providerFetch
+): Promise<Map<string, MetricsOutcome>> {
+	const org = meta?.organizationUrn;
+	if (!org || !/^urn:li:organization(Brand)?:\d+$/.test(org))
+		throw new MetricsError('unsupported', LINKEDIN_PERSONAL_MESSAGE);
+	if (!creds.accessToken)
+		throw new MetricsError('reconnect', 'LinkedIn sign-in is missing — reconnect');
+	const out = new Map<string, MetricsOutcome>();
+	const shares: string[] = [];
+	const ugcPosts: string[] = [];
+	for (const urn of urns.slice(0, LINKEDIN_METRICS_BATCH)) {
+		if (/^urn:li:share:\d+$/.test(urn)) shares.push(urn);
+		else if (/^urn:li:ugcPost:\d+$/.test(urn)) ugcPosts.push(urn);
+		else
+			out.set(urn, {
+				kind: 'unavailable',
+				reason: 'LinkedIn gave no post URN that statistics can be read for.'
+			});
+	}
+	const base =
+		'https://api.linkedin.com/rest/organizationalEntityShareStatistics' +
+		`?q=organizationalEntity&organizationalEntity=${encodeURIComponent(org)}`;
+	const requests: Array<{ url: string; field: 'share' | 'ugcPost'; urns: string[] }> = [];
+	if (shares.length)
+		requests.push({
+			url: `${base}&shares=List(${shares.map(encodeURIComponent).join(',')})`,
+			field: 'share',
+			urns: shares
+		});
+	if (ugcPosts.length)
+		requests.push({
+			url: `${base}&${ugcPosts.map((u, i) => `ugcPosts[${i}]=${encodeURIComponent(u)}`).join('&')}`,
+			field: 'ugcPost',
+			urns: ugcPosts
+		});
+	for (const request of requests) {
+		let res: Response;
+		try {
+			res = await fetchImpl(request.url, { headers: restHeaders(creds.accessToken) });
+		} catch (err) {
+			throw new MetricsError(
+				'transient',
+				`LinkedIn share statistics: ${err instanceof Error ? err.message : String(err)}`
+			);
+		}
+		if (res.status === 403) {
+			throw new MetricsError(
+				'reconnect',
+				'LinkedIn refused the page statistics (403): connect the page again as one of its administrators, granting rw_organization_admin',
+				{ status: 403 }
+			);
+		}
+		if (!res.ok)
+			throw metricsErrorForStatus(
+				'LinkedIn share statistics',
+				res,
+				await res.text().catch(() => '')
+			);
+		const data = (await res.json().catch(() => null)) as { elements?: unknown } | null;
+		if (!data || !Array.isArray(data.elements))
+			throw new MetricsError('transient', 'LinkedIn share statistics answered without elements');
+		const byUrn = new Map<string, Record<string, unknown>>();
+		for (const element of data.elements as Array<Record<string, unknown>>) {
+			const urn = element?.[request.field];
+			const stats = element?.totalShareStatistics;
+			if (typeof urn === 'string' && stats && typeof stats === 'object')
+				byUrn.set(urn, stats as Record<string, unknown>);
+		}
+		for (const urn of request.urns) {
+			const stats = byUrn.get(urn) ?? {};
+			out.set(urn, {
+				kind: 'ok',
+				counts: {
+					impressions: countOf(stats.impressionCount) ?? 0,
+					// likeCount can dip below zero (an unlike counted late); shown as 0.
+					likes: Math.max(0, countOf(stats.likeCount, true) ?? 0),
+					comments: countOf(stats.commentCount) ?? 0,
+					shares: countOf(stats.shareCount) ?? 0,
+					clicks: countOf(stats.clickCount) ?? 0
+				}
+			});
+		}
+	}
+	return out;
+}
+
+function countOf(value: unknown, signed = false): number | null {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+	return signed || value >= 0 ? value : null;
+}
 
 // --- OAuth helpers ---
 

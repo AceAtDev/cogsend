@@ -290,7 +290,7 @@ describe('connect routes', () => {
 		// TikTok names the client `client_key`, not `client_id`.
 		expect(url.searchParams.get('client_key')).toBe('tt-key');
 		expect(url.searchParams.has('client_id')).toBe(false);
-		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish');
+		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish,video.list');
 		expect(url.searchParams.get('response_type')).toBe('code');
 		expect(url.searchParams.get('redirect_uri')).toMatch(/\/api\/connections\/tiktok\/callback$/);
 		expect(url.searchParams.get('state')).toBeTruthy();

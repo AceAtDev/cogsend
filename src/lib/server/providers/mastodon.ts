@@ -18,12 +18,13 @@ import type {
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	MetricsOutcome,
 	NormalizedPost,
 	PlatformProvider,
 	PublishResult,
 	ValidationIssue
 } from './types';
-import { ProviderError, PublishPartialError } from './types';
+import { MetricsError, metricsErrorForStatus, ProviderError, PublishPartialError } from './types';
 import { providerFetch } from './timed-fetch';
 
 function normalizeInstance(url: string, allowLocal: boolean): string {
@@ -352,6 +353,13 @@ async function postStatus(
 	return (await res.json()) as { id: string; url: string };
 }
 
+/**
+ * One status per request: GET /api/v1/statuses/:id is on every Mastodon
+ * version (the batch form needs 4.3). Kept small, since each one is a call out
+ * of the scheduler's budget and of the account's 300 per 5 minutes.
+ */
+export const MASTODON_METRICS_BATCH = 5;
+
 export const mastodonProvider: PlatformProvider = {
 	id: 'mastodon',
 	capabilities: {
@@ -536,8 +544,72 @@ export const mastodonProvider: PlatformProvider = {
 			remoteUrl: firstUrl || undefined,
 			segmentIds
 		};
-	}
+	},
+
+	metricsBatchSize: MASTODON_METRICS_BATCH,
+	fetchMetrics: (ids, creds, _meta, fetchImpl, opts) =>
+		mastodonMetrics(ids, creds, fetchImpl, opts?.allowLocalHosts ?? false)
 };
+
+/**
+ * Favourite, boost, reply and (Mastodon 4.5+) quote counts, read on the
+ * account's own server with its token, so unlisted and followers-only posts
+ * and servers in authorized-fetch mode answer too. A 404 is a status that is
+ * gone or no longer visible to this account.
+ */
+export async function mastodonMetrics(
+	ids: string[],
+	creds: ConnectionCredentials,
+	fetchImpl: FetchLike = providerFetch,
+	allowLocal = false
+): Promise<Map<string, MetricsOutcome>> {
+	if (!creds.accessToken || !creds.instanceUrl)
+		throw new MetricsError('reconnect', 'Mastodon credentials require accessToken and instanceUrl');
+	const instanceUrl = normalizeInstance(creds.instanceUrl, allowLocal);
+	const guarded = guardRedirects(fetchImpl, allowLocal);
+	const out = new Map<string, MetricsOutcome>();
+	for (const id of ids.slice(0, MASTODON_METRICS_BATCH)) {
+		if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+			out.set(id, { kind: 'unavailable', reason: 'Mastodon returned no status id for this post.' });
+			continue;
+		}
+		let res: Response;
+		try {
+			res = await guarded(`${instanceUrl}/api/v1/statuses/${encodeURIComponent(id)}`, {
+				headers: { Authorization: `Bearer ${creds.accessToken}`, Accept: 'application/json' }
+			});
+		} catch (err) {
+			throw new MetricsError(
+				'transient',
+				`Mastodon status: ${err instanceof Error ? err.message : String(err)}`
+			);
+		}
+		if (res.status === 404 || res.status === 410) {
+			out.set(id, { kind: 'not_found' });
+			continue;
+		}
+		if (!res.ok)
+			throw metricsErrorForStatus('Mastodon status', res, await res.text().catch(() => ''));
+		const status = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+		if (!status || typeof status !== 'object') {
+			throw new MetricsError('transient', 'Mastodon answered without a status');
+		}
+		out.set(id, {
+			kind: 'ok',
+			counts: {
+				likes: countOf(status.favourites_count),
+				shares: countOf(status.reblogs_count),
+				comments: countOf(status.replies_count),
+				quotes: countOf(status.quotes_count)
+			}
+		});
+	}
+	return out;
+}
+
+function countOf(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 export async function mastodonRegisterApp(
 	instanceUrl: string,

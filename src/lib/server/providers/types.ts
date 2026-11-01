@@ -1,6 +1,7 @@
 import type { PlatformId } from '#lib/domain/platforms.js';
 import { PROCESSING_MARK } from '#lib/domain/video-rules.js';
 import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
+import type { MetricCounts } from '#lib/domain/metrics.js';
 import type { PublicMediaVariant } from '../public-media';
 export type { PlatformId } from '#lib/domain/platforms.js';
 export { PLATFORM_IDS, isPlatformId } from '#lib/domain/platforms.js';
@@ -139,6 +140,8 @@ export interface ConnectionMeta {
 	videoFrameRateLimit?: number;
 	zernioAccountId?: string;
 	zernioProfileId?: string;
+	/** LinkedIn: the company page (urn:li:organization:…) this connection posts as. */
+	organizationUrn?: string;
 }
 
 export type FetchLike = typeof fetch;
@@ -389,6 +392,73 @@ export interface ProviderRequirements {
 	notes?: readonly string[];
 }
 
+/** What a platform said about one post when its metrics were read. */
+export type MetricsOutcome =
+	| { kind: 'ok'; counts: MetricCounts }
+	/** The platform no longer returns the post: deleted, or hidden from this reader. */
+	| { kind: 'not_found' }
+	/** This post cannot be read, for a reason the sentence gives. */
+	| { kind: 'unavailable'; reason: string };
+
+/**
+ * A metrics read that failed for every post in the request.
+ * - `reconnect`: the token is dead or lacks the permission; the account must be
+ *   connected again. Unlike a publish, a metrics read never marks the
+ *   connection expired: a missing read scope says nothing about posting.
+ * - `rate_limited`: back off, for `retryAfterMs` when the platform said.
+ * - `unsupported`: this account gives no metrics (a LinkedIn personal profile).
+ * - `transient`: network or platform trouble; tried again later.
+ */
+export class MetricsError extends Error {
+	readonly kind: 'reconnect' | 'rate_limited' | 'unsupported' | 'transient';
+	readonly retryAfterMs?: number;
+	readonly status?: number;
+
+	constructor(
+		kind: MetricsError['kind'],
+		message: string,
+		opts: { retryAfterMs?: number; status?: number } = {}
+	) {
+		super(message);
+		this.name = 'MetricsError';
+		this.kind = kind;
+		this.retryAfterMs = opts.retryAfterMs;
+		this.status = opts.status;
+	}
+}
+
+/** Seconds (Retry-After) or an epoch/ISO reset time, as milliseconds from now. */
+export function retryAfterFrom(headers: Headers, now = Date.now()): number | undefined {
+	const retry = headers.get('retry-after');
+	if (retry) {
+		const secs = Number(retry);
+		if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+		const at = Date.parse(retry);
+		if (Number.isFinite(at)) return Math.max(0, at - now);
+	}
+	const reset = headers.get('ratelimit-reset') ?? headers.get('x-ratelimit-reset');
+	if (reset) {
+		const n = Number(reset);
+		// An epoch in seconds is ~1.7e9; anything smaller is seconds from now.
+		if (Number.isFinite(n)) return n > 1e9 ? Math.max(0, n * 1000 - now) : n * 1000;
+		const at = Date.parse(reset);
+		if (Number.isFinite(at)) return Math.max(0, at - now);
+	}
+	return undefined;
+}
+
+/** The usual HTTP failure of a metrics read, classified. */
+export function metricsErrorForStatus(prefix: string, res: Response, body: string): MetricsError {
+	const message = `${prefix} failed (${res.status}): ${body.slice(0, 200)}`;
+	if (res.status === 401) return new MetricsError('reconnect', message, { status: 401 });
+	if (res.status === 429)
+		return new MetricsError('rate_limited', message, {
+			status: 429,
+			retryAfterMs: retryAfterFrom(res.headers)
+		});
+	return new MetricsError('transient', message, { status: res.status });
+}
+
 export interface PlatformProvider {
 	id: PlatformId;
 	/**
@@ -467,6 +537,20 @@ export interface PlatformProvider {
 	 * short-lived tokens (Mastodon, Bluesky) omit this.
 	 */
 	refreshImpossibleReason?(creds: ConnectionCredentials): string | null;
+	/**
+	 * Read the public counts of published posts, at most `metricsBatchSize` at
+	 * once. Keyed by `remotePostId`; a post missing from the map was not
+	 * answered for and is tried again. A failure of the whole request throws
+	 * MetricsError. Providers without it are shown as "not collected yet".
+	 */
+	fetchMetrics?(
+		remotePostIds: string[],
+		creds: ConnectionCredentials,
+		meta: ConnectionMeta | undefined,
+		fetchImpl: FetchLike,
+		opts?: { instanceUrl?: string | null; allowLocalHosts?: boolean }
+	): Promise<Map<string, MetricsOutcome>>;
+	metricsBatchSize?: number;
 }
 
 export interface MediaStore {

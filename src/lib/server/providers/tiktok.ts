@@ -8,12 +8,20 @@ import {
 import { TIKTOK_MAX_CHARS, validateTiktokText } from '#lib/domain/validation/text.js';
 import { singlePost } from './flatten';
 import { providerFetch } from './timed-fetch';
-import { processingError, ProviderError, resumedVideoState, unconfirmedPostError } from './types';
+import {
+	MetricsError,
+	processingError,
+	ProviderError,
+	resumedVideoState,
+	retryAfterFrom,
+	unconfirmedPostError
+} from './types';
 import type {
 	ConnectionCredentials,
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	MetricsOutcome,
 	NormalizedPost,
 	PlatformProvider,
 	PublishResult,
@@ -34,7 +42,14 @@ const API = 'https://open.tiktokapis.com/v2';
 const TOKEN_URL = `${API}/oauth/token/`;
 // video.publish covers creator_info, Direct Post and the status fetch;
 // creator_info also names the account, so user.info.profile is not needed.
-export const TIKTOK_SCOPES = ['user.info.basic', 'video.publish'];
+// video.list reads the counts of the account's own videos (metrics). A
+// connection made before it was asked for keeps working for posting and is
+// shown "reconnect to enable metrics".
+export const TIKTOK_SCOPES = ['user.info.basic', 'video.publish', 'video.list'];
+export const TIKTOK_METRICS_SCOPE = 'video.list';
+/** /v2/video/query/ takes up to 20 video ids per request. */
+export const TIKTOK_METRICS_BATCH = 20;
+const VIDEO_METRIC_FIELDS = 'id,view_count,like_count,comment_count,share_count';
 const USER_FIELDS = 'open_id,union_id,avatar_url,display_name';
 // The access token lives 24 hours. An hour of slack covers a video that
 // parks and resumes across several runs.
@@ -795,8 +810,114 @@ export const tiktokProvider: PlatformProvider = {
 			refreshExpiresAt: tok.refreshExpiresAt ?? creds.refreshExpiresAt,
 			...(tok.scopes ? { scopes: tok.scopes } : {})
 		};
-	}
+	},
+
+	metricsBatchSize: TIKTOK_METRICS_BATCH,
+	fetchMetrics: (ids, creds, _meta, fetchImpl) => tiktokMetrics(ids, creds, fetchImpl)
 };
+
+/**
+ * View, like, comment and share counts from the Display API's video query
+ * (scope video.list), which only answers for the account's own public videos.
+ * A post TikTok never gave a public id for (a private post, or one still in
+ * moderation when CogSend stopped asking) is stored under its publish id and
+ * cannot be looked up; an id TikTok leaves out of the answer is gone or no
+ * longer public.
+ */
+export async function tiktokMetrics(
+	ids: string[],
+	creds: ConnectionCredentials,
+	fetchImpl: FetchLike = providerFetch
+): Promise<Map<string, MetricsOutcome>> {
+	if (!creds.accessToken)
+		throw new MetricsError('reconnect', 'TikTok sign-in is missing — reconnect');
+	if (creds.scopes && !creds.scopes.includes(TIKTOK_METRICS_SCOPE))
+		throw new MetricsError(
+			'reconnect',
+			'TikTok was not asked for video.list — reconnect to enable metrics'
+		);
+	const out = new Map<string, MetricsOutcome>();
+	const videoIds: string[] = [];
+	for (const id of ids.slice(0, TIKTOK_METRICS_BATCH)) {
+		if (/^\d{5,25}$/.test(id)) videoIds.push(id);
+		else
+			out.set(id, {
+				kind: 'unavailable',
+				reason:
+					'TikTok gave no public video id for this post (private, or not public yet when it was published), so it has no stats to read.'
+			});
+	}
+	if (!videoIds.length) return out;
+	let res: Response;
+	try {
+		res = await fetchImpl(`${API}/video/query/?fields=${VIDEO_METRIC_FIELDS}`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${creds.accessToken}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({ filters: { video_ids: videoIds } })
+		});
+	} catch (err) {
+		throw new MetricsError(
+			'transient',
+			`TikTok video query: ${err instanceof Error ? err.message : String(err)}`
+		);
+	}
+	const text = await res.text().catch(() => '');
+	let body: { data?: { videos?: unknown }; error?: { code?: unknown } } = {};
+	try {
+		body = JSON.parse(text) as typeof body;
+	} catch {
+		/* classified below by status */
+	}
+	const code = body?.error && typeof body.error === 'object' ? body.error.code : undefined;
+	if (!res.ok || (code !== undefined && code !== 'ok')) {
+		const { message } = parseTiktokError(text);
+		const said = `TikTok video query failed (${res.status})${code ? ` [${String(code)}]` : ''}${message ? `: ${message}` : ''}`;
+		if (code === 'scope_not_authorized' || code === 'scope_permission_missed')
+			throw new MetricsError('reconnect', `${said} — reconnect to enable metrics`, {
+				status: res.status
+			});
+		if (code === 'access_token_invalid' || res.status === 401)
+			throw new MetricsError('reconnect', `${said} — reconnect`, { status: res.status });
+		if (code === 'rate_limit_exceeded' || res.status === 429)
+			throw new MetricsError('rate_limited', said, {
+				status: res.status,
+				retryAfterMs: retryAfterFrom(res.headers)
+			});
+		throw new MetricsError('transient', said, { status: res.status });
+	}
+	const videos = Array.isArray(body.data?.videos)
+		? (body.data.videos as Array<Record<string, unknown>>)
+		: [];
+	const byId = new Map<string, Record<string, unknown>>();
+	for (const video of videos) {
+		if (video && (typeof video.id === 'string' || typeof video.id === 'number'))
+			byId.set(String(video.id), video);
+	}
+	for (const id of videoIds) {
+		const video = byId.get(id);
+		if (!video) {
+			out.set(id, { kind: 'not_found' });
+			continue;
+		}
+		out.set(id, {
+			kind: 'ok',
+			counts: {
+				views: countOf(video.view_count),
+				likes: countOf(video.like_count),
+				comments: countOf(video.comment_count),
+				shares: countOf(video.share_count)
+			}
+		});
+	}
+	return out;
+}
+
+function countOf(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 function tokenFields(text: string): {
 	accessToken?: string;
