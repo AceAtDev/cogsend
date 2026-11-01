@@ -18,6 +18,10 @@ The digest lists the posts planned for today grouped by brand, what was publishe
 
 Alerts are batched: at most one email per kind every 15 minutes. Whatever happens in between goes out together in the next one. A recipient hears only about what happens after they were added, not about older failures.
 
+## Accounts that are about to expire
+
+Every hour CogSend refreshes Instagram, Threads and LinkedIn sign-ins that are within a week of running out, so an account that rarely posts does not lapse between posts. When a sign-in will end in a way only a reconnect fixes (a LinkedIn app without refresh tokens every 60 days, TikTok once a year), the **Account needs reconnecting** alert arrives a week ahead with the date, and the home page shows it until you reconnect. The home page also says when email alerts are off or failing, so you know they cannot reach you.
+
 ## Set it up
 
 ### 1. Use a dedicated Gmail account

@@ -21,13 +21,14 @@ import {
 import {
 	collectDueMetrics,
 	enrollPublished,
+	METRICS_ENROLL_SETTING,
 	latestMetricsFor,
 	loadDeliveryMetrics,
 	METRICS_BACKOFF_SETTING,
 	refreshDeliveryMetrics
 } from '#lib/server/metrics.js';
 import { performanceReport, topPosts } from '#lib/server/metrics-report.js';
-import { readAppSetting } from '#lib/server/app-settings.js';
+import { readAppSetting, writeAppSetting } from '#lib/server/app-settings.js';
 import { runSchedulerTick } from '#lib/server/scheduler.js';
 import type { FetchLike } from '#lib/server/providers/types.js';
 import { TIKTOK_RECONNECT_MESSAGE } from '#lib/domain/metrics.js';
@@ -147,6 +148,29 @@ describe('enrolment', () => {
 		});
 		expect(rows[0].nextDueAt?.getTime()).toBe(now - 2 * H + H);
 		expect(old.id).not.toBe(recent.id);
+	});
+});
+
+describe('enrolment scan range', () => {
+	it('scans only from the stored mark once one exists, and ignores a mark from the future', async () => {
+		const now = Date.UTC(2026, 10, 2, 12);
+		const bsky = await account('bluesky');
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now - 10 * 60_000));
+		// Inside the nine-day window but well before mark minus the overlap: skipped.
+		const before = await published(bsky, bskyUri(41), now - 3 * D);
+		// After the mark: enrolled.
+		const after = await published(bsky, bskyUri(42), now - 5 * 60_000);
+		await enrollPublished(db, now);
+		let ids = (await db.select().from(deliveryMetrics)).map((r) => r.targetId);
+		expect(ids).toContain(after.id);
+		expect(ids).not.toContain(before.id);
+
+		// A mark from the future falls back to the whole window.
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now + D));
+		await enrollPublished(db, now);
+		ids = (await db.select().from(deliveryMetrics)).map((r) => r.targetId);
+		expect(ids).toContain(before.id);
+		expect(Number(await readAppSetting(db, METRICS_ENROLL_SETTING, { fresh: true }))).toBe(now);
 	});
 });
 

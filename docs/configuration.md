@@ -36,6 +36,7 @@ cannot reach anything except the tick (see [Scheduling](scheduling.md)).
 | `RESEND_API_KEY`, `NOTIFY_EMAIL`, `NOTIFY_FROM` | failure digests by email; Resend as an admin's [notification](notifications.md) sender |
 | `MEDIA_PUBLIC_BASE_URL`                         | serving Meta's crawler from a public media origin (see below)                          |
 | `SUBREQUEST_LIMIT`                              | publishing more per tick on a paid Workers plan (see below)                            |
+| `HEARTBEAT_URL`                                 | an outside monitor that emails you if the scheduler stops (see below)                  |
 | `REGISTRATION`, `MAX_ACTIVE_USERS`              | public sign-up and its cap ([Multi-user](multi-user.md))                               |
 
 [Email notifications](notifications.md) (the daily digest and alerts) need no secret: each account enters its own Gmail address and app password in **Settings → Email notifications**, stored in D1 encrypted with `APP_ENCRYPTION_KEY`, so rotating that key means entering the app password again.
@@ -69,6 +70,15 @@ Add → **Secret**, then **Deploy** to apply it.
 
 The login is not one of these secrets. `npm run setup` writes the account into D1
 — see [The login](#the-login) below.
+
+## Knowing when the scheduler stops
+
+The scheduler sends CogSend's alerts itself, so if Cloudflare stops running it nothing inside CogSend can tell you. Set `HEARTBEAT_URL` to a dead-man's-switch URL and the tick requests it once an hour; the service emails you when the requests stop.
+
+1. Create a free check at [healthchecks.io](https://healthchecks.io) with a period of 1 hour and a grace time of 1 hour, and copy its ping URL (`https://hc-ping.com/…`).
+2. `npx wrangler secret put HEARTBEAT_URL` and paste it.
+
+Only an `https://` URL is used, and a failed ping is logged, never shown as an error.
 
 ## Naming your instance
 

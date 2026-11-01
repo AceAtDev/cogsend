@@ -45,6 +45,8 @@ const envSchema = z.object({
 	// with its terms and privacy policy, instead of the sign-in redirect.
 	// Platform app reviews (TikTok's) want a website that is not a login page.
 	PUBLIC_HOMEPAGE: z.string().optional(),
+	/** A dead-man's-switch URL (e.g. healthchecks.io) the tick pings hourly. */
+	HEARTBEAT_URL: z.string().optional(),
 	// Who runs the instance and whose law the terms follow, named on the
 	// public pages, such as "Acme Studio" and "Ontario, Canada".
 	LEGAL_OPERATOR: z.string().optional(),
@@ -188,6 +190,7 @@ export async function envFromPlatform(
 			asString(platformEnv?.TIKTOK_SITE_VERIFICATION) ?? fallback.TIKTOK_SITE_VERIFICATION,
 		LEGAL_CONTACT_EMAIL: asString(platformEnv?.LEGAL_CONTACT_EMAIL) ?? fallback.LEGAL_CONTACT_EMAIL,
 		PUBLIC_HOMEPAGE: asString(platformEnv?.PUBLIC_HOMEPAGE) ?? fallback.PUBLIC_HOMEPAGE,
+		HEARTBEAT_URL: asString(platformEnv?.HEARTBEAT_URL) ?? fallback.HEARTBEAT_URL,
 		LEGAL_OPERATOR: asString(platformEnv?.LEGAL_OPERATOR) ?? fallback.LEGAL_OPERATOR,
 		LEGAL_JURISDICTION: asString(platformEnv?.LEGAL_JURISDICTION) ?? fallback.LEGAL_JURISDICTION,
 		TIKTOK_METRICS: asString(platformEnv?.TIKTOK_METRICS) ?? fallback.TIKTOK_METRICS,

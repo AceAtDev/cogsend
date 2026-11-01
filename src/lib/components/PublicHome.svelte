@@ -118,7 +118,9 @@
 				{#each screens as s (s.src)}
 					<figure class="overflow-hidden rounded-3xl border border-stone-200 bg-white">
 						<img src={s.src} alt={s.alt} loading="lazy" class="block w-full" />
-						<figcaption class="border-t border-stone-200 px-5 py-4 text-[13px] font-bold text-stone-700">
+						<figcaption
+							class="border-t border-stone-200 px-5 py-4 text-[13px] font-bold text-stone-700"
+						>
 							{s.caption}
 						</figcaption>
 					</figure>

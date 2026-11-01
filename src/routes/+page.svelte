@@ -22,6 +22,14 @@
 				label: `${n} post${n === 1 ? '' : 's'} stuck publishing`
 			};
 		}
+		if (data.expiredAccounts > 0) {
+			const n = data.expiredAccounts;
+			return {
+				tone: 'bad' as const,
+				label: `${n} account${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} reconnecting`,
+				href: '/accounts'
+			};
+		}
 		if (data.overdue > 0) {
 			const n = data.overdue;
 			return {
@@ -38,6 +46,36 @@
 				label: data.schedulerNeverTicked
 					? 'Scheduled posts are not published yet'
 					: 'Scheduler delayed'
+			};
+		}
+		if (data.failedCount > 0) {
+			const n = data.failedCount;
+			return {
+				tone: 'warn' as const,
+				label: `${n} post${n === 1 ? '' : 's'} failed`,
+				href: '/posts?tab=failed'
+			};
+		}
+		if (data.expiringAccounts > 0) {
+			const n = data.expiringAccounts;
+			return {
+				tone: 'warn' as const,
+				label: `${n} account${n === 1 ? '' : 's'} to reconnect this week`,
+				href: '/accounts'
+			};
+		}
+		if (data.notifyStatus === 'failing') {
+			return {
+				tone: 'warn' as const,
+				label: 'Email alerts are failing',
+				href: '/settings'
+			};
+		}
+		if (data.notifyStatus === 'off') {
+			return {
+				tone: 'warn' as const,
+				label: 'Email alerts are off',
+				href: '/settings'
 			};
 		}
 		return { tone: 'ok' as const, label: 'All systems operational' };
@@ -67,7 +105,10 @@
 					: health.tone === 'bad'
 						? 'text-red-600'
 						: 'text-amber-700'}"
-				title={data.schedulerError ?? undefined}>{health.label}</span
+				title={data.schedulerError ?? data.notifyError ?? undefined}
+				>{#if 'href' in health && health.href}<a href={health.href} class="hover:underline"
+						>{health.label}</a
+					>{:else}{health.label}{/if}</span
 			>
 		</div>
 

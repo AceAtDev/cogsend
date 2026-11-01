@@ -33,3 +33,21 @@ describe('timedFetch', () => {
 		expect(await res.text()).toBe('ok');
 	});
 });
+
+describe('providerTimeoutMs', () => {
+	it('gives a whole streamed file minutes, uploads a minute, and JSON calls 15 seconds', async () => {
+		const {
+			providerTimeoutMs,
+			PROVIDER_STREAM_TIMEOUT_MS,
+			PROVIDER_UPLOAD_TIMEOUT_MS,
+			PROVIDER_FETCH_TIMEOUT_MS
+		} = await import('#lib/server/providers/timed-fetch.js');
+		const stream = new ReadableStream({ start: (c) => c.close() });
+		expect(providerTimeoutMs({ method: 'POST', body: stream })).toBe(PROVIDER_STREAM_TIMEOUT_MS);
+		expect(providerTimeoutMs({ method: 'POST', body: new Uint8Array(4) })).toBe(
+			PROVIDER_UPLOAD_TIMEOUT_MS
+		);
+		expect(providerTimeoutMs({ method: 'POST', body: '{}' })).toBe(PROVIDER_FETCH_TIMEOUT_MS);
+		expect(PROVIDER_STREAM_TIMEOUT_MS).toBeGreaterThan(PROVIDER_UPLOAD_TIMEOUT_MS);
+	});
+});

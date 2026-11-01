@@ -35,9 +35,11 @@ retries only the accounts that failed.
 
 A post that published to every account can't be edited, since changing it would no longer match what went out. Opening it shows it read-only, with **Duplicate to post again** to start a copy, which is what **Post again** does from its card. A post that failed on some accounts stays editable, so it can be fixed and retried.
 
-A scheduled post that fails with something retryable — a rate limit, a platform
-timeout — is not failed yet: it backs off and tries again on its own, up to five
-attempts, and only then lands in **Failed**. A post whose video a platform is still processing is marked **Processing** instead: it publishes on its own once the platform is done, without spending any of the five attempts ([Video](composer.md#video)). **Retry** and **Reschedule** start the five attempts afresh; publishing or scheduling the same post to the same account again does not. The dashboard shows a banner when
+A scheduled post that fails with something retryable (a rate limit, a platform
+outage, a timeout) is not failed yet: it backs off (1, 2, 4 … minutes, then hourly) and tries again on its own for about a day, up to 30
+attempts, and only then lands in **Failed**. A platform outage of a few hours therefore heals itself. A failure a retry cannot fix (a file the platform refuses, text that is too long) fails at once. A post whose video a platform is still processing is marked **Processing** instead: it publishes on its own once the platform is done, without spending any attempts ([Video](composer.md#video)). **Retry** and **Reschedule** start the attempts afresh; publishing or scheduling the same post to the same account again does not.
+
+Two weeks after a post has published to every account, its uploaded files are deleted from storage, so storage stays flat however much you post. The post, its text and its links stay; **Duplicate to post again** on an older post starts without its media. A post that failed or is still due on any account keeps its files, so **Retry** always has them. The dashboard shows a banner when
 something has failed, and [failure emails](scheduling.md#failure-alerts-optional)
 can tell you the next morning.
 

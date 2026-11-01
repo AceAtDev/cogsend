@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { newId, type AppDb } from '#lib/server/db/client.js';
 import { draftMedia, draftVariants, drafts, users } from '#lib/server/db/schema.js';
@@ -122,6 +123,12 @@ describe('POST /api/drafts/[id]/media quotas', () => {
 		const res = await upload(await freshDraft(), 1);
 		expect(res.status).toBe(413);
 		expect(await res.json()).toMatchObject({ error: expect.stringMatching(/per account/) });
+
+		// Once that draft is published its files stop counting, so steady
+		// posting never runs into the cap.
+		await db.update(drafts).set({ status: 'published' }).where(eq(drafts.id, spill));
+		const after = await upload(await freshDraft(), 1);
+		expect(after.status).toBe(201);
 	});
 });
 

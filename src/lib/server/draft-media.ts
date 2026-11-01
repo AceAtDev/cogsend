@@ -1,7 +1,7 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, count, eq, ne } from 'drizzle-orm';
 import { MAX_IMAGES_PER_SEGMENT, videoMixProblem } from '#lib/domain/media-limits.js';
 import { splitThreadSegments } from '#lib/domain/thread-segments.js';
-import { chunkIds, first } from './db/client';
+import { first } from './db/client';
 import { draftMedia, draftVariants, drafts, publishTargets } from './db/schema';
 import { fail } from './http';
 import { draftEditBlock } from './publish-plan';
@@ -80,27 +80,26 @@ export async function segmentProblem(
 	return `segmentIndex ${segmentIndex} is past the last segment (${cards - 1})`;
 }
 
-/** Whether `adding` more files would take the account past MAX_FILES_PER_USER. */
+/**
+ * Whether `adding` more files would take the account past MAX_FILES_PER_USER.
+ * Files on fully published drafts do not count: they are locked, never sent
+ * again, and their bytes are cleared after a retention period, so counting
+ * them would block uploads after a few weeks of steady posting. One
+ * statement whatever the account size.
+ */
 export async function overUserFileCap(
 	db: App.Locals['db'],
 	userId: string,
 	adding: number
 ): Promise<boolean> {
-	const userDraftIds = await db
-		.select({ id: drafts.id })
-		.from(drafts)
-		.where(eq(drafts.userId, userId));
-	let userFiles = 0;
-	for (const chunk of chunkIds(userDraftIds.map((d) => d.id))) {
-		if (!chunk.length) break;
-		const rows = await db
-			.select({ id: draftMedia.id })
+	const row = await first(
+		db
+			.select({ n: count() })
 			.from(draftMedia)
-			.where(inArray(draftMedia.draftId, chunk));
-		userFiles += rows.length;
-		if (userFiles + adding > MAX_FILES_PER_USER) break;
-	}
-	return userFiles + adding > MAX_FILES_PER_USER;
+			.innerJoin(drafts, eq(drafts.id, draftMedia.draftId))
+			.where(and(eq(drafts.userId, userId), ne(drafts.status, 'published')))
+	);
+	return Number(row?.n ?? 0) + adding > MAX_FILES_PER_USER;
 }
 
 const isVideoRow = (m: { mime: string | null }) =>

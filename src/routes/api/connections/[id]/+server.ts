@@ -91,7 +91,11 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 			return fail('Publishing in progress — try again shortly', 409);
 		}
 
-		if (conn.platform === 'tiktok' && conn.credentialsEncrypted && !isZernioConnection(conn.metaJson)) {
+		if (
+			conn.platform === 'tiktok' &&
+			conn.credentialsEncrypted &&
+			!isZernioConnection(conn.metaJson)
+		) {
 			// TikTok keeps the grant after the tokens are dropped and would
 			// skip its consent page on reconnect; revoking clears it.
 			const creds = await decryptJson<ConnectionCredentials>(

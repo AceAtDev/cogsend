@@ -11,7 +11,8 @@ import {
 	isNull,
 	lt,
 	lte,
-	ne
+	ne,
+	sql
 } from 'drizzle-orm';
 import { draftExcerpt } from '#lib/domain/excerpt.js';
 import { describeInstant } from '#lib/domain/zoned-time.js';
@@ -148,17 +149,55 @@ export const connectionAlerts: AlertSource = {
 			)
 			.orderBy(asc(connections.updatedAt))
 			.limit(limit);
+		const lost = rows.map((r) => ({
+			userId: r.userId,
+			at: r.at,
+			group: r.brand ?? NO_BRAND,
+			line: {
+				text: `${account(r.platform, r.handle)} lost access`,
+				detail: 'Reconnect it in Accounts; its scheduled posts wait until then.',
+				href: link(appUrl, '/accounts')
+			}
+		}));
+		// Accounts still working but due to lose access within a week in a way
+		// only a reconnect fixes (token upkeep records it in the metadata).
+		const warnedAt = sql<number>`json_extract(${connections.metaJson}, '$.expiryWarnedAt')`;
+		const soon = await db
+			.select({
+				warnedAt,
+				reconnectBy: sql<number>`json_extract(${connections.metaJson}, '$.reconnectBy')`,
+				userId: connections.userId,
+				platform: connections.platform,
+				handle: connections.handle,
+				brand: brands.name
+			})
+			.from(connections)
+			.leftJoin(brands, eq(connections.brandId, brands.id))
+			.where(
+				and(
+					eq(connections.status, 'active'),
+					inArray(
+						connections.userId,
+						users.map((u) => u.userId)
+					),
+					gt(warnedAt, earliest(users).getTime())
+				)
+			)
+			.orderBy(asc(warnedAt))
+			.limit(limit);
+		const expiring = soon.map((r) => ({
+			userId: r.userId,
+			at: new Date(Number(r.warnedAt)),
+			group: r.brand ?? NO_BRAND,
+			line: {
+				text: `${account(r.platform, r.handle)} needs reconnecting by ${new Date(Number(r.reconnectBy)).toISOString().slice(0, 10)}`,
+				detail:
+					'The platform stops accepting its sign-in then. Reconnecting in Accounts resets it.',
+				href: link(appUrl, '/accounts')
+			}
+		}));
 		return afterCursor(
-			rows.map((r) => ({
-				userId: r.userId,
-				at: r.at,
-				group: r.brand ?? NO_BRAND,
-				line: {
-					text: `${account(r.platform, r.handle)} lost access`,
-					detail: 'Reconnect it in Accounts; its scheduled posts wait until then.',
-					href: link(appUrl, '/accounts')
-				}
-			})),
+			[...lost, ...expiring].sort((a, b) => a.at.getTime() - b.at.getTime()).slice(0, limit),
 			users
 		);
 	}

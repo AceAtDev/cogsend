@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { decryptJson, encryptJson } from '#lib/server/crypto.js';
 import { newId } from '#lib/server/db/client.js';
 import {
@@ -14,6 +14,7 @@ import { LEASE_REFRESH_MS } from '#lib/domain/due-jobs.js';
 import { createTestDb, createTestMedia, TEST_ENV } from '#lib/server/db/test.js';
 import {
 	MAX_PUBLISH_ATTEMPTS,
+	retryDelayMs,
 	buildNormalizedPost,
 	isRetryableError,
 	publishTarget,
@@ -21,6 +22,7 @@ import {
 	statusAfterFailedPublish
 } from '#lib/server/publish.js';
 import type { AppDb } from '#lib/server/db/client.js';
+import { recoverStalePublishing, STALE_GIVE_UP_MESSAGE } from '#lib/server/scheduler.js';
 import { captureConsole, loggedLines } from './console-spy';
 import type { FetchLike } from '#lib/server/providers/types.js';
 
@@ -592,6 +594,43 @@ describe('publishTarget integration', () => {
 		const [row] = await db.select().from(publishTargets).where(eq(publishTargets.id, targetId));
 		expect(row?.status).toBe('failed');
 		expect(row?.jobId).toBeNull();
+	});
+
+	it('keeps retrying a temporary failure for about a day before giving up', () => {
+		let total = 0;
+		for (let attempt = 1; attempt < MAX_PUBLISH_ATTEMPTS; attempt++) total += retryDelayMs(attempt);
+		expect(retryDelayMs(30)).toBe(60 * 60_000);
+		expect(total).toBeGreaterThanOrEqual(20 * 60 * 60_000);
+		expect(total).toBeLessThanOrEqual(30 * 60 * 60_000);
+	});
+
+	it('stops reclaiming a row whose run keeps dying once it has used every attempt', async () => {
+		const now = new Date();
+		const stuck = newId();
+		const fresh = newId();
+		const old = new Date(now.getTime() - 60 * 60_000);
+		for (const [id, attempts] of [
+			[stuck, MAX_PUBLISH_ATTEMPTS],
+			[fresh, 2]
+		] as const) {
+			await db.insert(publishTargets).values({
+				id,
+				draftId: await extraDraft(`stale ${attempts}`),
+				connectionId: connMasto,
+				status: 'publishing',
+				attemptCount: attempts,
+				createdAt: old,
+				updatedAt: old
+			});
+		}
+		await recoverStalePublishing(db, now);
+		const rows = await db
+			.select()
+			.from(publishTargets)
+			.where(inArray(publishTargets.id, [stuck, fresh]));
+		const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+		expect(byId[stuck]).toMatchObject({ status: 'failed', errorMessage: STALE_GIVE_UP_MESSAGE });
+		expect(byId[fresh]).toMatchObject({ status: 'pending' });
 	});
 
 	it('reclaims stale publishing and publishes once', async () => {

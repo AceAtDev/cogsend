@@ -6,6 +6,7 @@ import { connections, draftMedia, drafts, publishTargets, users } from '#lib/ser
 import { createTestDb, createTestMedia, TEST_ENV } from '#lib/server/db/test.js';
 import {
 	isRetryableError,
+	MAX_PUBLISH_ATTEMPTS,
 	publishTarget,
 	VIDEO_PROCESSING_DEADLINE_MS
 } from '#lib/server/publish.js';
@@ -156,7 +157,7 @@ describe('a video the platform is still processing', () => {
 		expect(resumedVideoState(seen[1], 0, 'another.mp4')).toBeNull();
 	});
 
-	it('waits far longer than five attempts without using them up', async () => {
+	it('waits far longer than the attempt limit without using it up', async () => {
 		const { targetId, storageKey } = await videoPost();
 		let at = Date.now();
 		for (let i = 0; i < 12; i++) {
@@ -166,11 +167,11 @@ describe('a video the platform is still processing', () => {
 		}
 		expect(seen.at(-1)?.pending?.state).toEqual({ n: 10 });
 
-		// All five attempts are still there once the video is ready.
+		// Every attempt is still there once the video is ready.
 		const flaky: Step = () => {
 			throw new Error('Mastodon returned 503');
 		};
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < MAX_PUBLISH_ATTEMPTS - 1; i++) {
 			steps = [flaky];
 			expect((await run(targetId, at)).status).toBe('scheduled');
 			at = (await row(targetId)).scheduledFor!.getTime() + 1_000;

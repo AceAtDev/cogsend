@@ -100,7 +100,10 @@ describe('DELETE /api/connections/[id] — archive, not destroy', () => {
 		authMethod: 'session' as const
 	});
 	const disconnect = (id: string) =>
-		disconnectDELETE({ params: { id }, locals: { ...sessionUser(userId), env: TEST_ENV } } as never);
+		disconnectDELETE({
+			params: { id },
+			locals: { ...sessionUser(userId), env: TEST_ENV }
+		} as never);
 
 	beforeAll(async () => {
 		const ctx = await createTestDb();

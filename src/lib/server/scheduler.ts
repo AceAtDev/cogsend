@@ -5,6 +5,7 @@ import {
 	desc,
 	eq,
 	gt,
+	gte,
 	inArray,
 	isNotNull,
 	isNull,
@@ -32,8 +33,15 @@ import {
 } from './db/schema';
 import type { AppEnv } from './env';
 import type { MediaStore } from './media';
-import { PUBLISH_RESERVE_CALLS, pausedConnectionIds, publishTarget } from './publish';
+import {
+	MAX_PUBLISH_ATTEMPTS,
+	PUBLISH_RESERVE_CALLS,
+	pausedConnectionIds,
+	publishTarget
+} from './publish';
 import { purgeOldActivity } from './activity';
+import { runTokenUpkeep } from './token-upkeep';
+import { purgePublishedMedia } from './media-retention';
 import { sweepOverdueReviews } from './review';
 import { countingFetch, type SubrequestBudget } from './budget';
 import { mastodonInstanceLimits } from './providers/mastodon';
@@ -325,17 +333,31 @@ export async function maybeSendFailureDigest(
  */
 export async function recoverStalePublishing(db: AppDb, now: Date = new Date()) {
 	const staleBefore = new Date(now.getTime() - STALE_CLAIM_MS);
+	const stale = and(
+		eq(publishTargets.status, 'publishing'),
+		isNull(publishTargets.remotePostId),
+		lte(publishTargets.updatedAt, staleBefore)
+	);
+	// A row whose run keeps dying (out of calls or CPU part-way through) would
+	// otherwise be reset and reclaimed for ever. Once it has used every
+	// attempt it stops, flagged for a look: the platform may have accepted it.
+	await db
+		.update(publishTargets)
+		.set({
+			status: 'failed',
+			errorMessage: STALE_GIVE_UP_MESSAGE,
+			jobId: null,
+			updatedAt: now
+		})
+		.where(and(stale, gte(publishTargets.attemptCount, MAX_PUBLISH_ATTEMPTS)));
 	await db
 		.update(publishTargets)
 		.set({ status: 'pending', scheduledFor: null, jobId: null, updatedAt: now })
-		.where(
-			and(
-				eq(publishTargets.status, 'publishing'),
-				isNull(publishTargets.remotePostId),
-				lte(publishTargets.updatedAt, staleBefore)
-			)
-		);
+		.where(stale);
 }
+
+export const STALE_GIVE_UP_MESSAGE =
+	'Publishing kept stopping part-way, so CogSend stopped retrying. Check the account on the platform before retrying: the post may already be there.';
 
 export async function claimDueTargets(db: AppDb, now = new Date(), limit = TICK_BATCH_LIMIT) {
 	const staleBefore = new Date(now.getTime() - STALE_CLAIM_MS);
@@ -588,6 +610,24 @@ export async function runSchedulerTick(
 		} catch (err) {
 			console.error('[scheduler] mastodon limits refresh failed', err);
 		}
+		// Tell an outside monitor the scheduler is alive. A dead cron cannot
+		// raise its own alarm, so the monitor emails when these pings stop.
+		await pingHeartbeat(env, opts.fetchImpl, budget);
+		// Hourly: clear the files of posts that finished publishing two weeks
+		// ago, so storage stays flat however much is posted.
+		try {
+			await purgePublishedMedia(db, opts.store, { budget });
+		} catch (err) {
+			console.error('[scheduler] media purge failed', err);
+		}
+		// Hourly too: refresh long-lived tokens before they lapse between posts,
+		// and flag accounts a reconnect alone can save. Before the alert pass
+		// below so a newly expired or expiring account is in this tick's email.
+		try {
+			await runTokenUpkeep(db, env, { fetchImpl: opts.fetchImpl, budget });
+		} catch (err) {
+			console.error('[scheduler] token upkeep failed', err);
+		}
 	}
 	// After the publish pass, like the mastodon refresh: a held delivery whose
 	// time passed stays held, and this flags it and raises the overdue alert.
@@ -638,6 +678,30 @@ export async function runSchedulerTick(
 		notifications,
 		metrics
 	};
+}
+
+/**
+ * GET `HEARTBEAT_URL` (a healthchecks.io-style dead-man's switch), when set.
+ * Only an https URL is used, and a failure is logged, never thrown: the
+ * monitor noticing a missing ping is the whole point.
+ */
+export async function pingHeartbeat(
+	env: AppEnv,
+	fetchImpl: FetchLike | undefined,
+	budget: SubrequestBudget | null | undefined
+): Promise<boolean> {
+	const url = env.HEARTBEAT_URL?.trim();
+	if (!url || !url.startsWith('https://')) return false;
+	if (budget && budget.remaining < 1) return false;
+	const base = fetchImpl ?? providerFetch;
+	const doFetch = budget ? countingFetch(base, budget) : base;
+	try {
+		const res = await doFetch(url, { method: 'GET' });
+		return res.ok;
+	} catch (err) {
+		console.error('[scheduler] heartbeat ping failed', err);
+		return false;
+	}
 }
 
 export async function consumePublishJob(

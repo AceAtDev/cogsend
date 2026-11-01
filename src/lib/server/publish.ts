@@ -50,18 +50,25 @@ import {
 import { providerFetch } from './providers/timed-fetch';
 import { countingFetch, type SubrequestBudget } from './budget';
 
-/** Scheduler stops auto-retrying a target after this many claims; manual retry stays available. */
-export const MAX_PUBLISH_ATTEMPTS = 5;
+/**
+ * Scheduler stops auto-retrying a target after this many claims; manual retry
+ * stays available. With the backoff below (1m, 2m, 4m … capped at an hour)
+ * this keeps retrying a temporary failure (a platform outage, a rate limit)
+ * for about a day, so an outage heals itself instead of needing a Retry
+ * press. Failures that cannot succeed on retry fail at once regardless.
+ */
+export const MAX_PUBLISH_ATTEMPTS = 30;
 
 /** A video still processing after this long is given up on, so a platform
  *  that never finishes cannot keep a target parked for ever. */
 export const VIDEO_PROCESSING_DEADLINE_MS = 45 * 60_000;
 
-// Exponential backoff for retryable failures: 1m, 2m, 4m, 8m … capped at 30m.
-// Without this, a 429 parks as past-due `scheduled` and the next tick hammers
-// the provider immediately, burning all 5 attempts in seconds.
+// Exponential backoff for retryable failures: 1m, 2m, 4m, 8m … capped at an
+// hour. Without this, a 429 parks as past-due `scheduled` and the next tick
+// hammers the provider immediately, burning every attempt in minutes.
+export const RETRY_DELAY_CAP_MS = 60 * 60_000;
 export function retryDelayMs(attempt: number): number {
-	return Math.min(60_000 * 2 ** Math.max(0, attempt - 1), 30 * 60_000);
+	return Math.min(60_000 * 2 ** Math.max(0, attempt - 1), RETRY_DELAY_CAP_MS);
 }
 
 /**

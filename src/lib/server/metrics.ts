@@ -116,19 +116,35 @@ async function readBackoff(db: AppDb, now: number): Promise<Backoff> {
 	return live;
 }
 
+/** Where the last enrolment scan reached, in `app_settings` (epoch ms). */
+export const METRICS_ENROLL_SETTING = 'metrics_enrolled_at';
+/** Rows that turned published shortly before the mark are scanned again. */
+const ENROLL_OVERLAP_MS = 60 * 60_000;
+/** The mark is moved at most this often: one write, not one per tick. */
+const ENROLL_MARK_EVERY_MS = 10 * 60_000;
+
 /**
  * Enrol deliveries published in the snapshot window that have no metrics row
  * yet. One statement whatever the count, so it costs the tick one call.
  * `updated_at` is when the row turned published: a published delivery is
  * locked, and nothing writes to it afterwards.
+ *
+ * This runs every tick, so it scans only from a stored mark (minus an
+ * overlap), not the whole nine-day window: a whole-window scan reads every
+ * recent delivery 1,440 times a day, and at a few dozen posts a day that
+ * alone would use up D1's daily free read allowance.
  */
 export async function enrollPublished(db: AppDb, now = Date.now()) {
-	const since = now - SNAPSHOT_WINDOW_MS;
+	const floor = now - SNAPSHOT_WINDOW_MS;
+	const mark = Number(await readAppSetting(db, METRICS_ENROLL_SETTING));
+	// A mark from the future (a skewed clock, a restored database) is ignored.
+	const markOk = Number.isFinite(mark) && mark > 0 && mark <= now;
+	const since = markOk ? Math.max(floor, mark - ENROLL_OVERLAP_MS) : floor;
 	const platforms = sql.join(
 		COLLECTED_PLATFORMS.map((p) => sql`${p}`),
 		sql`, `
 	);
-	await db.run(sql`INSERT OR IGNORE INTO delivery_metrics
+	const res = (await db.run(sql`INSERT OR IGNORE INTO delivery_metrics
 		(target_id, user_id, platform, published_at, stage, next_due_at, state, failures, updated_at)
 		SELECT pt.id, d.user_id, c.platform, pt.updated_at, 0, pt.updated_at + ${SNAPSHOT_OFFSETS_MS[0]}, 'pending', 0, ${now}
 		FROM publish_targets pt
@@ -139,7 +155,14 @@ export async function enrollPublished(db: AppDb, now = Date.now()) {
 			AND pt.updated_at >= ${since}
 			AND c.platform IN (${platforms})
 			AND NOT EXISTS (SELECT 1 FROM delivery_metrics m WHERE m.target_id = pt.id)
-		LIMIT ${METRICS_DISCOVER_LIMIT}`);
+		LIMIT ${METRICS_DISCOVER_LIMIT}`)) as { meta?: { changes?: number }; rowsAffected?: number };
+	const enrolled = Number(res?.meta?.changes ?? res?.rowsAffected ?? 0);
+	// A full batch may have left rows behind: keep the mark so the next tick
+	// scans the same range again.
+	if (enrolled >= METRICS_DISCOVER_LIMIT) return;
+	if (!markOk || now - mark >= ENROLL_MARK_EVERY_MS) {
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now));
+	}
 }
 
 type WorkRow = {
