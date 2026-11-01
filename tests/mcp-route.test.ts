@@ -148,10 +148,46 @@ async function postMcp(
 describe('MCP route', () => {
 	it('returns JSON, not an SSE stream, for a legacy-classified POST', async () => {
 		const { response } = await postMcp('tools/list', {}, {}, { includeProtocolVersion: false });
-		expect(response.status).toBeGreaterThanOrEqual(400);
+		expect(response.status).toBe(200);
 		expect(response.headers.get('content-type')).toContain('application/json');
 		expect(response.headers.get('content-type')).not.toContain('text/event-stream');
 		expect(response.headers.get('mcp-session-id')).toBeNull();
+	});
+
+	it('serves a 2025-era client: initialize, then tools/list', async () => {
+		const legacyPost = (body: unknown, version?: string) =>
+			POST(
+				requestEvent(
+					new Request('https://cogsend.example/api/mcp', {
+						method: 'POST',
+						headers: {
+							authorization: 'Bearer test',
+							'content-type': 'application/json',
+							accept: 'application/json, text/event-stream',
+							...(version ? { 'mcp-protocol-version': version } : {})
+						},
+						body: JSON.stringify(body)
+					})
+				)
+			);
+		const init = await legacyPost({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'initialize',
+			params: {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: { name: 'legacy-client', version: '1.0.0' }
+			}
+		});
+		expect(init.status).toBe(200);
+		const initPayload = (await init.json()) as { result?: { protocolVersion: string } };
+		expect(initPayload.result?.protocolVersion).toBe('2025-06-18');
+
+		const list = await legacyPost({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, '2025-06-18');
+		expect(list.status).toBe(200);
+		const listPayload = (await list.json()) as { result?: { tools: { name: string }[] } };
+		expect(listPayload.result?.tools.map((t) => t.name)).toContain('schedule_posts');
 	});
 
 	it('rejects subscription streams instead of opening SSE', async () => {

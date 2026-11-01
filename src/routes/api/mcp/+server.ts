@@ -1,8 +1,10 @@
 import {
 	createMcpHandler,
 	isJsonContentType,
+	isLegacyRequest,
 	McpServer,
-	ResourceTemplate
+	ResourceTemplate,
+	WebStandardStreamableHTTPServerTransport
 } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit';
@@ -1461,10 +1463,30 @@ const handler = createMcpHandler(
 		return createServer(event);
 	},
 	{
+		// 2025-era traffic is routed to serveLegacy in POST, which answers JSON.
 		legacy: 'reject',
 		responseMode: 'json'
 	}
 );
+
+/**
+ * Clients still on the 2025 protocol (no per-request envelope; most hosted
+ * agents today) get a fresh stateless server per request. JSON responses, not
+ * SSE, as on the modern path.
+ */
+async function serveLegacy(event: RequestEvent, parsedBody: unknown): Promise<Response> {
+	const server = createServer(event);
+	const transport = new WebStandardStreamableHTTPServerTransport({
+		sessionIdGenerator: undefined,
+		enableJsonResponse: true
+	});
+	try {
+		await server.connect(transport);
+		return await transport.handleRequest(event.request, { parsedBody });
+	} finally {
+		void server.close();
+	}
+}
 
 export const POST: RequestHandler = async (event) => {
 	const parsedBody = isJsonContentType(event.request.headers.get('content-type'))
@@ -1486,6 +1508,7 @@ export const POST: RequestHandler = async (event) => {
 			error: { code: -32601, message: 'Method not found' }
 		});
 	}
+	if (await isLegacyRequest(event.request, parsedBody)) return serveLegacy(event, parsedBody);
 	eventByRequest.set(event.request, event);
 	try {
 		return await handler.fetch(event.request, { parsedBody });
