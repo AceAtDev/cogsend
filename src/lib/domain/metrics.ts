@@ -119,7 +119,8 @@ export type SnapshotKind = (typeof SNAPSHOT_KINDS)[number] | 'manual';
  * (a scheduler that was down for a day), and then the delivery is left alone.
  */
 export const SNAPSHOT_GRACE_MS = 2 * DAY;
-export const SNAPSHOT_WINDOW_MS = SNAPSHOT_OFFSETS_MS[SNAPSHOT_OFFSETS_MS.length - 1] + SNAPSHOT_GRACE_MS;
+export const SNAPSHOT_WINDOW_MS =
+	SNAPSHOT_OFFSETS_MS[SNAPSHOT_OFFSETS_MS.length - 1] + SNAPSHOT_GRACE_MS;
 
 /** When the first snapshot of a delivery published at `publishedAt` is due. */
 export function firstDueAt(publishedAt: number): number | null {
@@ -183,7 +184,9 @@ export function nextAfterFailure(opts: {
 	const { state, publishedAt, failures, now } = opts;
 	if (state === 'not_found' || state === 'unsupported' || state === 'unavailable') return null;
 	const at =
-		state === 'reconnect' ? now + RECONNECT_RETRY_MS : now + retryDelayMs(failures, opts.retryAfterMs);
+		state === 'reconnect'
+			? now + RECONNECT_RETRY_MS
+			: now + retryDelayMs(failures, opts.retryAfterMs);
 	return at > publishedAt + SNAPSHOT_WINDOW_MS ? null : at;
 }
 
@@ -222,7 +225,9 @@ export function metricStateText(state: MetricState, detail?: string | null): str
 		case 'rate_limited':
 			return 'The platform asked CogSend to slow down; metrics are read again shortly.';
 		case 'error':
-			return detail ? `Could not read metrics: ${detail}` : 'Could not read metrics; tried again later.';
+			return detail
+				? `Could not read metrics: ${detail}`
+				: 'Could not read metrics; tried again later.';
 		case 'ok':
 			return '';
 	}
