@@ -8,6 +8,7 @@ import { rotateApiKey, verifyApiKey } from '#lib/server/api-keys.js';
 import type { SessionUser } from '#lib/server/auth.js';
 import { newId, type AppDb } from '#lib/server/db/client.js';
 import {
+	activityLog,
 	apiKeys,
 	brands,
 	connections,
@@ -66,6 +67,12 @@ import * as adminUsersRoute from '../src/routes/api/admin/users/+server';
 import * as adminUserRoute from '../src/routes/api/admin/users/[id]/+server';
 import * as adminInvitesRoute from '../src/routes/api/admin/invites/+server';
 import * as adminRegistrationRoute from '../src/routes/api/admin/registration/+server';
+import * as reviewRoute from '../src/routes/api/review/+server';
+import * as approveRoute from '../src/routes/api/review/approve/+server';
+import * as rejectRoute from '../src/routes/api/review/reject/+server';
+import * as activityRoute from '../src/routes/api/activity/+server';
+import * as reviewPage from '../src/routes/review/+page.server';
+import * as activityPage from '../src/routes/activity/+page.server';
 
 /**
  * Two members on one instance, Alice and Bob. Everything here is Bob reaching
@@ -95,7 +102,9 @@ const a = {
 	mediaKey: '1700000000000-aaaaaaaaaaaaaaaa.jpg',
 	mediaId: '',
 	shareToken: '',
-	apiKey: ''
+	apiKey: '',
+	held: '',
+	heldDraft: ''
 };
 const b = {
 	draft: '',
@@ -303,7 +312,43 @@ beforeAll(async () => {
 	bob = await member('bob@localhost');
 	Object.assign(a, await seed(alice, a.mediaKey));
 	Object.assign(b, await seed(bob, b.mediaKey));
+	// Something of Alice's waiting in her Review inbox, and a line in her log.
+	const now = new Date();
+	a.heldDraft = newId();
+	await db.insert(drafts).values({
+		id: a.heldDraft,
+		userId: alice.id,
+		baseBody: 'secret words of alice, held',
+		status: 'awaiting_review',
+		createdAt: now,
+		updatedAt: now
+	});
+	a.held = newId();
+	await db.insert(publishTargets).values({
+		id: a.held,
+		draftId: a.heldDraft,
+		// Her TikTok, so the checks that count her Mastodon deliveries are unchanged.
+		connectionId: a.tiktok,
+		status: 'awaiting_review',
+		scheduledFor: new Date(now.getTime() + 86_400_000),
+		createdAt: now,
+		updatedAt: now
+	});
+	await db.insert(activityLog).values({
+		id: newId(),
+		userId: alice.id,
+		actorType: 'session',
+		actorLabel: 'You (signed in)',
+		action: 'post.edit',
+		summary: 'secret words of alice, logged',
+		createdAt: now
+	});
 });
+
+async function aliceHeld() {
+	const [row] = await db.select().from(publishTargets).where(eq(publishTargets.id, a.held));
+	return JSON.stringify(row);
+}
 afterAll(() => close());
 
 describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice', (via) => {
@@ -547,7 +592,9 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 				{ draftId: a.draft, base64: Buffer.from([0xff, 0xd8, 0xff]).toString('base64') }
 			],
 			['edit_media', { draftId: a.draft, mediaId: a.mediaId, action: 'remove' }],
-			['media_upload', { action: 'start', draftId: a.draft, size: 20_000_000 }]
+			['media_upload', { action: 'start', draftId: a.draft, size: 20_000_000 }],
+			['resubmit_for_review', { items: [{ deliveryId: a.held }] }],
+			['resubmit_for_review', { items: [{ postId: a.heldDraft }] }]
 		];
 		for (const [name, args] of attempts) {
 			const res = await mcpCall(bobKey, name, args);
@@ -625,6 +672,61 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		}
 		const [own] = await db.select().from(connections).where(eq(connections.id, b.connection));
 		expect(own.brandId).toBe(b.brand);
+		expect(await aliceSnapshot()).toBe(before);
+	});
+
+	it('cannot approve, reject or read her held posts, or read her activity', async () => {
+		const before = await aliceHeld();
+		const snapshot = await aliceSnapshot();
+		for (const body of [
+			{ deliveryIds: [a.held] },
+			{ brandId: a.brand },
+			{ all: true },
+			{ deliveryIds: [a.held], note: 'pwned' }
+		]) {
+			for (const handler of [approveRoute.POST, rejectRoute.POST]) {
+				const res = await call(handler, bobAs(), { body });
+				// A key is refused outright; Bob's session approves only his own.
+				if (via === 'key') expect(res.status).toBe(401);
+				else {
+					expect(res.status).toBe(200);
+					const out = await res.json();
+					expect(JSON.stringify(out)).not.toContain(a.held);
+				}
+			}
+		}
+		expect(await aliceHeld()).toBe(before);
+		for (const res of [
+			await call(reviewRoute.GET, bobAs(), { method: 'GET' }),
+			await call(activityRoute.GET, bobAs(), { method: 'GET' })
+		]) {
+			expect(res.status).toBe(200);
+			const text = await res.text();
+			expect(text).not.toContain(a.held);
+			expect(text).not.toContain(a.heldDraft);
+			expect(text).not.toContain('secret words of alice');
+		}
+		const pages = [
+			await reviewPage.load({ locals: { db, user: bob } } as never),
+			await activityPage.load({
+				locals: { db, user: bob },
+				url: new URL('https://cogsend.example/activity')
+			} as never)
+		];
+		for (const page of pages) expect(JSON.stringify(page)).not.toContain('secret words of alice');
+		expect(await aliceSnapshot()).toBe(snapshot);
+	});
+
+	it('cannot pause, resume or trust her brand', async () => {
+		const before = await aliceSnapshot();
+		for (const body of [{ paused: true }, { paused: false }, { requireApproval: false }]) {
+			const res = await call(brandRoute.PATCH, bobAs(), {
+				method: 'PATCH',
+				params: { id: a.brand },
+				body
+			});
+			expect(res.status).toBe(404);
+		}
 		expect(await aliceSnapshot()).toBe(before);
 	});
 
@@ -765,6 +867,10 @@ describe('the same requests from Alice herself', () => {
 		expect(patched.status, await patched.clone().text()).toBe(200);
 		const cancelled = await call(cancelRoute.POST, asAlice, { params: { id: a.target } });
 		expect([200, 409]).toContain(cancelled.status);
+		const queue = await (await call(reviewRoute.GET, asAlice, { method: 'GET' })).text();
+		expect(queue).toContain(a.held);
+		const approved = await call(approveRoute.POST, asAlice, { body: { deliveryIds: [a.held] } });
+		expect((await approved.json()).approved).toEqual([a.held]);
 	});
 });
 
@@ -959,13 +1065,18 @@ describe('deleting an account', () => {
 				.select()
 				.from(mcpConfirmations)
 				.where(eq(mcpConfirmations.userId, bob.id)),
-			keys: await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, bob.id))
+			keys: await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, bob.id)),
+			activity: await db.select().from(activityLog).where(eq(activityLog.userId, bob.id))
 		});
 		const had = await bobRows();
 		expect(had.brands.length).toBeGreaterThan(0);
 		expect(had.keys.length).toBeGreaterThan(0);
+		expect(had.activity.length).toBeGreaterThan(0);
 		expect((await deleteUserAndData(db, media, bob.id)).done).toBe(true);
-		expect(await bobRows()).toEqual({ brands: [], confirmations: [], keys: [] });
+		expect(await bobRows()).toEqual({ brands: [], confirmations: [], keys: [], activity: [] });
+		expect(
+			(await db.select().from(activityLog).where(eq(activityLog.userId, alice.id))).length
+		).toBeGreaterThan(0);
 		expect(
 			(await db.select().from(mcpIdempotency).where(eq(mcpIdempotency.userId, alice.id))).length
 		).toBeGreaterThan(0);

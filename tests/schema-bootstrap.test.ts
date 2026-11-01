@@ -233,6 +233,39 @@ describe('ensureSchema', () => {
 		client.close();
 	});
 
+	it('adds review, pause and the activity log to a database bootstrapped before 0024', async () => {
+		const { client, binding } = await freshDb();
+		await ensureSchema(binding);
+		await client.execute('DROP TABLE activity_log');
+		await client.execute('ALTER TABLE brands DROP COLUMN require_approval');
+		await client.execute('ALTER TABLE brands DROP COLUMN paused_at');
+		for (const column of ['review_note', 'reviewed_at', 'review_overdue_at'])
+			await client.execute(`ALTER TABLE publish_targets DROP COLUMN ${column}`);
+		await client.execute(
+			"INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES ('u', 'u@x', 'x', 0, 0)"
+		);
+		await client.execute(
+			"INSERT INTO brands (id, user_id, name, slug, color, created_at, updated_at) VALUES ('b', 'u', 'B', 'b', '#000000', 0, 0)"
+		);
+		await forgetBootstrap(client);
+		await ensureSchema(binding);
+		expect(await tableNames(client)).toContain('activity_log');
+		const brandCols = await client.execute('PRAGMA table_info(brands)');
+		expect(brandCols.rows.map((r) => String((r as unknown as { name: string }).name))).toEqual(
+			expect.arrayContaining(['require_approval', 'paused_at'])
+		);
+		const targetCols = await client.execute('PRAGMA table_info(publish_targets)');
+		expect(targetCols.rows.map((r) => String((r as unknown as { name: string }).name))).toEqual(
+			expect.arrayContaining(['review_note', 'reviewed_at', 'review_overdue_at'])
+		);
+		// An existing brand reviews agent writes too: the spec's default.
+		const existing = await client.execute("SELECT require_approval FROM brands WHERE id = 'b'");
+		expect(
+			Number((existing.rows[0] as unknown as { require_approval: number }).require_approval)
+		).toBe(1);
+		client.close();
+	});
+
 	it('checks an up-to-date database with a single query', async () => {
 		const { client, binding } = await freshDb();
 		await ensureSchema(binding);

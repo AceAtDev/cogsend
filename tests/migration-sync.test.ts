@@ -79,6 +79,7 @@ describe('satisfiedMigrations', () => {
 		expect([...satisfied]).toContain('0001_init.sql');
 		expect([...satisfied]).toContain('0013_sessions_security.sql');
 		expect([...satisfied]).toContain('0016_mfa_challenges_expires_idx.sql');
+		expect([...satisfied]).toContain('0024_approvals.sql');
 	});
 
 	it('keeps the 0001 table list in step with the migration', () => {
