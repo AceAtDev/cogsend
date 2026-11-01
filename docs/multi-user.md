@@ -84,7 +84,7 @@ Every account shares one Worker, one D1 database, one R2 bucket and your platfor
 - **Platform apps**: rate limits on your LinkedIn, Threads, Instagram and X apps are per app, so every member's posts count against the same daily allowances. X in particular bills or caps by app tier. Mastodon and Bluesky limits are per user account and not shared.
 - **Resend**: the free plan sends a limited number of emails a day and a month; confirmation emails come out of the same allowance as your failure digests.
 
-The failure digest (`NOTIFY_EMAIL`) goes to you and covers the admins' posts only. Members see their failures in the app; they get no email.
+The failure digest (`NOTIFY_EMAIL`) goes to you and covers the admins' posts only. Members who want email set up their own [Email notifications](notifications.md) in Settings: their own Gmail sender, their own recipients and digest time, covering only their own posts. Only admins can send those through the instance's Resend account. The notification emails run on the scheduler tick after the posts, on the same subrequest budget, so on Workers Free a busy instance sends them a tick or two later rather than delaying a post.
 
 ## What you take on
 
