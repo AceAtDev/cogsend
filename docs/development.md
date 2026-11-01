@@ -37,6 +37,11 @@ real 2FA.
 `npm run doctor` reports what it finds — locally or against a deployment — with
 what to do about it.
 
+[Email notifications](notifications.md) cannot be sent under `npm run dev`: it
+runs the app in Node, which has no Workers TCP sockets, so the test email says
+so. `npm run build && npm run preview` runs the real Worker locally and can
+reach Gmail.
+
 ## Checks
 
 | Command                           | What it does                                         |
