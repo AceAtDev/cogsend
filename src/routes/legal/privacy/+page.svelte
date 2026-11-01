@@ -35,6 +35,10 @@
 		Posts scheduled or published to a connected account: their text, the settings chosen for each
 		post, schedules, and what the platform answered (the post's id and link, or the error).
 	</li>
+	<li>
+		For posts the service published: the public counts the platform reports for them (views, likes,
+		comments, shares), read about an hour, a day and a week after publishing.
+	</li>
 	<li>Photos and videos attached to posts, in storage on the operator's own Cloudflare account.</li>
 </ul>
 
@@ -43,17 +47,19 @@
 	Only to publish and schedule posts to the accounts their owners connected, and to show the
 	operator how those posts did. The service asks each platform only for the permissions publishing
 	needs; on TikTok that is <code>user.info.basic</code> (the profile shown when choosing where a
-	post goes) and
-	<code>video.publish</code> (posting the videos chosen for the account). It does not read a connected
-	account's other videos, followers or messages.
+	post goes), <code>video.publish</code> (posting the videos chosen for the account) and
+	<code>video.list</code> (reading the view, like, comment and share counts of the videos the service
+	itself posted). Counts are looked up only for those videos; the service does not store the account's
+	other videos, and it does not read followers or messages.
 </p>
 
 <h2>Who it is shared with</h2>
 <p>
 	Nobody. Nothing is sold or used for advertising. A post and its media go to a platform only when
 	it is published or scheduled to an account there. Cloudflare hosts the service and processes its
-	data on the operator's behalf. If the operator turns on failure emails, summaries of failed posts
-	are sent to the operator through the email service they configured.
+	data on the operator's behalf. If the operator turns on notification emails, summaries of posts
+	(failures, posts waiting for review, a daily digest) are sent to the addresses the operator
+	listed, through the email account they configured.
 </p>
 
 <h2>Removing access and deleting data</h2>
