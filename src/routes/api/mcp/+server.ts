@@ -38,8 +38,10 @@ import {
 	listPostsOp,
 	MAX_BATCH_POSTS,
 	movePostOp,
+	planDraftTiktok,
 	publishNowOp,
 	reschedulePostsOp,
+	saveDraftTiktok,
 	schedulePostsOp,
 	validateChannelsOp,
 	type AgentContext
@@ -49,6 +51,7 @@ import { loadChannels } from '#lib/server/brands.js';
 import { resolveChannelRef, candidateLines, type ChannelRef } from '#lib/domain/channel-keys.js';
 import { loadPlatformRequirements } from '#lib/server/platform-requirements.js';
 import { requireScope, requireUser } from '#lib/server/require.js';
+import { TIKTOK_PRIVACY_LEVELS } from '#lib/domain/tiktok.js';
 
 const id = z.string().min(1).max(128);
 const anyPlatform = z.enum(PLATFORM_IDS as [PlatformId, ...PlatformId[]]);
@@ -104,6 +107,50 @@ const idempotencyKey = z
 	.optional()
 	.describe(
 		'Any unique string (8-128 of A-Z a-z 0-9 _ . : -). Retrying the identical call with the same key returns the first answer instead of writing twice; kept 24 hours.'
+	);
+// TikTok's guidelines leave every one of these to the creator, with no
+// default. The schema keeps them optional so a missing one reaches the
+// operation, which refuses it with what to send rather than a bare
+// "Invalid input" from the union below.
+const tiktokChoice = {
+	privacy: z
+		.string()
+		.max(40)
+		.optional()
+		.describe(
+			`Required. Who can see the post: one of ${TIKTOK_PRIVACY_LEVELS.join(', ')} that the account offers (get_platform_requirements with the channel lists them). Never assume one.`
+		),
+	allowComment: z.boolean().optional().describe('Required. Allow comments.'),
+	allowDuet: z.boolean().optional().describe('Required. Allow Duets.'),
+	allowStitch: z.boolean().optional().describe('Required. Allow Stitches.'),
+	disclose: z
+		.boolean()
+		.optional()
+		.describe(
+			'Required. The post promotes a brand, product or service; with true, set yourBrand and/or brandedContent.'
+		),
+	yourBrand: z.boolean().optional().describe('Promotes the operator’s own business.'),
+	brandedContent: z
+		.boolean()
+		.optional()
+		.describe('Paid partnership promoting a third party. Cannot be combined with SELF_ONLY.')
+};
+const tiktokEntry = z
+	.object({
+		for: z
+			.string()
+			.min(1)
+			.max(200)
+			.optional()
+			.describe('One TikTok channel key of this post; omit to apply to every TikTok channel.'),
+		...tiktokChoice
+	})
+	.strict();
+const tiktokOptions = z
+	.union([tiktokEntry, z.array(tiktokEntry).min(1).max(10)])
+	.optional()
+	.describe(
+		'Required whenever a TikTok channel is targeted (unless save_draft already stored them): TikTok’s per-post choices, one object for every TikTok channel or a list with `for` per channel. There is no default; ask the operator.'
 	);
 const responseFormat = z
 	.enum(['concise', 'detailed'])
@@ -529,7 +576,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create and schedule posts',
 			annotation: annotations.schedule,
-			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt. Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
+			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt. Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				now: instant,
@@ -564,7 +611,14 @@ function createServer(event: RequestEvent) {
 							channels: ['465cal.tiktok', '465cal.instagram'],
 							draftId: 'DRAFT_WITH_VIDEO',
 							variants: [{ for: '465cal.instagram', text: 'Link in bio' }],
-							runAt: TIME_EXAMPLE
+							runAt: TIME_EXAMPLE,
+							tiktok: {
+								privacy: 'PUBLIC_TO_EVERYONE',
+								allowComment: true,
+								allowDuet: false,
+								allowStitch: false,
+								disclose: false
+							}
 						}
 					],
 					dryRun: true
@@ -622,7 +676,8 @@ function createServer(event: RequestEvent) {
 									.max(4)
 									.optional(),
 								draftId: id.optional(),
-								runAt
+								runAt,
+								tiktok: tiktokOptions
 							})
 							.strict()
 					)
@@ -670,7 +725,7 @@ function createServer(event: RequestEvent) {
 			title: 'Change a post’s channels',
 			annotation: annotations.move,
 			description:
-				'Moves a post from some channels to others (from → to), or adds channels when from is omitted, keeping its content and, unless runAt is given, its scheduled time. The post is checked against every new channel first. Like a new post, it always needs confirmation: the first call returns before/after and a confirmToken, and the identical call with that token applies it; the old deliveries are cancelled before the new ones are scheduled, so a failure never leaves it on both. Use reschedule_posts for a time-only change and cancel_posts to drop a channel without adding one.',
+				'Moves a post from some channels to others (from → to), or adds channels when from is omitted, keeping its content and, unless runAt is given, its scheduled time. The post is checked against every new channel first. Like a new post, it always needs confirmation: the first call returns before/after and a confirmToken, and the identical call with that token applies it; the old deliveries are cancelled before the new ones are scheduled, so a failure never leaves it on both. Moving to a TikTok channel needs tiktok, as in schedule_posts. Use reschedule_posts for a time-only change and cancel_posts to drop a channel without adding one.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				postId: z.string(),
@@ -690,6 +745,7 @@ function createServer(event: RequestEvent) {
 				from: channelRefs.optional(),
 				to: channelRefs,
 				runAt: runAt.optional(),
+				tiktok: tiktokOptions,
 				dryRun,
 				confirmToken,
 				idempotencyKey
@@ -728,7 +784,7 @@ function createServer(event: RequestEvent) {
 			title: 'Publish a post now',
 			annotation: annotations.publish,
 			description:
-				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
+				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure) unless save_draft stored them; there is no default. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				postId: z.string(),
@@ -736,7 +792,16 @@ function createServer(event: RequestEvent) {
 			}),
 			example: { postId: 'POST_ID', channels: ['jobjob.linkedin'], dryRun: true }
 		},
-		z.object({ postId: id, channels: channelRefs, dryRun, confirmToken, idempotencyKey }).strict(),
+		z
+			.object({
+				postId: id,
+				channels: channelRefs,
+				tiktok: tiktokOptions,
+				dryRun,
+				confirmToken,
+				idempotencyKey
+			})
+			.strict(),
 		(input, agent) => publishNowOp(agent, input)
 	);
 
@@ -747,7 +812,7 @@ function createServer(event: RequestEvent) {
 			title: 'Create or edit a draft',
 			annotation: annotations.saveDraft,
 			description:
-				'Creates a draft (no draftId) or edits one: title, text, per-platform variants with options (visibility, spoiler text, poll, explicit thread segments) and the channels it is meant for. A draft is never sent by itself; schedule it with schedule_posts (posts[].draftId) or publish_now. Use it for content that needs media or variant options, then attach media with attach_media. Editing replaces the fields you send; a variant with remove: true is deleted.',
+				'Creates a draft (no draftId) or edits one: title, text, per-platform variants with options (visibility, spoiler text, poll, explicit thread segments) and the channels it is meant for. A draft is never sent by itself; schedule it with schedule_posts (posts[].draftId) or publish_now. Use it for content that needs media or variant options, then attach media with attach_media. Editing replaces the fields you send; a variant with remove: true is deleted. tiktok stores TikTok’s per-post choices for the draft’s TikTok channels, which schedule_posts and publish_now then use.',
 			outputSchema: writeOut({ postId: z.string() }),
 			example: {
 				text: 'Launch week starts Monday',
@@ -792,6 +857,7 @@ function createServer(event: RequestEvent) {
 					)
 					.max(7)
 					.optional(),
+				tiktok: tiktokOptions,
 				idempotencyKey
 			})
 			.strict(),
@@ -799,6 +865,7 @@ function createServer(event: RequestEvent) {
 			const { ctx, userId } = agent;
 			const run = async () => {
 				const { ids, channels } = await resolveIds(agent, input.channels, 'channels');
+				const tiktok = await planDraftTiktok(agent, input.draftId, input.channels, input.tiktok);
 				let draftId = input.draftId;
 				const created = !draftId;
 				if (draftId) {
@@ -827,12 +894,18 @@ function createServer(event: RequestEvent) {
 							...(variant.options ? { options: variant.options } : {})
 						});
 				}
+				// A TikTok variant sent with options replaces them whole, choices included.
+				const rewroteTiktok = input.variants?.some((v) => v.platform === 'tiktok');
+				if (Object.keys(tiktok.choices).length && (input.tiktok !== undefined || rewroteTiktok))
+					await saveDraftTiktok(agent, draftId, tiktok.choices);
+				const missing = tiktok.missing.map((m) => m.channel);
 				return {
 					status: created ? 'created' : 'saved',
 					postId: draftId,
 					channels: channels.map(channelView),
-					next: 'Not scheduled. Attach media with attach_media, then schedule with schedule_posts using posts[].draftId.',
-					summary: `${created ? 'Created' : 'Saved'} draft ${draftId}${channels.length ? ` for ${channels.map((c) => c.key).join(', ')}` : ''}.`
+					...(missing.length ? { tiktokMissing: tiktok.missing } : {}),
+					next: `Not scheduled. Attach media with attach_media, then schedule with schedule_posts using posts[].draftId.${missing.length ? ` ${missing.join(', ')} still need TikTok's per-post choices: ask the operator and send them as tiktok here or in schedule_posts; scheduling refuses TikTok without them.` : ''}`,
+					summary: `${created ? 'Created' : 'Saved'} draft ${draftId}${channels.length ? ` for ${channels.map((c) => c.key).join(', ')}` : ''}.${missing.length ? ` TikTok choices still missing for ${missing.join(', ')}.` : ''}`
 				};
 			};
 			return withIdempotency(

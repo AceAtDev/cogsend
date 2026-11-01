@@ -57,6 +57,17 @@ import {
 	type OperationContext
 } from '#lib/server/api/operations.js';
 import {
+	creatorRulesFromMeta,
+	describeTiktokChoice,
+	planTiktokChoices,
+	storedTiktokChoices,
+	tiktokConsentLine,
+	videoDurationMs,
+	type TiktokOptionsInput,
+	type TiktokPlan
+} from '#lib/server/api/agent-tiktok.js';
+import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
+import {
 	consumeConfirmation,
 	hashPayload,
 	issueConfirmation,
@@ -189,6 +200,71 @@ async function resolveOrFail(
 	return { dir, channels: resolved.channels };
 }
 
+/**
+ * The TikTok choices each TikTok channel goes out with: the call's own, else
+ * the ones saved on the draft. `requireAll` refuses a channel with none.
+ */
+async function planTiktok(
+	agent: AgentContext,
+	dir: Directory,
+	field: string,
+	input: TiktokOptionsInput | undefined,
+	channels: Channel[],
+	draftId: string | null,
+	requireAll = true
+): Promise<TiktokPlan> {
+	const tiktokIds = channels.filter((c) => c.platform === 'tiktok').map((c) => c.connectionId);
+	if (!tiktokIds.length && input === undefined) return { choices: {}, problems: [], missing: [] };
+	const { db } = agent.ctx;
+	const rows = tiktokIds.length
+		? await db
+				.select({ id: connections.id, metaJson: connections.metaJson })
+				.from(connections)
+				.where(and(eq(connections.userId, agent.userId), inArray(connections.id, tiktokIds)))
+		: [];
+	const variants = draftId
+		? await db
+				.select({ platform: draftVariants.platform, optionsJson: draftVariants.optionsJson })
+				.from(draftVariants)
+				.where(eq(draftVariants.draftId, draftId))
+		: [];
+	const media = draftId
+		? await db
+				.select({ mime: draftMedia.mime, metaJson: draftMedia.metaJson })
+				.from(draftMedia)
+				.where(eq(draftMedia.draftId, draftId))
+		: [];
+	const meta = new Map(rows.map((r) => [r.id, r.metaJson]));
+	return planTiktokChoices({
+		field,
+		input,
+		channels,
+		dir,
+		stored: storedTiktokChoices(variants),
+		rulesOf: (id) => creatorRulesFromMeta(meta.get(id)),
+		durationMs: videoDurationMs(media),
+		requireAll
+	});
+}
+
+/** The choices of these connections only, keyed as the REST operations take them. */
+function tiktokFor(
+	choices: Record<string, TiktokPostChoice>,
+	ids: string[]
+): { tiktok?: Record<string, TiktokPostChoice> } {
+	const picked = Object.fromEntries(ids.filter((id) => choices[id]).map((id) => [id, choices[id]]));
+	return Object.keys(picked).length ? { tiktok: picked } : {};
+}
+
+function tiktokFail(plan: TiktokPlan, example: string): never {
+	fail(plan.problems[0], {
+		code: plan.missing.length ? 'tiktok_privacy_required' : 'tiktok_options',
+		problems: plan.problems,
+		tiktokMissing: plan.missing,
+		example
+	});
+}
+
 function view(at: Date | number | null | undefined, timeZone: string): InstantView | null {
 	if (at === null || at === undefined) return null;
 	return describeInstant(at, timeZone);
@@ -248,6 +324,7 @@ export interface ScheduleInputPost {
 	media?: Array<{ url: string; altText?: string }>;
 	draftId?: string;
 	runAt: RunAtInput;
+	tiktok?: TiktokOptionsInput;
 }
 
 export interface ScheduleInput {
@@ -274,6 +351,8 @@ interface PostPlan {
 	issues: Map<string, DraftIssue[]>;
 	mediaSummary: string;
 	bodies: Map<string, string>;
+	/** connection id -> TikTok choices, for every TikTok channel of the post. */
+	tiktok: Record<string, TiktokPostChoice>;
 }
 
 type MediaRow = typeof draftMedia.$inferSelect;
@@ -294,6 +373,8 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 	const dir = await loadChannels(ctx.db, userId);
 	const problems: string[] = [];
 	const unresolved: Resolved['unresolved'] = [];
+	const tiktokProblems: string[] = [];
+	const tiktokMissing: TiktokPlan['missing'] = [];
 	const plans: PostPlan[] = [];
 	let deliveries = 0;
 	for (const [index, post] of input.posts.entries()) {
@@ -384,12 +465,22 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 			groups,
 			issues: new Map(),
 			mediaSummary: mediaSummary(mediaRows, post.media?.length ?? 0),
-			bodies: new Map()
+			bodies: new Map(),
+			tiktok: {}
 		});
-		if (draft) {
-			const plan = plans[plans.length - 1];
-			await checkPlannedContent(agent, plan, draft.baseBody, draftVariantRows, mediaRows);
-		}
+		const plan = plans[plans.length - 1];
+		if (draft) await checkPlannedContent(agent, plan, draft.baseBody, draftVariantRows, mediaRows);
+		const tiktok = await planTiktok(
+			agent,
+			dir,
+			`${at}.tiktok`,
+			post.tiktok,
+			resolved.channels,
+			draft?.id ?? null
+		);
+		plan.tiktok = tiktok.choices;
+		tiktokProblems.push(...tiktok.problems);
+		tiktokMissing.push(...tiktok.missing);
 	}
 	if (deliveries > MAX_BATCH_DELIVERIES)
 		problems.push(
@@ -404,11 +495,20 @@ async function planSchedule(agent: AgentContext, input: ScheduleInput) {
 						`posts[${plan.index}] ${issueLine(`${channel.key} (${accountLabel(channel.platform, channel.handle)})`, issue)}`
 					);
 	}
+	problems.push(...tiktokProblems);
 	if (problems.length) {
+		const onlyTiktok = problems.length === tiktokProblems.length;
 		fail(problems[0], {
-			code: unresolved.length ? 'channel_unresolved' : 'invalid_posts',
+			code: unresolved.length
+				? 'channel_unresolved'
+				: !onlyTiktok
+					? 'invalid_posts'
+					: tiktokMissing.length
+						? 'tiktok_privacy_required'
+						: 'tiktok_options',
 			problems,
-			unresolved
+			unresolved,
+			...(tiktokMissing.length ? { tiktokMissing } : {})
 		});
 	}
 	return { dir, plans };
@@ -604,7 +704,10 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 			g.channels.map((c) => ({
 				channel: channelView(c),
 				text: draftExcerpt(plan.bodies.get(c.connectionId) ?? plan.baseBody ?? '', 160),
-				textLength: (plan.bodies.get(c.connectionId) ?? plan.baseBody ?? '').length
+				textLength: (plan.bodies.get(c.connectionId) ?? plan.baseBody ?? '').length,
+				...(plan.tiktok[c.connectionId]
+					? { tiktok: describeTiktokChoice(plan.tiktok[c.connectionId]) }
+					: {})
 			}))
 		)
 	}));
@@ -612,9 +715,10 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 	const previewLines = preview.flatMap((p) =>
 		p.deliveries.map(
 			(d) =>
-				`posts[${p.index}] → ${d.channel.key} ${d.channel.handle ?? ''} at ${p.runAt.now ? 'NOW' : p.runAt.display}: "${d.text}" (${p.media})`
+				`posts[${p.index}] → ${d.channel.key} ${d.channel.handle ?? ''} at ${p.runAt.now ? 'NOW' : p.runAt.display}: "${d.text}" (${p.media})${'tiktok' in d ? ` [TikTok: ${d.tiktok}]` : ''}`
 		)
 	);
+	const consent = tiktokConsentLine(plans.flatMap((p) => Object.values(p.tiktok)));
 	if (input.dryRun || (confirmationRequired && !input.confirmToken)) {
 		const { token, expiresAt } = await issueConfirmation(
 			ctx.db,
@@ -633,6 +737,7 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 			now: nowView(agent),
 			posts: preview,
 			warnings,
+			...(consent ? { consent } : {}),
 			next: `Nothing is scheduled yet. Check every channel, handle and time above with the operator, then call schedule_posts again with the same posts and confirmToken "${token}" (valid 10 minutes). Change anything and you need a new dry run.`,
 			summary: [
 				status === 'preview'
@@ -640,6 +745,7 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 					: 'NOT SCHEDULED YET — confirmation required.',
 				...previewLines,
 				...warnings.map((w) => `Warning: ${w}`),
+				...(consent ? [consent] : []),
 				`Commit with confirmToken "${token}".`
 			].join('\n')
 		};
@@ -754,7 +860,10 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 			out.postIds.push(draftId);
 			if (plan.runAt.now) {
 				await refuseMediaProblems(ctx, userId, draftId, ids);
-				const published = await publishDraft(ctx, userId, draftId, { connectionIds: ids });
+				const published = await publishDraft(ctx, userId, draftId, {
+					connectionIds: ids,
+					...tiktokFor(plan.tiktok, ids)
+				});
 				scheduledAny = true;
 				for (const r of published.results)
 					out.deliveries.push({
@@ -770,7 +879,8 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 			}
 			const scheduled = await scheduleDraft(ctx, userId, draftId, {
 				connectionIds: ids,
-				runAt: plan.runAt.utc.toISOString()
+				runAt: plan.runAt.utc.toISOString(),
+				...tiktokFor(plan.tiktok, ids)
 			});
 			scheduledAny = true;
 			for (const t of scheduled.targets)
@@ -1021,6 +1131,7 @@ export interface MoveInput {
 	from?: ChannelRef[];
 	to: ChannelRef[];
 	runAt?: RunAtInput;
+	tiktok?: TiktokOptionsInput;
 	dryRun?: boolean;
 	confirmToken?: string;
 	idempotencyKey?: string;
@@ -1103,6 +1214,8 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 		to.map((c) => c.connectionId)
 	);
 	if (!check.ok) fail(check.problems[0], { code: 'invalid_posts', problems: check.problems });
+	const tiktok = await planTiktok(agent, dir, 'tiktok', input.tiktok, to, input.postId);
+	if (tiktok.problems.length) tiktokFail(tiktok, example);
 	const { viewOf } = await channelsFor(agent, targets, dir);
 	const live = targets.filter((t) => t.status !== 'cancelled');
 	const before = live.map((t) => deliveryOut(t, viewOf(t.connectionId), timeZone));
@@ -1142,8 +1255,12 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 		...fromRows.map(
 			(r) => `  remove ${viewOf(r.connectionId).key} ${viewOf(r.connectionId).handle ?? ''}`
 		),
-		...to.map((c) => `  add    ${channelLabel(c)} at ${describeInstant(runAt!, timeZone).display}`)
+		...to.map(
+			(c) =>
+				`  add    ${channelLabel(c)} at ${describeInstant(runAt!, timeZone).display}${tiktok.choices[c.connectionId] ? ` [TikTok: ${describeTiktokChoice(tiktok.choices[c.connectionId])}]` : ''}`
+		)
 	];
+	const consent = tiktokConsentLine(Object.values(tiktok.choices));
 	if (input.dryRun || !input.confirmToken) {
 		const { token, expiresAt } = await issueConfirmation(
 			ctx.db,
@@ -1163,11 +1280,13 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 			before,
 			after: plannedAfter,
 			warnings,
+			...(consent ? { consent } : {}),
 			next: `Nothing moved yet. Confirm the new channels with the operator, then call move_post again with the same arguments and confirmToken "${token}".`,
 			summary: [
 				`${input.dryRun ? 'DRY RUN' : 'NOT MOVED YET — confirmation required'}.`,
 				...lines,
-				...warnings.map((w) => `Warning: ${w}`)
+				...warnings.map((w) => `Warning: ${w}`),
+				...(consent ? [consent] : [])
 			].join('\n')
 		};
 	}
@@ -1194,9 +1313,11 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 					await cancelDelivery(ctx, userId, row.id);
 					cancelled++;
 				}
+				const ids = to.map((c) => c.connectionId);
 				await scheduleDraft(ctx, userId, input.postId, {
-					connectionIds: to.map((c) => c.connectionId),
-					runAt: runAt!.toISOString()
+					connectionIds: ids,
+					runAt: runAt!.toISOString(),
+					...tiktokFor(tiktok.choices, ids)
 				});
 			} catch (err) {
 				if (!cancelled) await spent.release().catch(() => {});
@@ -1325,6 +1446,7 @@ export async function publishNowOp(
 	input: {
 		postId: string;
 		channels: ChannelRef[];
+		tiktok?: TiktokOptionsInput;
 		dryRun?: boolean;
 		confirmToken?: string;
 		idempotencyKey?: string;
@@ -1346,16 +1468,14 @@ export async function publishNowOp(
 	const draft = await loadOwnedDraft(ctx.db, input.postId, userId);
 	if (!draft)
 		fail(`No post "${input.postId}". list_posts shows post ids.`, { code: 'not_found' }, 404);
-	const { channels } = await resolveOrFail(
-		agent,
-		input.channels,
-		'channels',
-		true,
-		`{"postId": "${input.postId}", "channels": ["jobjob.linkedin"], "dryRun": true}`
-	);
+	const example = `{"postId": "${input.postId}", "channels": ["jobjob.linkedin"], "dryRun": true}`;
+	const { dir, channels } = await resolveOrFail(agent, input.channels, 'channels', true, example);
 	const ids = channels.map((c) => c.connectionId);
 	const check = await checkDraft(ctx, userId, input.postId, ids);
 	if (!check.ok) fail(check.problems[0], { code: 'invalid_posts', problems: check.problems });
+	const tiktok = await planTiktok(agent, dir, 'tiktok', input.tiktok, channels, input.postId);
+	if (tiktok.problems.length) tiktokFail(tiktok, example);
+	const consent = tiktokConsentLine(Object.values(tiktok.choices));
 	const targets = await ownedTargets(agent, eq(publishTargets.draftId, input.postId));
 	const already = channels.filter((c) =>
 		targets.some(
@@ -1365,7 +1485,7 @@ export async function publishNowOp(
 	const payloadHash = await hashPayload({ tool: 'publish_now', input: request, channels: ids });
 	const lines = channels.map(
 		(c) =>
-			`  ${channelLabel(c)}${already.includes(c) ? ' — already published, will be skipped' : ''}`
+			`  ${channelLabel(c)}${already.includes(c) ? ' — already published, will be skipped' : ''}${tiktok.choices[c.connectionId] ? ` [TikTok: ${describeTiktokChoice(tiktok.choices[c.connectionId])}]` : ''}`
 	);
 	if (input.dryRun || !input.confirmToken) {
 		const { token, expiresAt } = await issueConfirmation(
@@ -1386,10 +1506,12 @@ export async function publishNowOp(
 			text: draftExcerpt(draft.baseBody, 200),
 			channels: channels.map(channelView),
 			deliveries: [],
+			...(consent ? { consent } : {}),
 			next: `Nothing was sent. This posts publicly right away: confirm with the operator, then call publish_now again with the same arguments and confirmToken "${token}".`,
 			summary: [
 				`${input.dryRun ? 'DRY RUN' : 'NOT SENT — confirmation required'}. Would publish post ${input.postId} now to:`,
-				...lines
+				...lines,
+				...(consent ? [consent] : [])
 			].join('\n')
 		};
 	}
@@ -1411,7 +1533,10 @@ export async function publishNowOp(
 			let published;
 			try {
 				await refuseMediaProblems(ctx, userId, input.postId, ids);
-				published = await publishDraft(ctx, userId, input.postId, { connectionIds: ids });
+				published = await publishDraft(ctx, userId, input.postId, {
+					connectionIds: ids,
+					...tiktokFor(tiktok.choices, ids)
+				});
 			} catch (err) {
 				await spent.release().catch(() => {});
 				throw err;
@@ -1832,7 +1957,8 @@ export async function validateChannelsOp(
 		groups: [{ channels, variants: {} }],
 		issues: new Map(),
 		mediaSummary: '',
-		bodies: new Map()
+		bodies: new Map(),
+		tiktok: {}
 	};
 	let mediaRows: MediaRow[] = [];
 	if (input.draftId) {
@@ -1847,4 +1973,65 @@ export async function validateChannelsOp(
 	});
 	const problems = results.flatMap((r) => r.issues.map((i) => issueLine(r.channel.key, i)));
 	return { ok: problems.length === 0, channels: results, problems };
+}
+
+/**
+ * save_draft's TikTok choices, checked before anything is written. A draft may
+ * be saved without them; what is missing is reported, and schedule_posts or
+ * publish_now refuse the TikTok channel until it is chosen.
+ */
+export async function planDraftTiktok(
+	agent: AgentContext,
+	draftId: string | undefined,
+	refs: ChannelRef[] | undefined,
+	input: TiktokOptionsInput | undefined
+): Promise<TiktokPlan> {
+	const dir = await loadChannels(agent.ctx.db, agent.userId);
+	let channels: Channel[] = [];
+	if (refs?.length) channels = resolveRefs(refs, dir, 'channels', false).channels;
+	else if (draftId) {
+		const draft = await first(
+			agent.ctx.db
+				.select({ selected: drafts.selectedConnectionIds })
+				.from(drafts)
+				.where(and(eq(drafts.id, draftId), eq(drafts.userId, agent.userId)))
+		);
+		const selected = parseJson<unknown>(draft?.selected, null);
+		const ids = Array.isArray(selected) ? selected : [];
+		channels = dir.channels.filter((c) => ids.includes(c.connectionId));
+	}
+	const plan = await planTiktok(agent, dir, 'tiktok', input, channels, draftId ?? null, false);
+	if (plan.problems.length)
+		tiktokFail(
+			plan,
+			'{"text": "Launch week", "channels": ["465cal.tiktok"], "tiktok": {"privacy": "SELF_ONLY", "allowComment": false, "allowDuet": false, "allowStitch": false, "disclose": false}}'
+		);
+	return plan;
+}
+
+/** Keep TikTok choices on the draft's TikTok variant, merged with what is there. */
+export async function saveDraftTiktok(
+	agent: AgentContext,
+	draftId: string,
+	choices: Record<string, TiktokPostChoice>
+) {
+	const existing = await first(
+		agent.ctx.db
+			.select({ optionsJson: draftVariants.optionsJson })
+			.from(draftVariants)
+			.where(and(eq(draftVariants.draftId, draftId), eq(draftVariants.platform, 'tiktok')))
+	);
+	const options = parseJson<Record<string, unknown>>(existing?.optionsJson, {});
+	await setDraftVariant(agent.ctx, agent.userId, draftId, {
+		platform: 'tiktok',
+		options: {
+			...options,
+			tiktok: {
+				...storedTiktokChoices([
+					{ platform: 'tiktok', optionsJson: existing?.optionsJson ?? null }
+				]),
+				...choices
+			}
+		}
+	});
 }

@@ -438,7 +438,7 @@ export const tiktokProvider: PlatformProvider = {
 		altText: { images: false, videos: false },
 		notes: [
 			'Exactly one video per post; photo posts need a verified domain and are not supported',
-			'Privacy, comments, Duet and Stitch come from the account settings and what TikTok allows the creator',
+			'Who can see it, comments, Duet, Stitch and the commercial-content disclosure are chosen for each post, from what TikTok offers the account, with no default',
 			'Until TikTok audits the app, every post is Only me and only private accounts can post'
 		]
 	},

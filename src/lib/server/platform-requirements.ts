@@ -16,6 +16,7 @@ import {
 } from '#lib/domain/video-rules.js';
 import { parseJson, type AppDb } from './db/client';
 import { connections } from './db/schema';
+import { TIKTOK_PRIVACY_LEVELS, tiktokPrivacyOptions } from '#lib/domain/tiktok.js';
 import { MAX_ALT_LENGTH, MAX_FILES_PER_DRAFT } from './draft-media';
 import { UPLOAD_PART_BYTES } from './media-uploads';
 import { getProvider, type ConnectionMeta, type PlatformProvider } from './providers/index';
@@ -78,6 +79,27 @@ export interface PlatformRequirements {
 	video: VideoRequirements;
 	altText: { images: boolean; videos: boolean; maxLength: number };
 	notes: string[];
+	/** TikTok only: the choices every post must carry (see TiktokPostChoice). */
+	tiktok?: TiktokRequirements;
+}
+
+export interface TiktokRequirements {
+	perPostChoices: {
+		required: true;
+		privacyLevels: string[];
+		fields: Record<string, string>;
+		rules: string[];
+	};
+}
+
+/** What creator_info last said about one TikTok account. */
+export interface TiktokAccountRequirements {
+	/** Empty until creator_info was read; the composer or a reconnect reads it. */
+	privacyOptions: string[];
+	commentDisabled: boolean;
+	duetDisabled: boolean;
+	stitchDisabled: boolean;
+	maxVideoSec: number | null;
 }
 
 export interface AccountRequirements {
@@ -88,6 +110,7 @@ export interface AccountRequirements {
 	status: string;
 	text: { maxCharacters: number | null };
 	video: VideoRequirements;
+	tiktok?: TiktokAccountRequirements;
 	summary: string;
 }
 
@@ -102,6 +125,29 @@ export interface StoreLimits {
 	maxAltTextLength: number;
 	uploadPartBytes: number;
 }
+
+const TIKTOK_REQUIREMENTS: TiktokRequirements = {
+	perPostChoices: {
+		required: true,
+		privacyLevels: [...TIKTOK_PRIVACY_LEVELS],
+		fields: {
+			privacy:
+				'Who can see the post: one of the levels the account offers (accounts[].tiktok.privacyOptions)',
+			allowComment: 'true or false',
+			allowDuet: 'true or false',
+			allowStitch: 'true or false',
+			disclose: 'true when the post promotes a brand, product or service',
+			yourBrand: "with disclose: promotes the operator's own business",
+			brandedContent: 'with disclose: paid partnership promoting a third party'
+		},
+		rules: [
+			'Nothing has a default: every field but yourBrand and brandedContent must be chosen for each post',
+			'With disclose true, at least one of yourBrand and brandedContent must be true',
+			'Branded content cannot be SELF_ONLY',
+			'An interaction the creator turned off in the TikTok app stays off'
+		]
+	}
+};
 
 function megabytes(bytes: number): string {
 	return `${Math.round(bytes / 1_000_000)} MB`;
@@ -171,6 +217,10 @@ function summarize(r: Omit<PlatformRequirements, 'summary'>): string {
 	}
 	if (r.threads.supported) parts.push('threads supported');
 	else parts.push('no threads (segments are joined into one post)');
+	if (r.tiktok)
+		parts.push(
+			'each post needs its privacy, comments, Duet, Stitch and disclosure chosen, no default'
+		);
 	return `${r.name}: ${parts.join('; ')}.`;
 }
 
@@ -225,7 +275,8 @@ export function platformRequirements(
 			videos: altText.videos,
 			maxLength: Math.min(altText.maxLength ?? MAX_ALT_LENGTH, MAX_ALT_LENGTH)
 		},
-		notes: [...(declared.notes ?? [])]
+		notes: [...(declared.notes ?? [])],
+		...(provider.id === 'tiktok' ? { tiktok: TIKTOK_REQUIREMENTS } : {})
 	};
 	return { ...base, summary: summarize(base) };
 }
@@ -259,6 +310,19 @@ function accountRequirements(
 	const video = videoRequirements(provider, meta);
 	const maxCharacters = textLimit(row.platform, meta);
 	const label = `${platform.name} ${row.handle ?? row.id}`;
+	const tiktok: TiktokAccountRequirements | undefined =
+		row.platform === 'tiktok'
+			? {
+					privacyOptions: tiktokPrivacyOptions({ privacyOptions: meta.tiktokPrivacyOptions }),
+					commentDisabled: meta.tiktokCommentDisabled === true,
+					duetDisabled: meta.tiktokDuetDisabled === true,
+					stitchDisabled: meta.tiktokStitchDisabled === true,
+					maxVideoSec: meta.tiktokMaxVideoSec ?? null
+				}
+			: undefined;
+	const choices = tiktok
+		? `; each post needs its TikTok choices${tiktok.privacyOptions.length ? `, privacy one of ${tiktok.privacyOptions.join(', ')}` : ''}`
+		: '';
 	const text = maxCharacters
 		? `text up to ${maxCharacters.toLocaleString('en-US')} characters`
 		: 'text';
@@ -270,7 +334,8 @@ function accountRequirements(
 		status: row.status,
 		text: { maxCharacters },
 		video,
-		summary: `${label}: ${text}; ${videoSummary(video)}${row.status === 'active' ? '' : `; account is ${row.status}`}.`
+		...(tiktok ? { tiktok } : {}),
+		summary: `${label}: ${text}; ${videoSummary(video)}${choices}${row.status === 'active' ? '' : `; account is ${row.status}`}.`
 	};
 }
 
