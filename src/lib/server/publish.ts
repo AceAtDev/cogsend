@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { isLocalAppUrl } from '#lib/domain/app-url.js';
 import { safeHttpUrl } from '#lib/domain/links.js';
@@ -19,6 +19,7 @@ import { targetRecordKey } from '#lib/domain/tid.js';
 import { decryptJson, encryptJson } from './crypto';
 import { chunkIds, first, newId, parseJson, type AppDb } from './db/client';
 import {
+	brands,
 	connections,
 	draftMedia,
 	drafts,
@@ -543,6 +544,10 @@ export async function publishTarget(
 			and(
 				eq(publishTargets.id, targetId),
 				eq(publishTargets.attemptCount, target.attemptCount),
+				// A paused brand publishes nothing, whoever asks: a queued job, a
+				// retry or a publish that raced the pause. Part of the claim, so
+				// it costs no statement of its own.
+				notInArray(publishTargets.connectionId, pausedConnectionIds(db)),
 				or(
 					inArray(publishTargets.status, ['pending', 'failed']),
 					and(eq(publishTargets.status, 'scheduled'), lte(publishTargets.scheduledFor, now)),
@@ -1116,6 +1121,15 @@ async function markFailed(
 	return nextStatus;
 }
 
+/** Accounts in a paused brand, as a subquery: nothing of theirs may be claimed. */
+export function pausedConnectionIds(db: AppDb) {
+	return db
+		.select({ id: connections.id })
+		.from(connections)
+		.innerJoin(brands, eq(brands.id, connections.brandId))
+		.where(isNotNull(brands.pausedAt));
+}
+
 /**
  * Correlated status expression: evaluated by the database at UPDATE time from
  * the target rows as they exist then, so a concurrent publish cannot be
@@ -1126,6 +1140,7 @@ const DRAFT_STATUS_SQL = sql`(
 	SELECT CASE
 		WHEN a = 0 THEN 'draft'
 		WHEN p = a THEN 'published'
+		WHEN r > 0 AND s = r AND p = 0 AND f = 0 THEN 'awaiting_review'
 		WHEN s > 0 AND p = 0 AND f = 0 THEN 'scheduled'
 		WHEN p > 0 AND (f > 0 OR s > 0) THEN 'partial'
 		WHEN f = a THEN 'failed'
@@ -1135,10 +1150,11 @@ const DRAFT_STATUS_SQL = sql`(
 	END
 	FROM (
 		SELECT
-			COUNT(CASE WHEN status <> 'cancelled' THEN 1 END) AS a,
+			COUNT(CASE WHEN status NOT IN ('cancelled', 'rejected') THEN 1 END) AS a,
 			COUNT(CASE WHEN status = 'published' THEN 1 END) AS p,
 			COUNT(CASE WHEN status = 'failed' THEN 1 END) AS f,
-			COUNT(CASE WHEN status IN ('scheduled', 'pending', 'publishing') THEN 1 END) AS s
+			COUNT(CASE WHEN status IN ('scheduled', 'pending', 'publishing', 'awaiting_review') THEN 1 END) AS s,
+			COUNT(CASE WHEN status = 'awaiting_review' THEN 1 END) AS r
 		FROM publish_targets
 		WHERE draft_id = drafts.id
 	)

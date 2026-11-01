@@ -34,7 +34,15 @@ import {
 export const CALENDAR_ITEM_CAP = 400;
 export const UNSCHEDULED_CAP = 30;
 
-const RANGE_STATUSES = ['scheduled', 'pending', 'publishing', 'published', 'failed'];
+const RANGE_STATUSES = [
+	'awaiting_review',
+	'rejected',
+	'scheduled',
+	'pending',
+	'publishing',
+	'published',
+	'failed'
+];
 
 function toMs(value: Date | number | null): number | null {
 	if (value === null) return null;

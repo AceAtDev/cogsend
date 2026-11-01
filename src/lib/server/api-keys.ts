@@ -89,18 +89,28 @@ export async function revokeApiKeys(db: AppDb, userId: string): Promise<number> 
 export async function verifyApiKey(
 	db: AppDb,
 	raw: string | null | undefined
-): Promise<{ keyId: string; userId: string; scopes: ApiScope[] } | null> {
+): Promise<{ keyId: string; prefix: string; userId: string; scopes: ApiScope[] } | null> {
 	// Format gate first: no hashing and no DB query for values that can
 	// never be a key (wrong prefix, wrong length, non-hex).
 	if (!isApiKeyFormat(raw)) return null;
 	const row = await first(
 		db
-			.select({ keyId: apiKeys.id, userId: apiKeys.userId, scopes: apiKeys.scopes })
+			.select({
+				keyId: apiKeys.id,
+				prefix: apiKeys.prefix,
+				userId: apiKeys.userId,
+				scopes: apiKeys.scopes
+			})
 			.from(apiKeys)
 			.where(and(eq(apiKeys.keyHash, await hashApiKey(raw)), isNull(apiKeys.revokedAt)))
 	);
 	if (!row) return null;
-	return { keyId: row.keyId, userId: row.userId, scopes: parseApiScopes(row.scopes) };
+	return {
+		keyId: row.keyId,
+		prefix: row.prefix,
+		userId: row.userId,
+		scopes: parseApiScopes(row.scopes)
+	};
 }
 
 /** Best-effort `last_used_at` touch. Never throws — key metadata must not

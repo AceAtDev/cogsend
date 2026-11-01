@@ -24,6 +24,9 @@ declare global {
 			// API-key scopes (null for sessions and the env API_TOKEN operator
 			// key, which stay unrestricted). Null = no scope check.
 			apiKeyScopes: string[] | null;
+			// The personal API key this request authenticated with, for the
+			// activity log; null for sessions and the API_TOKEN.
+			apiKey?: { id: string; prefix: string } | null;
 			// This request's subrequest count (D1, R2, queue, provider fetches).
 			budget: SubrequestBudget;
 			// The Worker's bindings as Cloudflare passes them; `env` above is the

@@ -10,6 +10,7 @@ import {
 	secretMatches
 } from '#lib/domain/bearer.js';
 import { isApiKeyFormat, touchApiKey, verifyApiKey } from '#lib/server/api-keys.js';
+import { actorOf, recordActivity, restActivity } from '#lib/server/activity.js';
 import {
 	SESSION_COOKIE,
 	asMachineUser,
@@ -246,6 +247,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.authMethod = null;
 	event.locals.authCredential = null;
 	event.locals.apiKeyScopes = null;
+	event.locals.apiKey = null;
 	const raw = event.cookies.get(SESSION_COOKIE);
 	const bearer = extractBearerToken(event.request.headers);
 	// The admin row is only needed to mint the machine user for the env
@@ -313,6 +315,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				event.locals.authMethod = 'bearer';
 				event.locals.authCredential = 'personal_api_key';
 				event.locals.apiKeyScopes = verified.scopes;
+				event.locals.apiKey = { id: verified.keyId, prefix: verified.prefix };
 				// last_used_at is best-effort metadata: it is not worth delaying
 				// the response for.
 				waitUntil(touchApiKey(db, verified.keyId));
@@ -442,5 +445,18 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return deny(path, 303, { error: 'Forbidden' }, secureRequest, '/');
 	}
 
-	return withPageSecurity(path, await resolve(event), secureRequest);
+	const response = await resolve(event);
+	const activity =
+		user &&
+		restActivity({
+			method: event.request.method,
+			routeId: event.route.id,
+			params: event.params as Record<string, string>,
+			path,
+			status: response.status,
+			authCredential: event.locals.authCredential
+		});
+	// After the response is ready, so the write it describes is never slowed by it.
+	if (activity) waitUntil(recordActivity(db, user.id, actorOf(event.locals), activity));
+	return withPageSecurity(path, response, secureRequest);
 };

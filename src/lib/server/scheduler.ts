@@ -12,6 +12,7 @@ import {
 	lt,
 	ne,
 	notExists,
+	notInArray,
 	or
 } from 'drizzle-orm';
 import { isLocalAppUrl } from '#lib/domain/app-url.js';
@@ -31,7 +32,9 @@ import {
 } from './db/schema';
 import type { AppEnv } from './env';
 import type { MediaStore } from './media';
-import { PUBLISH_RESERVE_CALLS, publishTarget } from './publish';
+import { PUBLISH_RESERVE_CALLS, pausedConnectionIds, publishTarget } from './publish';
+import { purgeOldActivity } from './activity';
+import { sweepOverdueReviews } from './review';
 import { countingFetch, type SubrequestBudget } from './budget';
 import { mastodonInstanceLimits } from './providers/mastodon';
 import { providerFetch } from './providers/timed-fetch';
@@ -89,7 +92,9 @@ export async function schedulerHealth(db: AppDb, now = new Date()): Promise<Sche
 				and(
 					isNull(publishTargets.remotePostId),
 					inArray(publishTargets.status, ['scheduled', 'pending']),
-					lte(publishTargets.scheduledFor, now)
+					lte(publishTargets.scheduledFor, now),
+					// A paused brand's posts are held on purpose, not late.
+					notInArray(publishTargets.connectionId, pausedConnectionIds(db))
 				)
 			)
 	])) as [{ lastOkAt: Date }[], { n: unknown }[], { n: unknown }[]];
@@ -342,7 +347,10 @@ export async function claimDueTargets(db: AppDb, now = new Date(), limit = TICK_
 				// be attempted: publishTarget would burn attempts on an
 				// account the user has already let go of. Nor are the posts of
 				// a CogSend account that is suspended or not yet approved: they
-				// wait, and go out once it is active again.
+				// wait, and go out once it is active again. The same goes for a
+				// brand the operator paused. Held-for-review rows never match the
+				// statuses below at all.
+				notInArray(publishTargets.connectionId, pausedConnectionIds(db)),
 				inArray(
 					publishTargets.connectionId,
 					db
@@ -389,7 +397,8 @@ export const JANITOR_SETTING = 'janitor_at';
 
 /**
  * Clear rows nothing will read again: expired connect attempts and MFA
- * challenges, expired sessions, and disconnected accounts with no history left.
+ * challenges, expired sessions, disconnected accounts with no history left,
+ * and activity older than its retention.
  * Each table grows on its own (a challenge per sign-in attempt, a session per
  * device), but none of it is urgent, so this runs hourly rather than every
  * tick: on the Workers Free plan each statement comes out of the 50 calls the
@@ -405,6 +414,7 @@ export async function runJanitorsIfDue(db: AppDb, now = new Date()): Promise<boo
 	await purgeDisconnectedConnections(db);
 	await purgeExpiredMfaChallenges(db, now);
 	await purgeExpiredSessions(db);
+	await purgeOldActivity(db, now);
 	await writeAppSetting(db, JANITOR_SETTING, String(now.getTime()));
 	return true;
 }
@@ -574,6 +584,14 @@ export async function runSchedulerTick(
 			console.error('[scheduler] mastodon limits refresh failed', err);
 		}
 	}
+	// After the publish pass, like the mastodon refresh: a held delivery whose
+	// time passed stays held, and this flags it and raises the overdue alert.
+	let reviewAlerts = 0;
+	try {
+		reviewAlerts = (await sweepOverdueReviews(db, env)).length;
+	} catch (err) {
+		console.error('[scheduler] review sweep failed', err);
+	}
 	// After the publish pass so failures from this tick are included. No-op
 	// unless the digest env is configured.
 	// Never let alerting break the publish path (e.g. env configured before
@@ -585,7 +603,7 @@ export async function runSchedulerTick(
 		console.error('[scheduler] failure digest failed', err);
 	}
 	const deferred = results.filter((r) => r.status === 'deferred').length;
-	return { processed: results.length - deferred, deferred, results, digest };
+	return { processed: results.length - deferred, deferred, results, digest, reviewAlerts };
 }
 
 export async function consumePublishJob(

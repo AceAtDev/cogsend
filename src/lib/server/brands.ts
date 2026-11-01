@@ -27,6 +27,9 @@ export function serializeBrand(row: BrandRow) {
 		name: row.name,
 		slug: row.slug,
 		color: row.color,
+		requireApproval: row.requireApproval,
+		paused: row.pausedAt !== null,
+		pausedAt: row.pausedAt,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt
 	};
@@ -47,7 +50,12 @@ export async function listBrandRows(db: AppDb, userId: string): Promise<BrandRow
 export async function loadChannels(
 	db: AppDb,
 	userId: string
-): Promise<{ brands: BrandRef[]; channels: Channel[] }> {
+): Promise<{
+	brands: BrandRef[];
+	channels: Channel[];
+	/** Per brand id: whether agent writes wait for review, and whether it is paused. */
+	review: Map<string, { requireApproval: boolean; paused: boolean; pausedAt: Date | null }>;
+}> {
 	const [brandRows, rows] = await Promise.all([
 		listBrandRows(db, userId),
 		db
@@ -64,7 +72,16 @@ export async function loadChannels(
 			.where(and(eq(connections.userId, userId), ne(connections.status, 'disconnected')))
 	]);
 	const refs = brandRows.map(({ id, name, slug, color }) => ({ id, name, slug, color }));
-	return { brands: refs, channels: assignChannelKeys(refs, rows) };
+	return {
+		brands: refs,
+		channels: assignChannelKeys(refs, rows),
+		review: new Map(
+			brandRows.map((b) => [
+				b.id,
+				{ requireApproval: b.requireApproval, paused: b.pausedAt !== null, pausedAt: b.pausedAt }
+			])
+		)
+	};
 }
 
 function parseName(raw: unknown): string {
@@ -126,7 +143,23 @@ export async function createBrand(db: AppDb, userId: string, input: unknown) {
 	return { brand: serializeBrand(row) };
 }
 
-export async function updateBrand(db: AppDb, userId: string, id: string, input: unknown) {
+function parseFlag(raw: unknown, field: string): boolean {
+	if (typeof raw !== 'boolean') invalid(`${field} must be true or false`);
+	return raw;
+}
+
+/**
+ * `relax` is whether the caller may make the brand less careful: stop reviewing
+ * agent writes, or resume publishing. Only a signed-in operator may; an agent's
+ * key may only tighten (review again, pause), so it can never approve itself.
+ */
+export async function updateBrand(
+	db: AppDb,
+	userId: string,
+	id: string,
+	input: unknown,
+	opts: { relax?: boolean; now?: Date } = {}
+) {
 	const row = await first(
 		db
 			.select()
@@ -136,9 +169,24 @@ export async function updateBrand(db: AppDb, userId: string, id: string, input: 
 	if (!row) invalid('Not found', 404);
 	if (!input || typeof input !== 'object') invalid('Invalid JSON body');
 	const body = input as Record<string, unknown>;
-	const patch: Partial<Pick<BrandRow, 'name' | 'slug' | 'color'>> = {};
+	const patch: Partial<Pick<BrandRow, 'name' | 'slug' | 'color' | 'requireApproval' | 'pausedAt'>> =
+		{};
 	if (body.name !== undefined) patch.name = parseName(body.name);
 	if (body.color !== undefined) patch.color = parseColor(body.color);
+	const relax = opts.relax ?? true;
+	if (body.requireApproval !== undefined) {
+		const want = parseFlag(body.requireApproval, 'requireApproval');
+		if (!want && !relax)
+			invalid('Only the operator, signed in to CogSend, can stop reviewing agent posts', 403);
+		patch.requireApproval = want;
+	}
+	if (body.paused !== undefined) {
+		const want = parseFlag(body.paused, 'paused');
+		if (!want && row.pausedAt && !relax)
+			invalid('Only the operator, signed in to CogSend, can resume a paused brand', 403);
+		// Pausing a paused brand keeps when it was first paused.
+		if (want !== (row.pausedAt !== null)) patch.pausedAt = want ? (opts.now ?? new Date()) : null;
+	}
 	// Changing the slug renames every channel key of the brand, so it is never
 	// a side effect of a rename: only an explicit `slug` changes it.
 	if (body.slug !== undefined) {
@@ -146,13 +194,76 @@ export async function updateBrand(db: AppDb, userId: string, id: string, input: 
 		if (await slugTaken(db, userId, patch.slug, id))
 			invalid(`A brand already uses "${patch.slug}"`, 409);
 	}
-	if (!Object.keys(patch).length) invalid('Send name, color or slug');
+	const sent = ['name', 'color', 'slug', 'requireApproval', 'paused'].some(
+		(field) => body[field] !== undefined
+	);
+	if (!sent) invalid('Send name, color, slug, requireApproval or paused');
+	if (!Object.keys(patch).length) return { brand: serializeBrand(row), changes: [] };
 	const [updated] = await db
 		.update(brands)
-		.set({ ...patch, updatedAt: new Date() })
+		.set({ ...patch, updatedAt: opts.now ?? new Date() })
 		.where(eq(brands.id, id))
 		.returning();
-	return { brand: serializeBrand(updated) };
+	return { brand: serializeBrand(updated), changes: brandChanges(row, updated) };
+}
+
+/** One line per thing that changed, for the activity log. */
+export function brandChanges(before: BrandRow, after: BrandRow) {
+	const out: Array<{ action: string; summary: string; before: string; after: string }> = [];
+	if (before.name !== after.name)
+		out.push({
+			action: 'brand.rename',
+			summary: `Renamed ${before.name} to ${after.name}`,
+			before: before.name,
+			after: after.name
+		});
+	if (before.slug !== after.slug)
+		out.push({
+			action: 'brand.slug',
+			summary: `Changed ${after.name}’s key from ${before.slug} to ${after.slug}`,
+			before: before.slug,
+			after: after.slug
+		});
+	if (before.color !== after.color)
+		out.push({
+			action: 'brand.color',
+			summary: `Changed ${after.name}’s colour`,
+			before: before.color,
+			after: after.color
+		});
+	if (before.requireApproval !== after.requireApproval)
+		out.push(
+			after.requireApproval
+				? {
+						action: 'brand.review_on',
+						summary: `Agent posts on ${after.name} wait for review`,
+						before: 'trusted',
+						after: 'review'
+					}
+				: {
+						action: 'brand.review_off',
+						summary: `${after.name} is trusted: agent posts skip review`,
+						before: 'review',
+						after: 'trusted'
+					}
+		);
+	if ((before.pausedAt === null) !== (after.pausedAt === null))
+		out.push(
+			after.pausedAt
+				? {
+						action: 'brand.pause',
+						summary: `Paused ${after.name}: nothing of it is published`,
+						before: 'active',
+						after: 'paused'
+					}
+				: {
+						action: 'brand.resume',
+						summary: `Resumed ${after.name}`,
+						before: 'paused',
+						after: 'active'
+					}
+		);
+	return out;
 }
 
 /** Its accounts stay connected and become unbranded. */

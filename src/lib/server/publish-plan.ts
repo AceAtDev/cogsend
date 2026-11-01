@@ -29,7 +29,16 @@ export type EnsuredTarget = {
 	inFlight: boolean;
 };
 
-const REUSABLE_STATUSES = ['pending', 'scheduled', 'failed', 'cancelled'] as const;
+// Held and rejected rows are reused like any waiting one: scheduling the post
+// again (the operator from the composer, an agent resubmitting) re-plans them.
+const REUSABLE_STATUSES = [
+	'pending',
+	'scheduled',
+	'failed',
+	'cancelled',
+	'awaiting_review',
+	'rejected'
+] as const;
 
 function timeMs(value: Date | string | number | null | undefined): number {
 	if (value instanceof Date) return value.getTime();
@@ -193,7 +202,10 @@ export async function ensureTargets(
 	conns: ConnectionRow[],
 	mode: 'now' | 'schedule',
 	runAt: Date | null,
-	now: Date = new Date()
+	now: Date = new Date(),
+	/** Accounts whose row waits for review instead (#lib/server/review). A
+	 *  held "publish now" keeps `now` as its time, so it reads as overdue. */
+	hold: ReadonlySet<string> = new Set()
 ): Promise<EnsuredTarget[]> {
 	const variants = await db.select().from(draftVariants).where(eq(draftVariants.draftId, draftId));
 	// One read for the whole draft instead of one per connection: D1 counts
@@ -214,6 +226,9 @@ export async function ensureTargets(
 		if (winner) await cancelSiblings(db, rows, winner.id, now);
 
 		const variant = variants.find((v) => v.platform === conn.platform);
+		const held = hold.has(conn.id);
+		const status = held ? 'awaiting_review' : mode === 'schedule' ? 'scheduled' : 'pending';
+		const scheduledFor = mode === 'schedule' ? runAt : held ? now : null;
 
 		if (!winner) {
 			try {
@@ -224,8 +239,8 @@ export async function ensureTargets(
 						draftId,
 						connectionId: conn.id,
 						variantId: variant?.id ?? null,
-						status: mode === 'schedule' ? 'scheduled' : 'pending',
-						scheduledFor: mode === 'schedule' ? runAt : null,
+						status,
+						scheduledFor,
 						attemptCount: 0,
 						createdAt: now,
 						updatedAt: now
@@ -258,9 +273,12 @@ export async function ensureTargets(
 		const [updated] = await db
 			.update(publishTargets)
 			.set({
-				status: mode === 'schedule' ? 'scheduled' : 'pending',
-				scheduledFor: mode === 'schedule' ? runAt : null,
+				status,
+				scheduledFor,
 				errorMessage: null,
+				// A fresh plan is a fresh review: the overdue alert may fire again.
+				reviewOverdueAt: null,
+				...(held ? {} : { reviewNote: null }),
 				// Clear orphaned queue claims so a stale jobId cannot fire a
 				// ghost consumer. attemptCount is intentionally preserved here:
 				// silent reuse must not mint a fresh retry budget (explicit

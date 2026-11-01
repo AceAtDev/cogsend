@@ -52,6 +52,8 @@ import { serializeMedia } from '#lib/server/serialize.js';
 import { ApiOperationError } from '#lib/server/api/operation-error.js';
 import type { FetchLike } from '#lib/server/providers/types.js';
 import type { OperationContext } from '#lib/server/api/operations.js';
+import { actorOf } from '#lib/server/activity.js';
+import { isAgentWrite, reholdAfterAgentEdit } from '#lib/server/review.js';
 
 /**
  * Attaching, changing and removing a draft's media, shared by the REST media
@@ -75,6 +77,10 @@ async function editableDraft(ctx: OperationContext, userId: string, draftId: str
 	if (!draft) invalid('Not found', 404);
 	const blocked = await draftMediaEditBlock(ctx.db, draftId);
 	if (blocked) invalid(blocked, 409);
+	// Before the change rather than after its many exits: an agent's media
+	// edit that is then refused still sends an approved post back to review,
+	// which errs on the side of the operator seeing it again.
+	if (isAgentWrite(ctx)) await reholdAfterAgentEdit(ctx.db, ctx, userId, draftId, actorOf(ctx));
 	return draft;
 }
 

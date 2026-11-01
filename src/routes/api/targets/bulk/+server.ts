@@ -17,6 +17,8 @@ import {
 } from '#lib/server/publish.js';
 import { refuseInFlightOrPublished } from '#lib/server/publish-plan.js';
 import { requireScope, requireUser } from '#lib/server/require.js';
+import { actorOf } from '#lib/server/activity.js';
+import { accountsToHold, announceHeld, isAgentWrite, pausedAccounts } from '#lib/server/review.js';
 
 type BulkOp = 'cancel' | 'retry' | 'reschedule';
 
@@ -85,12 +87,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}
 			connById = new Map(rows.map((c) => [c.id, c]));
 		}
+		// Retrying is publishing: an agent's retry of anything but a failed
+		// delivery waits for review on a reviewed brand, and a paused brand
+		// publishes nothing whoever asks. Two reads for the whole batch.
+		const agent = isAgentWrite(locals);
+		const ownConnIds = [...connById.entries()]
+			.filter(([, c]) => c.userId === user.id)
+			.map(([id]) => id);
+		const hold =
+			op === 'retry' ? await accountsToHold(locals.db, locals, user.id, ownConnIds) : new Set();
+		const paused =
+			op === 'retry' ? await pausedAccounts(locals.db, user.id, ownConnIds) : new Map();
 
 		const staleBefore = new Date(now.getTime() - STALE_CLAIM_MS);
 		// Retries publish inline, one after another, inside this request's call
 		// budget (see #lib/server/budget). Once one is left for the scheduler,
 		// the rest are only reset to "publish now" and the next tick sends them.
 		let retriesStarted = 0;
+		const heldByDraft = new Map<string, string[]>();
 		let deferring = false;
 
 		for (const id of ids) {
@@ -120,7 +134,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 						and(
 							eq(publishTargets.id, id),
 							or(
-								inArray(publishTargets.status, ['pending', 'scheduled', 'failed']),
+								inArray(publishTargets.status, [
+									'pending',
+									'scheduled',
+									'failed',
+									'awaiting_review',
+									'rejected'
+								]),
 								and(
 									eq(publishTargets.status, 'publishing'),
 									lte(publishTargets.updatedAt, staleBefore)
@@ -151,6 +171,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					results.push({ id, ok: false, error: 'Cancelled — retry instead' });
 					continue;
 				}
+				if (target.status === 'rejected') {
+					results.push({ id, ok: false, error: 'Rejected in review — resubmit it instead' });
+					continue;
+				}
+				// An agent's new time is not an approval; the operator's is.
+				const keepHeld = target.status === 'awaiting_review' && agent;
 				const conn = connById.get(target.connectionId);
 				if (!conn || conn.userId !== user.id) {
 					results.push({ id, ok: false, error: 'Not found' });
@@ -163,11 +189,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				const [updated] = await locals.db
 					.update(publishTargets)
 					.set({
-						status: 'scheduled',
+						status: keepHeld ? 'awaiting_review' : 'scheduled',
 						scheduledFor: runAt,
 						errorMessage: null,
 						jobId: null,
 						attemptCount: 0,
+						reviewOverdueAt: null,
+						...(target.status === 'awaiting_review' && !keepHeld ? { reviewedAt: now } : {}),
 						updatedAt: now
 					})
 					.where(
@@ -175,7 +203,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 							eq(publishTargets.id, id),
 							isNull(publishTargets.remotePostId),
 							or(
-								inArray(publishTargets.status, ['pending', 'scheduled', 'failed']),
+								inArray(publishTargets.status, [
+									'pending',
+									'scheduled',
+									'failed',
+									'awaiting_review'
+								]),
 								and(
 									eq(publishTargets.status, 'publishing'),
 									lte(publishTargets.updatedAt, staleBefore)
@@ -193,7 +226,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					continue;
 				}
 				touchedDrafts.add(target.draftId);
-				results.push({ id, ok: true, status: 'scheduled' });
+				results.push({ id, ok: true, status: keepHeld ? 'awaiting_review' : 'scheduled' });
 			} else {
 				// retry: reset then publish inline, exactly like the single route.
 				if (target.remotePostId) {
@@ -212,6 +245,45 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				}
 				if (conn.status !== 'active') {
 					results.push({ id, ok: false, error: 'Account needs reconnect' });
+					continue;
+				}
+				if (agent && target.status !== 'failed') {
+					if (target.status === 'awaiting_review' || target.status === 'rejected') {
+						results.push({ id, ok: false, error: 'Held for review — the operator approves it' });
+						continue;
+					}
+					if (hold.has(target.connectionId)) {
+						const [held] = await locals.db
+							.update(publishTargets)
+							.set({
+								status: 'awaiting_review',
+								scheduledFor: now,
+								errorMessage: null,
+								jobId: null,
+								attemptCount: 0,
+								reviewOverdueAt: null,
+								updatedAt: now
+							})
+							.where(
+								and(
+									eq(publishTargets.id, id),
+									isNull(publishTargets.remotePostId),
+									inArray(publishTargets.status, ['pending', 'scheduled', 'cancelled'])
+								)
+							)
+							.returning({ id: publishTargets.id });
+						if (!held) {
+							results.push({ id, ok: false, error: 'Already publishing' });
+							continue;
+						}
+						touchedDrafts.add(target.draftId);
+						heldByDraft.set(target.draftId, [...(heldByDraft.get(target.draftId) ?? []), id]);
+						results.push({ id, ok: true, status: 'awaiting_review' });
+						continue;
+					}
+				}
+				if (paused.has(target.connectionId)) {
+					results.push({ id, ok: false, error: `${paused.get(target.connectionId)} is paused` });
 					continue;
 				}
 				if (deferring && locals.budget.remaining < 2 + PUBLISH_RESERVE_CALLS) {
@@ -233,7 +305,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 							eq(publishTargets.id, id),
 							isNull(publishTargets.remotePostId),
 							or(
-								inArray(publishTargets.status, ['pending', 'scheduled', 'failed', 'cancelled']),
+								inArray(publishTargets.status, [
+									'pending',
+									'scheduled',
+									'failed',
+									'cancelled',
+									'awaiting_review',
+									'rejected'
+								]),
 								and(
 									eq(publishTargets.status, 'publishing'),
 									lte(publishTargets.updatedAt, staleBefore)
@@ -281,6 +360,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		for (const draftId of touchedDrafts) {
 			await refreshDraftStatus(locals.db, draftId);
 		}
+		for (const [draftId, held] of heldByDraft)
+			await announceHeld(locals.db, locals.env, user.id, actorOf(locals), draftId, held, now);
 		const failed = results.filter((r) => !r.ok);
 		return ok({ results, failed });
 	} catch (err) {

@@ -86,12 +86,35 @@ import { STALE_CLAIM_MS } from '#lib/domain/due-jobs.js';
 import { ApiOperationError } from '#lib/server/api/operation-error.js';
 import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT } from '#lib/server/post-list.js';
 import { loadOwnedDraft } from '#lib/server/draft-record.js';
+import { actorOf } from '#lib/server/activity.js';
+import {
+	accountsToHold,
+	announceHeld,
+	isAgentWrite,
+	refusePausedBrands,
+	reholdAfterAgentEdit
+} from '#lib/server/review.js';
 
 export type OperationContext = Pick<App.Locals, 'db' | 'env' | 'media'> & {
 	bindings?: object;
 	budget?: SubrequestBudget;
 	waitUntil?: (promise: Promise<unknown>) => void;
+	/** Who is writing: an agent's write on a reviewed brand is held for review
+	 *  (#lib/server/review). Absent means the operator's own code path. */
+	authCredential?: App.Locals['authCredential'];
+	apiKey?: App.Locals['apiKey'];
 };
+
+/** After an agent's content edit, approved deliveries on reviewed brands wait again. */
+async function reholdIfApproved(
+	ctx: OperationContext,
+	userId: string,
+	draftId: string,
+	targets: Array<{ status: string }>
+) {
+	if (!isAgentWrite(ctx) || !targets.some((t) => t.status === 'scheduled')) return;
+	await reholdAfterAgentEdit(ctx.db, ctx, userId, draftId, actorOf(ctx));
+}
 function invalid(message: string, status = 400, details?: Record<string, unknown>): never {
 	throw new ApiOperationError(message, status, details);
 }
@@ -173,6 +196,11 @@ export async function updateDraft(
 		.update(drafts)
 		.set({ ...patch, updatedAt: new Date() })
 		.where(eq(drafts.id, id));
+	if (
+		(patch.title !== undefined && patch.title !== old.title) ||
+		(patch.baseBody !== undefined && patch.baseBody !== old.baseBody)
+	)
+		await reholdIfApproved(ctx, userId, id, liveTargets);
 	return { ok: true as const };
 }
 
@@ -428,7 +456,8 @@ export async function scheduleDraft(
 		});
 	await takeTiktokChoices(ctx, draftId, input.tiktok, conns);
 	await refuseUnfitPosts(ctx, draftId, conns);
-	const ensured = await ensureTargets(ctx.db, draftId, conns, 'schedule', runAt, now);
+	const hold = await accountsToHold(ctx.db, ctx, userId, ids);
+	const ensured = await ensureTargets(ctx.db, draftId, conns, 'schedule', runAt, now, hold);
 	const blocked = ensured.filter((i) => i.alreadyPublished || i.inFlight);
 	if (blocked.length)
 		invalid(blocked.some((i) => i.inFlight) ? 'Already publishing' : 'Already published', 409, {
@@ -454,10 +483,13 @@ export async function scheduleDraft(
 				.returning({ connectionId: publishTargets.connectionId })
 		: [];
 	await refreshDraftStatus(ctx.db, draftId);
+	const held = ensured.filter((i) => i.target.status === 'awaiting_review').map((i) => i.target.id);
+	await announceHeld(ctx.db, ctx.env, userId, actorOf(ctx), draftId, held, now);
 	return {
 		targets: ensured.map((i) => i.target),
 		scheduledFor: runAt.toISOString(),
-		cancelled: [...new Set(cancelled.map((row) => row.connectionId))]
+		cancelled: [...new Set(cancelled.map((row) => row.connectionId))],
+		heldForReview: held
 	};
 }
 
@@ -479,7 +511,13 @@ export async function cancelDelivery(ctx: OperationContext, userId: string, id: 
 			and(
 				eq(publishTargets.id, id),
 				or(
-					inArray(publishTargets.status, ['pending', 'scheduled', 'failed']),
+					inArray(publishTargets.status, [
+						'pending',
+						'scheduled',
+						'failed',
+						'awaiting_review',
+						'rejected'
+					]),
 					and(eq(publishTargets.status, 'publishing'), lte(publishTargets.updatedAt, stale))
 				)
 			)
@@ -512,6 +550,46 @@ export async function retryDelivery(ctx: OperationContext, userId: string, id: s
 	);
 	if (!conn || conn.userId !== userId) invalid('Not found', 404);
 	if (conn.status !== 'active') invalid('Account needs reconnect', 409);
+	// A failed delivery was approved (or written by the operator) before it
+	// failed, so an agent may retry it. Anything else an agent sends again on a
+	// reviewed brand is a new post as far as review goes: it waits.
+	if (isAgentWrite(ctx) && target.status !== 'failed') {
+		if (target.status === 'awaiting_review' || target.status === 'rejected')
+			invalid(
+				target.status === 'rejected'
+					? 'Rejected in review — revise it and resubmit it for review'
+					: 'Held for review — the operator approves it in the Review inbox',
+				409,
+				{ code: 'held_for_review' }
+			);
+		const hold = await accountsToHold(ctx.db, ctx, userId, [conn.id]);
+		if (hold.size) {
+			const [held] = await ctx.db
+				.update(publishTargets)
+				.set({
+					status: 'awaiting_review',
+					scheduledFor: now,
+					errorMessage: null,
+					jobId: null,
+					attemptCount: 0,
+					reviewOverdueAt: null,
+					updatedAt: now
+				})
+				.where(
+					and(
+						eq(publishTargets.id, id),
+						isNull(publishTargets.remotePostId),
+						inArray(publishTargets.status, ['pending', 'scheduled', 'cancelled'])
+					)
+				)
+				.returning({ id: publishTargets.id });
+			if (!held) invalid('Already publishing', 409);
+			await refreshDraftStatus(ctx.db, target.draftId);
+			await announceHeld(ctx.db, ctx.env, userId, actorOf(ctx), target.draftId, [id], now);
+			return { status: 'awaiting_review', skipped: true, heldForReview: true };
+		}
+	}
+	await refusePausedBrands(ctx.db, userId, [conn.id]);
 	const stale = new Date(now.getTime() - STALE_CLAIM_MS);
 	const reset = await ctx.db
 		.update(publishTargets)
@@ -529,7 +607,14 @@ export async function retryDelivery(ctx: OperationContext, userId: string, id: s
 				eq(publishTargets.id, id),
 				isNull(publishTargets.remotePostId),
 				or(
-					inArray(publishTargets.status, ['pending', 'scheduled', 'failed', 'cancelled']),
+					inArray(publishTargets.status, [
+						'pending',
+						'scheduled',
+						'failed',
+						'cancelled',
+						'awaiting_review',
+						'rejected'
+					]),
 					and(eq(publishTargets.status, 'publishing'), lte(publishTargets.updatedAt, stale))
 				)
 			)
@@ -568,6 +653,10 @@ export async function rescheduleDelivery(
 	const blocked = refuseInFlightOrPublished(target, now);
 	if (blocked) invalid(blocked, 409);
 	if (target.status === 'cancelled') invalid('Cancelled — retry instead');
+	if (target.status === 'rejected')
+		invalid('Rejected in review — revise it and resubmit it for review', 409, {
+			code: 'rejected'
+		});
 	if (!body || typeof body !== 'object') invalid('Invalid JSON body');
 	const input = body as { runAt?: unknown };
 	const runAt = input.runAt ? new Date(input.runAt as string) : null;
@@ -580,10 +669,15 @@ export async function rescheduleDelivery(
 	if (!conn || conn.userId !== userId) invalid('Not found', 404);
 	if (conn.status !== 'active') invalid('Account needs reconnect', 409);
 	const stale = new Date(now.getTime() - STALE_CLAIM_MS);
+	// A new time is not an approval: a held delivery an agent moves stays held,
+	// now waiting for the new time. The operator moving it in the app approves it.
+	const keepHeld = target.status === 'awaiting_review' && isAgentWrite(ctx);
 	const updated = await ctx.db
 		.update(publishTargets)
 		.set({
-			status: 'scheduled',
+			status: keepHeld ? 'awaiting_review' : 'scheduled',
+			...(keepHeld ? { reviewOverdueAt: null } : {}),
+			...(target.status === 'awaiting_review' && !keepHeld ? { reviewedAt: now } : {}),
 			scheduledFor: runAt,
 			errorMessage: null,
 			jobId: null,
@@ -595,12 +689,12 @@ export async function rescheduleDelivery(
 				eq(publishTargets.id, id),
 				isNull(publishTargets.remotePostId),
 				or(
-					inArray(publishTargets.status, ['pending', 'scheduled', 'failed']),
+					inArray(publishTargets.status, ['pending', 'scheduled', 'failed', 'awaiting_review']),
 					and(eq(publishTargets.status, 'publishing'), lte(publishTargets.updatedAt, stale))
 				)
 			)
 		)
-		.returning({ id: publishTargets.id });
+		.returning({ id: publishTargets.id, status: publishTargets.status });
 	if (!updated.length) {
 		const latest = await first(
 			ctx.db.select().from(publishTargets).where(eq(publishTargets.id, id))
@@ -609,7 +703,11 @@ export async function rescheduleDelivery(
 		invalid('Already publishing', 409);
 	}
 	await refreshDraftStatus(ctx.db, target.draftId);
-	return { ok: true as const, scheduledFor: runAt.toISOString() };
+	return {
+		ok: true as const,
+		scheduledFor: runAt.toISOString(),
+		status: updated[0].status
+	};
 }
 
 // The shape saveMediaBytes mints; anything else fails the serving route's key check.
@@ -962,6 +1060,7 @@ async function ensureDraftEditable(ctx: OperationContext, draftId: string) {
 		.where(eq(publishTargets.draftId, draftId));
 	const blocked = draftEditBlock(targets);
 	if (blocked) invalid(blocked, 409);
+	return targets;
 }
 
 export async function setDraftVariant(
@@ -977,7 +1076,7 @@ export async function setDraftVariant(
 			.where(and(eq(drafts.id, draftId), eq(drafts.userId, userId)))
 	);
 	if (!draft) invalid('Not found', 404);
-	await ensureDraftEditable(ctx, draftId);
+	const targets = await ensureDraftEditable(ctx, draftId);
 	if (!input || typeof input !== 'object') invalid('Invalid JSON body');
 	const fields = input as Record<string, unknown>;
 	const optionsError = validateVariantOptions(fields.options);
@@ -1037,6 +1136,7 @@ export async function setDraftVariant(
 					})
 					.returning()
 			)[0];
+	await reholdIfApproved(ctx, userId, draftId, targets);
 	return { variant: serializeVariant(variant) };
 }
 
@@ -1053,11 +1153,12 @@ export async function deleteDraftVariant(
 			.where(and(eq(drafts.id, draftId), eq(drafts.userId, userId)))
 	);
 	if (!draft) invalid('Not found', 404);
-	await ensureDraftEditable(ctx, draftId);
+	const targets = await ensureDraftEditable(ctx, draftId);
 	if (!platform) invalid('platform required');
 	await ctx.db
 		.delete(draftVariants)
 		.where(and(eq(draftVariants.draftId, draftId), eq(draftVariants.platform, platform)));
+	await reholdIfApproved(ctx, userId, draftId, targets);
 	return { ok: true as const };
 }
 
@@ -1129,7 +1230,19 @@ export async function publishDraft(
 		unpublished
 	);
 	await refuseUnfitPosts(ctx, draftId, unpublished);
-	const ensured = await ensureTargets(ctx.db, draftId, userConnections, 'now', null, now);
+	const hold = await accountsToHold(
+		ctx.db,
+		ctx,
+		userId,
+		unpublished.map((row) => row.id)
+	);
+	await refusePausedBrands(
+		ctx.db,
+		userId,
+		unpublished.filter((row) => !hold.has(row.id)).map((row) => row.id)
+	);
+	const ensured = await ensureTargets(ctx.db, draftId, userConnections, 'now', null, now, hold);
+	const held: string[] = [];
 	const results = [];
 	let stopped: string | null = null;
 	// Once one target is left for the scheduler, the rest follow it.
@@ -1164,6 +1277,22 @@ export async function publishDraft(
 				error: null,
 				skipped: true,
 				inFlight: true
+			});
+			continue;
+		}
+		if (item.target.status === 'awaiting_review') {
+			held.push(item.target.id);
+			results.push({
+				targetId: item.target.id,
+				connectionId: connection.id,
+				platform: connection.platform,
+				handle: connection.handle,
+				displayName: connection.displayName,
+				status: 'awaiting_review',
+				permalink: null,
+				error: null,
+				skipped: true,
+				heldForReview: true
 			});
 			continue;
 		}
@@ -1209,6 +1338,10 @@ export async function publishDraft(
 				'Publishing stopped early — try again for the rest';
 			break;
 		}
+	}
+	if (held.length) {
+		await refreshDraftStatus(ctx.db, draftId);
+		await announceHeld(ctx.db, ctx.env, userId, actorOf(ctx), draftId, held, now);
 	}
 	const draftAfter = await first(ctx.db.select().from(drafts).where(eq(drafts.id, draftId)));
 	const targets = await ctx.db

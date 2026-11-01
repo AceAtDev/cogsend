@@ -177,9 +177,19 @@ export function rangeBounds(range: Pick<VisibleRange, 'start' | 'end'>, timeZone
 }
 
 export type CalendarStatus =
-	'scheduled' | 'due' | 'sending' | 'processing' | 'published' | 'failed' | 'cancelled';
+	| 'review'
+	| 'rejected'
+	| 'scheduled'
+	| 'due'
+	| 'sending'
+	| 'processing'
+	| 'published'
+	| 'failed'
+	| 'cancelled';
 
 export const CALENDAR_STATUSES: CalendarStatus[] = [
+	'review',
+	'rejected',
 	'scheduled',
 	'due',
 	'sending',
@@ -211,6 +221,9 @@ function ms(value: number | Date | null | undefined): number | null {
 export function calendarStatus(t: TargetStatusInput, now: Date = new Date()): CalendarStatus {
 	if (t.status === 'published' || t.remotePostId) return 'published';
 	if (t.status === 'cancelled') return 'cancelled';
+	// Held: it keeps its slot on the grid but never goes out on its own.
+	if (t.status === 'awaiting_review') return 'review';
+	if (t.status === 'rejected') return 'rejected';
 	if (
 		isTargetSending(
 			{
@@ -242,7 +255,11 @@ export function canDrag(status: CalendarStatus): boolean {
 }
 
 /** What the detail panel offers, matching the Posts page for the same state. */
-export function itemActions(status: CalendarStatus): Array<'reschedule' | 'cancel' | 'retry'> {
+export function itemActions(
+	status: CalendarStatus
+): Array<'reschedule' | 'cancel' | 'retry' | 'review'> {
+	if (status === 'review') return ['review', 'cancel'];
+	if (status === 'rejected') return ['cancel'];
 	if (status === 'scheduled' || status === 'due') return ['reschedule', 'cancel'];
 	if (status === 'failed') return ['retry', 'cancel'];
 	return [];
@@ -355,6 +372,8 @@ export function toggleValue(list: string[], value: string): string[] {
 }
 
 export const STATUS_LABEL: Record<CalendarStatus, string> = {
+	review: 'Awaiting review',
+	rejected: 'Rejected',
 	scheduled: 'Scheduled',
 	due: 'Due',
 	sending: 'Sending',

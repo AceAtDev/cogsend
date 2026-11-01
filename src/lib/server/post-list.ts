@@ -162,7 +162,7 @@ export async function loadDraftSummaries(db: AppDb, userId: string, limit = DRAF
  * "publish now" row, which is due now and sorts first among the upcoming.
  */
 export async function loadQueueList(db: AppDb, userId: string, limit = QUEUE_LIST_LIMIT) {
-	const upcoming = sql`${publishTargets.status} in ('scheduled', 'pending', 'publishing')`;
+	const upcoming = sql`${publishTargets.status} in ('scheduled', 'pending', 'publishing', 'awaiting_review')`;
 	const targetsQuery = db
 		.select()
 		.from(publishTargets)
@@ -173,6 +173,8 @@ export async function loadQueueList(db: AppDb, userId: string, limit = QUEUE_LIS
 					db.select({ id: connections.id }).from(connections).where(eq(connections.userId, userId))
 				),
 				inArray(publishTargets.status, [
+					'awaiting_review',
+					'rejected',
 					'scheduled',
 					'pending',
 					'publishing',
