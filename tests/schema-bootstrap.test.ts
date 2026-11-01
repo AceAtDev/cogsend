@@ -97,6 +97,9 @@ describe('ensureSchema', () => {
 			'mfa_challenges',
 			'totp_backup_codes',
 			'notification_state',
+			'notification_settings',
+			'notification_recipients',
+			'notification_alerts',
 			'draft_shares',
 			'brands'
 		]) {

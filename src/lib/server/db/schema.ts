@@ -1,4 +1,11 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+	index,
+	integer,
+	primaryKey,
+	sqliteTable,
+	text,
+	uniqueIndex
+} from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable(
 	'users',
@@ -371,4 +378,61 @@ export const mcpIdempotency = sqliteTable(
 		uniqueIndex('mcp_idempotency_user_key_uq').on(t.userId, t.key),
 		index('mcp_idempotency_expires_idx').on(t.expiresAt)
 	]
+);
+
+/** One account's notification sender and digest schedule (0025). */
+export const notificationSettings = sqliteTable('notification_settings', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => users.id, { onDelete: 'cascade' }),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	provider: text('provider', { enum: ['gmail', 'resend'] })
+		.notNull()
+		.default('gmail'),
+	senderEmail: text('sender_email'),
+	/** The Gmail app password, encrypted with APP_ENCRYPTION_KEY. */
+	senderSecretEnc: text('sender_secret_enc'),
+	smtpPort: integer('smtp_port').notNull().default(465),
+	/** Minutes after local midnight, in the account's time zone. */
+	digestMinute: integer('digest_minute').notNull().default(480),
+	/** The local date (YYYY-MM-DD) of the last digest claimed. */
+	lastDigestOn: text('last_digest_on'),
+	lastTestAt: integer('last_test_at', { mode: 'timestamp_ms' }),
+	lastSentAt: integer('last_sent_at', { mode: 'timestamp_ms' }),
+	lastError: text('last_error'),
+	lastErrorAt: integer('last_error_at', { mode: 'timestamp_ms' }),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+/** Who receives an account's notifications, and which kinds (0025). */
+export const notificationRecipients = sqliteTable(
+	'notification_recipients',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		email: text('email').notNull(),
+		/** JSON array of NotificationKind. */
+		subscriptions: text('subscriptions').notNull().default('[]'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [uniqueIndex('notification_recipients_user_email_uq').on(t.userId, t.email)]
+);
+
+/** Per account and alert kind: what has been reported and when it was last emailed (0025). */
+export const notificationAlerts = sqliteTable(
+	'notification_alerts',
+	{
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		kind: text('kind').notNull(),
+		/** Events at or before this instant have been reported. */
+		cursorAt: integer('cursor_at', { mode: 'timestamp_ms' }).notNull(),
+		lastSentAt: integer('last_sent_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.kind] })]
 );
