@@ -10,6 +10,14 @@ const { version } = JSON.parse(readFileSync(new URL('./package.json', import.met
 
 export default defineConfig({
 	plugins: [
+		{
+			// workerd provides this module at runtime, like cloudflare:workers
+			// (which the adapter handles itself). Tests alias it to a fake.
+			name: 'cogsend-cloudflare-sockets',
+			resolveId(id) {
+				return id === 'cloudflare:sockets' ? { id, external: true } : null;
+			}
+		},
 		tailwindcss(),
 		sveltekit({
 			compilerOptions: {

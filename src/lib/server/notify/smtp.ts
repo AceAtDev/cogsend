@@ -22,7 +22,7 @@ export interface SmtpSocket {
 export type SmtpConnect = (
 	address: { hostname: string; port: number },
 	options: { secureTransport: 'on' | 'starttls'; allowHalfOpen: boolean }
-) => SmtpSocket;
+) => SmtpSocket | Promise<SmtpSocket>;
 
 /**
  * Where it went wrong, which is what the user needs to fix it: `connect` is the
@@ -237,7 +237,7 @@ export async function sendSmtp(opts: SmtpSendOptions): Promise<void> {
 	const clientName = opts.clientName ?? 'localhost';
 	let socket: SmtpSocket;
 	try {
-		socket = opts.connect(
+		socket = await opts.connect(
 			{ hostname: opts.host, port: opts.port },
 			{ secureTransport: opts.security === 'tls' ? 'on' : 'starttls', allowHalfOpen: false }
 		);
