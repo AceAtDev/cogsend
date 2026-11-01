@@ -70,7 +70,7 @@
 	listed, through the email account they configured.
 </p>
 
-<h2>Removing access and deleting data</h2>
+<h2 id="data-deletion">Removing access and deleting data</h2>
 <ul>
 	<li>
 		An account owner can revoke access in the platform's own settings. On TikTok, remove the app in
