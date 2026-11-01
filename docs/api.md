@@ -48,6 +48,8 @@ A failed request answers a JSON object with an `error` property.
 - `POST /api/brands`: `{"name", "color?", "slug?"}` answers `201` with `{brand}`. The slug is made from the name unless given; `unbranded` is reserved, and a slug another brand uses answers **409**.
 - `PATCH /api/brands/:id`: `{"name?", "color?", "slug?"}`. A rename keeps the slug, so channel keys stay the same; only `slug` changes them.
 - `DELETE /api/brands/:id`: answers `{ok, unbranded}`, the number of accounts that are now unbranded.
+- `PUT /api/brands/:id/brief`: `{"sections": {"voice", "audience", "do", "dont", "links", "hashtags", "ctas"}, "platformNotes": {"linkedin": "…"}}` replaces the brand's brief (markdown, up to 4,000 characters a section and 2,000 a note); an empty one removes it. `GET` answers `{brand, brief}`. See [MCP → Brand briefs and posting slots](mcp.md#brand-briefs-and-posting-slots).
+- `PUT /api/connections/:id/slots`: `{"slots": {"mon": ["09:00", "18:00"], …}, "maxPerDay": 2, "minGapMinutes": 60}` replaces the account's posting slots (24-hour times in your time zone, per day `mon` to `sun`) and limits (`null` for none); no slots and no limits removes them. `GET` answers `{connectionId, rules}`.
 - `POST /api/drafts`: `{"title?", "baseBody?", "selectedConnectionIds?"}` answers `201` with `{draft}`.
 - `PATCH /api/drafts/:id`: edit the title, body or `selectedConnectionIds`. **409** while publishing.
 - `DELETE /api/drafts/:id`: delete a draft.

@@ -59,6 +59,10 @@ Every account has a **channel key**, shown next to it, which is how agents and t
 
 Assigning an account to a brand changes its key, so it is done from the browser only; an API key can manage brands but cannot move an account between them.
 
+### Briefs and posting slots
+
+**Brief and posting slots** on a brand's heading in **Accounts** opens its settings. The brief is what agents read before they write for the brand (voice and tone, audience, do and don't, links, hashtags, calls to action, and a note per platform, all markdown). Posting slots are the times each account posts on each day of the week, in your time zone, with an optional cap on posts a day and a minimum number of minutes between posts. An agent asking for the next slot gets the first open one, and a time that breaks the limits is refused with the next allowed time ([MCP → Brand briefs and posting slots](mcp.md#brand-briefs-and-posting-slots)). Accounts without a brand have posting slots but no brief. The calendar shows open slots as faint dashed marks.
+
 ## When an account needs reconnecting
 
 A token that stops working marks the account as needing a reconnect, both here and
