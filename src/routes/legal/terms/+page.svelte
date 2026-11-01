@@ -17,9 +17,14 @@
 <h2>Who uses it</h2>
 <ul>
 	<li>
-		<strong>The operator</strong> signs in, connects accounts, and writes, schedules and publishes posts.
-		There is no public sign-up. The operator may use automated tools of their own to prepare and schedule
-		posts through the service.
+		<strong>The operator</strong> signs in, connects accounts, and writes, schedules and publishes
+		posts.
+		{f.signup
+			? 'Other people may sign up for an account of their own' +
+				(f.signup === 'waitlist' ? ', which the operator approves,' : '') +
+				' and use the service the same way for the accounts they connect; each account sees only its own posts and connected accounts, and these terms apply to them too.'
+			: 'There is no public sign-up.'} The operator may use automated tools of their own to prepare and
+		schedule posts through the service.
 	</li>
 	<li>
 		<strong>Account owners</strong>, such as the operator's own brands and the creators and partner

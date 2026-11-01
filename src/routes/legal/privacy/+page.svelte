@@ -18,7 +18,9 @@
 <h2>What is stored</h2>
 <ul>
 	<li>
-		The operator's sign-in: email address, a hash of the password, and the two-factor secret,
+		{f.signup
+			? 'The sign-in of the operator and of each person who signs up'
+			: "The operator's sign-in"}: email address, a hash of the password, and the two-factor secret,
 		encrypted.
 	</li>
 	<li>

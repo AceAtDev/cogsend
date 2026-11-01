@@ -4,7 +4,12 @@
 	let {
 		facts
 	}: {
-		facts: { appName: string; host: string; contactEmail: string | null };
+		facts: {
+			appName: string;
+			host: string;
+			contactEmail: string | null;
+			signup: 'waitlist' | 'open' | null;
+		};
 	} = $props();
 </script>
 
@@ -66,11 +71,33 @@
 		account.
 	</p>
 
+	{#if facts.signup}
+		<h2 class="mt-10 text-lg font-extrabold">Accounts</h2>
+		<p
+			class="mt-3 text-[14px] leading-relaxed font-medium text-stone-600"
+			data-testid="public-home-signup"
+		>
+			{facts.signup === 'open'
+				? `Anyone can sign up for an account of their own on ${facts.appName}, to connect their own social accounts and schedule their own posts. Each account sees only its own posts and connected accounts.`
+				: `You can sign up to join the waitlist for an account of your own on ${facts.appName}; the operator approves each one. Each account sees only its own posts and connected accounts.`}
+		</p>
+	{/if}
+
 	<div class="mt-10 flex flex-wrap items-center gap-3">
+		{#if facts.signup}
+			<a
+				href="/signup"
+				class="rounded-full bg-stone-900 px-5 py-2.5 text-[13px] font-bold text-white hover:bg-stone-800"
+				data-testid="public-home-sign-up"
+				>{facts.signup === 'open' ? 'Sign up' : 'Join the waitlist'}</a
+			>
+		{/if}
 		<a
 			href="/login"
-			class="rounded-full bg-stone-900 px-5 py-2.5 text-[13px] font-bold text-white hover:bg-stone-800"
-			data-testid="public-home-sign-in">Operator sign in</a
+			class={facts.signup
+				? 'rounded-full border border-stone-300 px-5 py-2.5 text-[13px] font-bold text-stone-900 hover:bg-stone-50'
+				: 'rounded-full bg-stone-900 px-5 py-2.5 text-[13px] font-bold text-white hover:bg-stone-800'}
+			data-testid="public-home-sign-in">{facts.signup ? 'Sign in' : 'Operator sign in'}</a
 		>
 		{#if facts.contactEmail}
 			<span class="text-[13px] font-medium text-stone-500"

@@ -354,7 +354,8 @@ const facts = {
 	appName: 'Acme Publishing',
 	appUrl: 'https://cogsend.example.com',
 	host: 'cogsend.example.com',
-	contactEmail: 'hello@acme.test'
+	contactEmail: 'hello@acme.test',
+	signup: null as 'waitlist' | 'open' | null
 };
 
 describe('public pages', () => {
@@ -390,6 +391,24 @@ describe('public pages', () => {
 		expect(body).toContain('href="/legal/privacy"');
 		expect(body).toContain('href="/login"');
 		expect(body).toContain('TikTok');
+		expect(body).not.toContain('href="/signup"');
+		expect(body).toContain('Operator sign in');
+	});
+
+	it('says sign-up exists, on the homepage and in the terms, when it does', () => {
+		for (const mode of ['waitlist', 'open'] as const) {
+			const withSignup = { ...facts, signup: mode };
+			const home = render(PublicHome, { props: { facts: withSignup } }).body;
+			expect(home).toContain('href="/signup"');
+			expect(home).toContain(mode === 'open' ? 'Anyone can sign up' : 'join the waitlist');
+			const terms = render(TermsPage, { props: { data: { facts: withSignup } } as never }).body;
+			expect(terms).not.toContain('There is no public sign-up');
+			expect(terms).toContain('sign up for an account of their own');
+			const privacy = render(PrivacyPage, { props: { data: { facts: withSignup } } as never }).body;
+			expect(privacy).toContain('each person who signs up');
+		}
+		const terms = render(TermsPage, { props: { data: { facts } } as never }).body;
+		expect(terms).toContain('There is no public sign-up');
 	});
 });
 
