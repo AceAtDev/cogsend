@@ -2140,6 +2140,13 @@ export async function resubmitForReviewOp(
 	]);
 	const rows = picked.flatMap((p) => p.rows);
 	const { viewOf } = await channelsFor(agent, rows, dir);
+	const notHeld = rows.filter((r) => r.status !== 'rejected' && r.status !== 'awaiting_review');
+	if (notHeld.length)
+		fail(
+			`${notHeld.map((r) => `${viewOf(r.connectionId).key || r.connectionId} is ${r.status}`).join('; ')}: only a rejected delivery goes back to review.`,
+			{ code: 'not_in_review', deliveryIds: notHeld.map((r) => r.id) },
+			409
+		);
 	const stale = rows.filter(
 		(r) => r.status === 'rejected' && !runAt && r.scheduledFor && r.scheduledFor <= now
 	);
