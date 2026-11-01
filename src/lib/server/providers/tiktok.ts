@@ -46,8 +46,14 @@ const TOKEN_URL = `${API}/oauth/token/`;
 // video.list reads the counts of the account's own videos (metrics). A
 // connection made before it was asked for keeps working for posting and is
 // shown "reconnect to enable metrics".
-export const TIKTOK_SCOPES = ['user.info.basic', 'video.publish', 'video.list'];
 export const TIKTOK_METRICS_SCOPE = 'video.list';
+export const TIKTOK_POSTING_SCOPES = ['user.info.basic', 'video.publish'];
+export const TIKTOK_SCOPES = [...TIKTOK_POSTING_SCOPES, TIKTOK_METRICS_SCOPE];
+
+/** What to ask TikTok for: video.list only when the app has it (TIKTOK_METRICS). */
+export function tiktokScopes(metrics: boolean): string[] {
+	return metrics ? TIKTOK_SCOPES : TIKTOK_POSTING_SCOPES;
+}
 /** /v2/video/query/ takes up to 20 video ids per request. */
 export const TIKTOK_METRICS_BATCH = 20;
 const VIDEO_METRIC_FIELDS = 'id,view_count,like_count,comment_count,share_count';
@@ -955,10 +961,15 @@ export function tiktokCallbackUrl(appUrl: string): string {
 	return `${appUrl.replace(/\/$/, '')}/api/connections/tiktok/callback`;
 }
 
-export function tiktokAuthorizeUrl(clientKey: string, appUrl: string, state: string): string {
+export function tiktokAuthorizeUrl(
+	clientKey: string,
+	appUrl: string,
+	state: string,
+	scopes: string[] = TIKTOK_SCOPES
+): string {
 	const params = new URLSearchParams({
 		client_key: clientKey,
-		scope: TIKTOK_SCOPES.join(','),
+		scope: scopes.join(','),
 		response_type: 'code',
 		redirect_uri: tiktokCallbackUrl(appUrl),
 		state

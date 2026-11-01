@@ -1,112 +1,190 @@
 <script lang="ts">
 	import LegalFooter from './LegalFooter.svelte';
+	import logo from '#lib/assets/favicon.svg';
 
 	let {
 		facts
 	}: {
 		facts: {
 			appName: string;
-			host: string;
 			contactEmail: string | null;
+			operator?: string | null;
+			tiktokMetrics?: boolean;
 			signup: 'waitlist' | 'open' | null;
 		};
 	} = $props();
+
+	const features = [
+		{
+			title: 'Write once, post everywhere',
+			body: 'One composer for every connected account, with a preview and the choices each platform asks for, such as who can see a TikTok video.'
+		},
+		{
+			title: 'Schedule ahead',
+			body: 'Pick a time or a posting slot. A calendar shows what goes out when, per brand and per account.'
+		},
+		{
+			title: 'Brands and accounts',
+			body: 'Group accounts by brand and keep several accounts on the same platform apart, each with its own settings.'
+		},
+		{
+			title: 'Review before it goes out',
+			body: 'Posts drafted by AI assistants through the API wait in a review inbox, by default, until you approve them.'
+		}
+	];
+	const platforms = ['TikTok', 'Instagram', 'Threads', 'LinkedIn', 'Bluesky', 'Mastodon', 'X'];
 </script>
 
 <svelte:head>
-	<title>{facts.appName}</title>
+	<title>{facts.appName}: schedule and publish social posts</title>
 	<meta
 		name="description"
-		content="{facts.appName} schedules and publishes posts and videos to the social accounts of its operator's brands and partners."
+		content="{facts.appName} is a social media scheduler: write a post once, preview it, and publish or schedule it to your own TikTok, Instagram, LinkedIn, Bluesky and other accounts."
 	/>
 </svelte:head>
 
-<main
-	id="main"
-	class="mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-6 py-16 font-sans text-stone-900"
-	data-testid="public-home"
->
-	<h1 class="text-4xl font-extrabold tracking-tight">{facts.appName}</h1>
-	<p class="mt-4 text-[15px] leading-relaxed font-medium text-stone-600">
-		{facts.appName} is a publishing service{facts.host ? ` at ${facts.host}` : ''} for social media accounts.
-		Its operator plans, schedules and publishes posts and videos to the accounts connected to it: the
-		brand accounts of the operator's own businesses, and the accounts of creators and partner businesses
-		who choose to connect theirs. It covers Mastodon, Bluesky, LinkedIn, Threads, Instagram, TikTok and
-		X, and runs
-		<a
-			href="https://github.com/cogsend/cogsend"
-			target="_blank"
-			rel="noopener noreferrer"
-			class="font-bold text-stone-900 underline">CogSend</a
-		>, open-source scheduling software.
-	</p>
-
-	<h2 class="mt-10 text-lg font-extrabold">How it works</h2>
-	<ol
-		class="mt-3 list-decimal space-y-2 pl-5 text-[14px] leading-relaxed font-medium text-stone-600"
-	>
-		<li>
-			An account is connected through the platform's own authorization page, where the account's
-			owner signs in and approves only the permissions needed to publish. Its password is never seen
-			here.
-		</li>
-		<li>
-			The operator writes a post in the composer, which previews it and asks for each platform's own
-			choices, such as who can see a TikTok video, whether it allows comments, Duets and Stitches,
-			and whether it promotes a brand.
-		</li>
-		<li>
-			The operator publishes it or picks a time. Nothing is posted without that action, and the
-			post's status is shown until the platform has published it.
-		</li>
-	</ol>
-
-	<h2 class="mt-10 text-lg font-extrabold">TikTok</h2>
-	<p class="mt-3 text-[14px] leading-relaxed font-medium text-stone-600">
-		With TikTok's Login Kit and Content Posting API, {facts.appName} reads a connected account's basic
-		profile (name and avatar) and the posting options TikTok reports for it, and posts the videos chosen
-		for that account with the privacy, interaction and content-disclosure settings picked for each post.
-		It does not read the account's other videos, followers or messages. An account owner can stop this
-		at any time by removing the app in TikTok's settings, or by asking the operator to disconnect the
-		account.
-	</p>
-
-	{#if facts.signup}
-		<h2 class="mt-10 text-lg font-extrabold">Accounts</h2>
-		<p
-			class="mt-3 text-[14px] leading-relaxed font-medium text-stone-600"
-			data-testid="public-home-signup"
-		>
-			{facts.signup === 'open'
-				? `Anyone can sign up for an account of their own on ${facts.appName}, to connect their own social accounts and schedule their own posts. Each account sees only its own posts and connected accounts.`
-				: `You can sign up to join the waitlist for an account of your own on ${facts.appName}; the operator approves each one. Each account sees only its own posts and connected accounts.`}
-		</p>
-	{/if}
-
-	<div class="mt-10 flex flex-wrap items-center gap-3">
-		{#if facts.signup}
+<div class="min-h-dvh bg-stone-50 font-sans text-stone-900" data-testid="public-home">
+	<header class="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
+		<a href="/" class="flex items-center gap-2 text-[15px] font-extrabold tracking-tight">
+			<img src={logo} alt="" class="h-7 w-7" />
+			{facts.appName}
+		</a>
+		<nav class="flex items-center gap-2">
 			<a
-				href="/signup"
-				class="rounded-full bg-stone-900 px-5 py-2.5 text-[13px] font-bold text-white hover:bg-stone-800"
-				data-testid="public-home-sign-up"
-				>{facts.signup === 'open' ? 'Sign up' : 'Join the waitlist'}</a
+				href="/login"
+				class="rounded-full px-4 py-2 text-[13px] font-bold text-stone-700 hover:bg-stone-200/60"
+				data-testid="public-home-sign-in">{facts.signup ? 'Sign in' : 'Operator sign in'}</a
 			>
-		{/if}
-		<a
-			href="/login"
-			class={facts.signup
-				? 'rounded-full border border-stone-300 px-5 py-2.5 text-[13px] font-bold text-stone-900 hover:bg-stone-50'
-				: 'rounded-full bg-stone-900 px-5 py-2.5 text-[13px] font-bold text-white hover:bg-stone-800'}
-			data-testid="public-home-sign-in">{facts.signup ? 'Sign in' : 'Operator sign in'}</a
-		>
-		{#if facts.contactEmail}
-			<span class="text-[13px] font-medium text-stone-500"
-				>Contact: <a href="mailto:{facts.contactEmail}" class="font-bold text-stone-900 underline"
-					>{facts.contactEmail}</a
-				></span
-			>
-		{/if}
-	</div>
+			{#if facts.signup}
+				<a
+					href="/signup"
+					class="rounded-full bg-stone-900 px-4 py-2 text-[13px] font-bold text-white hover:bg-stone-800"
+					data-testid="public-home-sign-up"
+					>{facts.signup === 'open' ? 'Sign up' : 'Join the waitlist'}</a
+				>
+			{/if}
+		</nav>
+	</header>
 
-	<LegalFooter class="mt-auto pt-16" />
-</main>
+	<main id="main" class="mx-auto w-full max-w-5xl px-6">
+		<section class="py-16 text-center sm:py-24">
+			<h1 class="mx-auto max-w-3xl text-4xl font-extrabold tracking-tight sm:text-5xl">
+				Plan, schedule and publish your social posts from one place.
+			</h1>
+			<p class="mx-auto mt-5 max-w-2xl text-[16px] leading-relaxed font-medium text-stone-600">
+				{facts.appName} is a social media scheduler for creators and small businesses. Write a post once,
+				preview it for each platform, and publish it now or at the time you choose, to the accounts you
+				connect yourself.
+			</p>
+			<div class="mt-8 flex flex-wrap justify-center gap-3">
+				{#if facts.signup}
+					<a
+						href="/signup"
+						class="rounded-full bg-stone-900 px-6 py-3 text-[14px] font-bold text-white hover:bg-stone-800"
+						>{facts.signup === 'open' ? 'Create a free account' : 'Join the waitlist'}</a
+					>
+				{/if}
+				<a
+					href="/login"
+					class="rounded-full border border-stone-300 bg-white px-6 py-3 text-[14px] font-bold text-stone-900 hover:bg-stone-100"
+					>Sign in</a
+				>
+			</div>
+			<p class="mt-6 text-[12px] font-bold tracking-wide text-stone-500 uppercase">
+				Works with {platforms.join(' · ')}
+			</p>
+		</section>
+
+		<section class="grid gap-4 pb-16 sm:grid-cols-2">
+			{#each features as f (f.title)}
+				<div class="rounded-3xl border border-stone-200 bg-white p-6">
+					<h2 class="text-[15px] font-extrabold">{f.title}</h2>
+					<p class="mt-2 text-[14px] leading-relaxed font-medium text-stone-600">{f.body}</p>
+				</div>
+			{/each}
+		</section>
+
+		<section class="pb-16">
+			<h2 class="text-2xl font-extrabold tracking-tight">How it works</h2>
+			<ol class="mt-6 grid gap-4 sm:grid-cols-3">
+				<li class="rounded-3xl border border-stone-200 bg-white p-6">
+					<p class="text-[12px] font-extrabold text-stone-400">1</p>
+					<h3 class="mt-1 text-[15px] font-extrabold">Connect your accounts</h3>
+					<p class="mt-2 text-[14px] leading-relaxed font-medium text-stone-600">
+						Each account is connected on the platform's own sign-in page, where you approve only the
+						permissions needed to publish. Your password is never seen here.
+					</p>
+				</li>
+				<li class="rounded-3xl border border-stone-200 bg-white p-6">
+					<p class="text-[12px] font-extrabold text-stone-400">2</p>
+					<h3 class="mt-1 text-[15px] font-extrabold">Write and preview</h3>
+					<p class="mt-2 text-[14px] leading-relaxed font-medium text-stone-600">
+						Add your text, photos or video, see how it will look, and make the choices each platform
+						requires for every post.
+					</p>
+				</li>
+				<li class="rounded-3xl border border-stone-200 bg-white p-6">
+					<p class="text-[12px] font-extrabold text-stone-400">3</p>
+					<h3 class="mt-1 text-[15px] font-extrabold">Publish or schedule</h3>
+					<p class="mt-2 text-[14px] leading-relaxed font-medium text-stone-600">
+						Nothing is posted until you publish it or pick a time. You see each post's status until
+						the platform has published it.
+					</p>
+				</li>
+			</ol>
+		</section>
+
+		<section class="rounded-3xl border border-stone-200 bg-white p-8 sm:p-10">
+			<h2 class="text-2xl font-extrabold tracking-tight">Posting to TikTok</h2>
+			<p class="mt-4 max-w-3xl text-[14px] leading-relaxed font-medium text-stone-600">
+				With TikTok's Login Kit and Content Posting API, {facts.appName} reads a connected account's basic
+				profile (name and avatar) and the posting options TikTok reports for it, and posts the videos
+				you choose with the privacy, interaction and content-disclosure settings you pick for each post.
+				You confirm TikTok's Music Usage Confirmation before every post.
+				{facts.tiktokMetrics
+					? 'After a video is posted, it reads that video’s view, like, comment and share counts so you can see how it did. It does not read your other videos, followers or messages.'
+					: 'It does not read your other videos, followers or messages.'}
+				You can stop this at any time by removing the app in TikTok's settings or disconnecting the account
+				here.
+			</p>
+		</section>
+
+		{#if facts.signup}
+			<section class="py-16 text-center">
+				<h2 class="text-2xl font-extrabold tracking-tight">Get started</h2>
+				<p
+					class="mx-auto mt-3 max-w-xl text-[14px] leading-relaxed font-medium text-stone-600"
+					data-testid="public-home-signup"
+				>
+					{facts.signup === 'open'
+						? `Anyone can sign up for an account of their own on ${facts.appName}, to connect their own social accounts and schedule their own posts. Each account sees only its own posts and connected accounts.`
+						: `You can sign up to join the waitlist for an account of your own on ${facts.appName}; each one is approved by hand. Each account sees only its own posts and connected accounts.`}
+				</p>
+				<a
+					href="/signup"
+					class="mt-6 inline-block rounded-full bg-stone-900 px-6 py-3 text-[14px] font-bold text-white hover:bg-stone-800"
+					>{facts.signup === 'open' ? 'Sign up' : 'Join the waitlist'}</a
+				>
+			</section>
+		{:else}
+			<div class="py-16"></div>
+		{/if}
+	</main>
+
+	<footer class="border-t border-stone-200 bg-white">
+		<div
+			class="mx-auto flex w-full max-w-5xl flex-col items-center gap-3 px-6 py-8 text-center text-[13px] font-medium text-stone-500"
+		>
+			<p>
+				{facts.appName}{facts.operator ? ` is operated by ${facts.operator}` : ''}.
+				{#if facts.contactEmail}
+					Support:
+					<a href="mailto:{facts.contactEmail}" class="font-bold text-stone-900 underline"
+						>{facts.contactEmail}</a
+					>
+				{/if}
+			</p>
+			<LegalFooter />
+		</div>
+	</footer>
+</div>

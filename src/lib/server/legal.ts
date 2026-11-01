@@ -11,6 +11,20 @@ export function publicHomepageEnabled(env: { PUBLIC_HOMEPAGE?: string }): boolea
 	return envFlag(env.PUBLIC_HOMEPAGE);
 }
 
+/** Whether TikTok is asked for video.list, so metrics are read for TikTok posts. */
+export function tiktokMetricsEnabled(env: { TIKTOK_METRICS?: string }): boolean {
+	return envFlag(env.TIKTOK_METRICS);
+}
+
+/** When the terms and privacy policy last changed in substance. */
+export const LEGAL_UPDATED = '2026-11-01';
+
+/** A short name for a public page (an operator, a jurisdiction), or null. */
+function shortText(raw: string | undefined, max = 120): string | null {
+	const value = raw?.trim().replace(/\s+/g, ' ');
+	return value && value.length <= max && !/[<>]/.test(value) ? value : null;
+}
+
 /** A plausible address, or null: it is printed on a public page as a mailto link. */
 function contactEmail(raw: string | undefined): string | null {
 	const value = raw?.trim();
@@ -18,7 +32,7 @@ function contactEmail(raw: string | undefined): string | null {
 }
 
 /**
- * What the public pages say about the instance: its name, address, contact,
+ * What the public pages say about the instance: its name, address, operator, contact,
  * and whether anyone can ask for an account (`waitlist` or `open`), which the
  * home page and the terms must not deny.
  */
@@ -35,6 +49,10 @@ export async function instanceFacts(locals: App.Locals) {
 		appUrl,
 		host,
 		contactEmail: contactEmail(locals.env.LEGAL_CONTACT_EMAIL),
+		operator: shortText(locals.env.LEGAL_OPERATOR),
+		jurisdiction: shortText(locals.env.LEGAL_JURISDICTION),
+		tiktokMetrics: tiktokMetricsEnabled(locals.env),
+		updated: LEGAL_UPDATED,
 		signup: await signupMode(locals)
 	};
 }

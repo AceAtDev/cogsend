@@ -83,7 +83,8 @@ export {
 	tiktokCannotPostReason,
 	creatorMeta as tiktokCreatorMeta,
 	tiktokChunkPlan,
-	TIKTOK_SCOPES
+	TIKTOK_SCOPES,
+	tiktokScopes
 } from './tiktok';
 export {
 	xProvider,

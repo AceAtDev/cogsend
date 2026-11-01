@@ -107,6 +107,9 @@ interface Env {
 	TIKTOK_CLIENT_SECRET?: string;
 	TIKTOK_SITE_VERIFICATION?: string;
 	LEGAL_CONTACT_EMAIL?: string;
+	LEGAL_OPERATOR?: string;
+	LEGAL_JURISDICTION?: string;
+	TIKTOK_METRICS?: string;
 	PUBLIC_HOMEPAGE?: string;
 	X_CLIENT_ID?: string;
 	X_CLIENT_SECRET?: string;

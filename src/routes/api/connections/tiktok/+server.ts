@@ -6,7 +6,8 @@ import { oauthPending } from '#lib/server/db/schema.js';
 import { handleError, ok } from '#lib/server/http.js';
 import { resolvePlatformCredentials } from '#lib/server/platform-credentials.js';
 import { platformNotConfigured } from '#lib/server/platform-setup.js';
-import { tiktokAuthorizeUrl } from '#lib/server/providers/index.js';
+import { tiktokAuthorizeUrl, tiktokScopes } from '#lib/server/providers/index.js';
+import { tiktokMetricsEnabled } from '#lib/server/legal.js';
 import { SESSION_COOKIE } from '#lib/server/auth.js';
 import { bindOAuthState } from '#lib/server/oauth-state.js';
 import { requireSession } from '#lib/server/require.js';
@@ -37,7 +38,12 @@ export const POST: RequestHandler = async ({ locals, cookies }) => {
 			createdAt: new Date()
 		});
 		return ok({
-			authorizeUrl: tiktokAuthorizeUrl(clientKey, locals.env.APP_URL, bound)
+			authorizeUrl: tiktokAuthorizeUrl(
+				clientKey,
+				locals.env.APP_URL,
+				bound,
+				tiktokScopes(tiktokMetricsEnabled(locals.env))
+			)
 		});
 	} catch (err) {
 		return handleError(err);

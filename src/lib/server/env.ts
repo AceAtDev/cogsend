@@ -45,6 +45,13 @@ const envSchema = z.object({
 	// with its terms and privacy policy, instead of the sign-in redirect.
 	// Platform app reviews (TikTok's) want a website that is not a login page.
 	PUBLIC_HOMEPAGE: z.string().optional(),
+	// Who runs the instance and whose law the terms follow, named on the
+	// public pages, such as "Acme Studio" and "Ontario, Canada".
+	LEGAL_OPERATOR: z.string().optional(),
+	LEGAL_JURISDICTION: z.string().optional(),
+	// Opt-in: also ask TikTok for video.list, to read TikTok posts' counts.
+	// Add the scope to the TikTok app first, or TikTok refuses the sign-in.
+	TIKTOK_METRICS: z.string().optional(),
 	X_CLIENT_ID: z.string().min(1).optional(),
 	X_CLIENT_SECRET: z.string().min(1).optional(),
 	// Failure-digest email (Resend). All optional: when unset, the digest is
@@ -181,6 +188,9 @@ export async function envFromPlatform(
 			asString(platformEnv?.TIKTOK_SITE_VERIFICATION) ?? fallback.TIKTOK_SITE_VERIFICATION,
 		LEGAL_CONTACT_EMAIL: asString(platformEnv?.LEGAL_CONTACT_EMAIL) ?? fallback.LEGAL_CONTACT_EMAIL,
 		PUBLIC_HOMEPAGE: asString(platformEnv?.PUBLIC_HOMEPAGE) ?? fallback.PUBLIC_HOMEPAGE,
+		LEGAL_OPERATOR: asString(platformEnv?.LEGAL_OPERATOR) ?? fallback.LEGAL_OPERATOR,
+		LEGAL_JURISDICTION: asString(platformEnv?.LEGAL_JURISDICTION) ?? fallback.LEGAL_JURISDICTION,
+		TIKTOK_METRICS: asString(platformEnv?.TIKTOK_METRICS) ?? fallback.TIKTOK_METRICS,
 		X_CLIENT_ID: asString(platformEnv?.X_CLIENT_ID) ?? fallback.X_CLIENT_ID,
 		X_CLIENT_SECRET: asString(platformEnv?.X_CLIENT_SECRET) ?? fallback.X_CLIENT_SECRET,
 		RESEND_API_KEY: asString(platformEnv?.RESEND_API_KEY) ?? fallback.RESEND_API_KEY,

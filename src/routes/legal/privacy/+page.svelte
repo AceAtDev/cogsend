@@ -3,16 +3,18 @@
 
 	let { data } = $props();
 	const f = $derived(data.facts);
+	const who = $derived(f.operator ?? 'its operator');
 </script>
 
 <svelte:head><title>Privacy Policy · {f.appName}</title></svelte:head>
 
 <h1>Privacy Policy</h1>
+{#if f.updated}<p class="text-stone-500">Last updated {f.updated}</p>{/if}
 <p>
-	{f.appName}{f.host ? ` at ${f.host}` : ''} (“the service”) publishes posts to social media accounts
-	connected to it by their owners: its operator's own brands, and creators and partner businesses. This
-	page says what it stores about the operator and about those connected accounts, why, and how to have
-	it removed. The service runs CogSend on the operator's own Cloudflare account.
+	{f.appName}{f.host ? ` at ${f.host}` : ''} (“the service”), run by {who} (“we”, “the operator”), publishes
+	posts to social media accounts connected to it by their owners. This page says what it stores about
+	the people who use it and about those connected accounts, why, and how to have it removed. The service
+	runs CogSend on the operator's own Cloudflare account.
 </p>
 
 <h2>What is stored</h2>
@@ -39,18 +41,24 @@
 		For posts the service published: the public counts the platform reports for them (views, likes,
 		comments, shares), read about an hour, a day and a week after publishing.
 	</li>
+	<li>
+		An activity log of changes made in the account (who did what, from the app or with an API key),
+		kept for 90 days.
+	</li>
 	<li>Photos and videos attached to posts, in storage on the operator's own Cloudflare account.</li>
 </ul>
 
 <h2>How it is used</h2>
 <p>
-	Only to publish and schedule posts to the accounts their owners connected, and to show the
-	operator how those posts did. The service asks each platform only for the permissions publishing
-	needs; on TikTok that is <code>user.info.basic</code> (the profile shown when choosing where a
-	post goes), <code>video.publish</code> (posting the videos chosen for the account) and
-	<code>video.list</code> (reading the view, like, comment and share counts of the videos the service
-	itself posted). Counts are looked up only for those videos; the service does not store the account's
-	other videos, and it does not read followers or messages.
+	Only to publish and schedule posts to the accounts their owners connected, and to show the account
+	holder how those posts did. The service asks each platform only for the permissions it needs; on
+	TikTok that is <code>user.info.basic</code> (the profile shown when choosing where a post goes)
+	and
+	<code>video.publish</code> (posting the videos chosen for the account){#if f.tiktokMetrics}, and <code
+			>video.list</code
+		> (reading the view, like, comment and share counts of the videos the service itself posted; counts
+		are looked up only for those videos){/if}. It does not read a connected account's other videos,
+	followers or messages, and it does not use any of this data for advertising or to train AI models.
 </p>
 
 <h2>Who it is shared with</h2>
@@ -75,11 +83,35 @@
 		published, as history.
 	</li>
 	<li>Deleting a post deletes its text, settings and media from the service.</li>
+	<li>
+		You can ask us to delete your account; we delete it with its posts, connected accounts and
+		media.
+	</li>
 	<li>Deleting the service deletes everything it stored.</li>
 </ul>
 
-<h2>Contact</h2>
+<h2>How long it is kept</h2>
 <p>
-	Questions or requests about this data, including disconnecting an account:
+	Data is kept while the account it belongs to exists, and deleted as described above. The activity
+	log keeps 90 days.
+</p>
+
+<h2>Security</h2>
+<p>
+	Sign-in requires a password and an authenticator app. Platform tokens and passwords for connected
+	services are stored encrypted, and traffic to the service uses HTTPS.
+</p>
+
+<h2>Your rights</h2>
+<p>
+	You can ask what we hold about you, have it corrected, receive a copy, or have it deleted, by
+	writing to the address below. The service is not meant for children and does not knowingly hold
+	data about anyone under 13.
+</p>
+
+<h2>Changes and contact</h2>
+<p>
+	We update this page and its date when what we store or how we use it changes. Questions or
+	requests about this data, including disconnecting an account:
 	<LegalContact email={f.contactEmail} appName={f.appName} />.
 </p>

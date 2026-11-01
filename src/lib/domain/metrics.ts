@@ -73,7 +73,7 @@ export const NOT_COLLECTED_YET = 'Metrics are not collected for this platform ye
 export const LINKEDIN_PERSONAL_MESSAGE =
 	'Not available on LinkedIn for personal profiles: LinkedIn only reports post statistics for company pages.';
 export const TIKTOK_RECONNECT_MESSAGE =
-	'Reconnect this TikTok account to enable metrics: it was connected before CogSend asked TikTok for permission to read video stats (video.list).';
+	'TikTok metrics need permission to read video stats (video.list): once the instance asks TikTok for it (TIKTOK_METRICS), reconnect this account.';
 export const ZERNIO_MESSAGE = 'Metrics are not collected for accounts posted through Zernio.';
 
 /**
