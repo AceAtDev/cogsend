@@ -31,6 +31,8 @@
 	import { BRAND_COLORS, UNBRANDED_COLOR } from '#lib/domain/channel-keys.js';
 
 	let { data } = $props();
+	// Platform app credentials are the instance's, so only an admin edits them.
+	const isAdmin = $derived(page.data.user?.role === 'admin');
 
 	type Connection = {
 		id: string;
@@ -1070,7 +1072,23 @@
 				</button>
 			</div>
 
-			{#if setupPanel}
+			{#if setupPanel && !isAdmin}
+				<div class="space-y-4" data-testid="platform-setup-member">
+					<button
+						type="button"
+						onclick={backToPlatforms}
+						class="text-[13px] font-bold text-stone-500 hover:text-stone-900"
+						>← All platforms</button
+					>
+					<h3 class="text-[17px] font-extrabold tracking-tight text-stone-900">
+						{platformName(setupPanel)} isn't enabled on this instance yet
+					</h3>
+					<p class="text-[13px] font-medium text-stone-500">
+						Connecting it needs an app the instance admin sets up once for everyone. Ask them to add
+						it; your other platforms work in the meantime.
+					</p>
+				</div>
+			{:else if setupPanel}
 				{#key setupPanel}
 					{@const setup = PLATFORM_SETUP[setupPanel]}
 					{@const secretNames = platformSecretNames(setupPanel)}
@@ -1335,7 +1353,7 @@
 						</button>
 					{/each}
 				</div>
-				{#if (Object.keys(credentialSources) as OAuthPlatformId[]).some((id) => credentialSources[id] === 'app')}
+				{#if isAdmin && (Object.keys(credentialSources) as OAuthPlatformId[]).some((id) => credentialSources[id] === 'app')}
 					<p class="mt-3 text-xs font-medium text-stone-500" data-testid="saved-app-credentials">
 						App credentials saved here:
 						{#each (Object.keys(credentialSources) as OAuthPlatformId[]).filter((id) => credentialSources[id] === 'app') as id, index (id)}{index >

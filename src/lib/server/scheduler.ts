@@ -26,7 +26,8 @@ import {
 	notificationState,
 	oauthPending,
 	publishTargets,
-	schedulerHeartbeats
+	schedulerHeartbeats,
+	users
 } from './db/schema';
 import type { AppEnv } from './env';
 import type { MediaStore } from './media';
@@ -205,6 +206,9 @@ export async function maybeSendFailureDigest(
 		})
 		.from(publishTargets)
 		.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
+		// NOTIFY_EMAIL is the operator's address, so on an instance with members
+		// it hears about the admins' posts only: a member's drafts are theirs.
+		.innerJoin(users, and(eq(drafts.userId, users.id), eq(users.role, 'admin')))
 		.leftJoin(connections, eq(publishTargets.connectionId, connections.id))
 		.where(
 			and(
@@ -336,13 +340,16 @@ export async function claimDueTargets(db: AppDb, now = new Date(), limit = TICK_
 				// Only live accounts are claimable. Targets on disconnected
 				// tombstones (or rows whose connection vanished) must never
 				// be attempted: publishTarget would burn attempts on an
-				// account the user has already let go of.
+				// account the user has already let go of. Nor are the posts of
+				// a CogSend account that is suspended or not yet approved: they
+				// wait, and go out once it is active again.
 				inArray(
 					publishTargets.connectionId,
 					db
 						.select({ id: connections.id })
 						.from(connections)
-						.where(ne(connections.status, 'disconnected'))
+						.innerJoin(users, eq(connections.userId, users.id))
+						.where(and(ne(connections.status, 'disconnected'), eq(users.status, 'active')))
 				),
 				or(
 					and(
