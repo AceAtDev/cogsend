@@ -21,6 +21,7 @@ import { POST as verifyPOST } from '../src/routes/api/connections/[id]/verify/+s
 import { GET as queueGET } from '../src/routes/api/queue/+server';
 import { claimDueTargets, purgeDisconnectedConnections } from '#lib/server/scheduler.js';
 import { TEST_ENV, createTestDb } from '#lib/server/db/test.js';
+import { encryptJson } from '#lib/server/crypto.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -99,7 +100,7 @@ describe('DELETE /api/connections/[id] — archive, not destroy', () => {
 		authMethod: 'session' as const
 	});
 	const disconnect = (id: string) =>
-		disconnectDELETE({ params: { id }, locals: sessionUser(userId) } as never);
+		disconnectDELETE({ params: { id }, locals: { ...sessionUser(userId), env: TEST_ENV } } as never);
 
 	beforeAll(async () => {
 		const ctx = await createTestDb();
@@ -225,6 +226,50 @@ describe('DELETE /api/connections/[id] — archive, not destroy', () => {
 		// must flip from partial back to published, not stay stuck.
 		const [d] = await db.select().from(drafts).where(eq(drafts.id, draft));
 		expect(d.status).toBe('published');
+	});
+
+	it('revokes TikTok access so a reconnect shows the consent page again', async () => {
+		const conn = await addConnection(userId, {
+			platform: 'tiktok',
+			credentialsEncrypted: await encryptJson(
+				{ accessToken: 'act.1', clientId: 'tt-key', clientSecret: 'tt-secret' },
+				TEST_ENV.APP_ENCRYPTION_KEY
+			)
+		});
+		const sent: Record<string, string>[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: unknown, init?: RequestInit) => {
+				expect(String(input)).toBe('https://open.tiktokapis.com/v2/oauth/revoke/');
+				sent.push(Object.fromEntries(new URLSearchParams(String(init?.body))));
+				return Response.json({});
+			})
+		);
+		const res = await disconnect(conn);
+		vi.unstubAllGlobals();
+		expect(res.status).toBe(200);
+		expect(sent).toEqual([{ client_key: 'tt-key', client_secret: 'tt-secret', token: 'act.1' }]);
+		expect(await db.select().from(connections).where(eq(connections.id, conn))).toHaveLength(0);
+	});
+
+	it('still disconnects TikTok when the revoke call fails', async () => {
+		const conn = await addConnection(userId, {
+			platform: 'tiktok',
+			credentialsEncrypted: await encryptJson(
+				{ accessToken: 'act.1', clientId: 'tt-key', clientSecret: 'tt-secret' },
+				TEST_ENV.APP_ENCRYPTION_KEY
+			)
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => {
+				throw new TypeError('network down');
+			})
+		);
+		const res = await disconnect(conn);
+		vi.unstubAllGlobals();
+		expect(res.status).toBe(200);
+		expect(await db.select().from(connections).where(eq(connections.id, conn))).toHaveLength(0);
 	});
 
 	it('refuses to disconnect while a publish is in flight', async () => {

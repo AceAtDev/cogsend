@@ -78,6 +78,7 @@ export {
 	tiktokProvider,
 	tiktokAuthorizeUrl,
 	tiktokExchangeCode,
+	tiktokRevoke,
 	tiktokVerify,
 	tiktokCreatorInfo,
 	tiktokCannotPostReason,

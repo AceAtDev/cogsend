@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { STALE_CLAIM_MS } from '#lib/domain/due-jobs.js';
 import { xLimitFor } from '#lib/domain/x-limits.js';
 import { isZernioConnection } from '#lib/domain/zernio.js';
+import { decryptJson } from '#lib/server/crypto.js';
 import { chunkIds, first, parseJson } from '#lib/server/db/client.js';
 import { connections, publishAttempts, publishTargets } from '#lib/server/db/schema.js';
 import { fail, handleError, ok } from '#lib/server/http.js';
@@ -11,6 +12,7 @@ import { draftHasInFlightPublish } from '#lib/server/publish-plan.js';
 import { requireSession } from '#lib/server/require.js';
 import { serializeConnection } from '#lib/server/serialize.js';
 import { assignConnectionBrand } from '#lib/server/brands.js';
+import { tiktokRevoke, type ConnectionCredentials } from '#lib/server/providers/index.js';
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
 	try {
@@ -87,6 +89,16 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 			// The guard raced a real claim: keep the connection intact and let
 			// the user retry once the publish settles.
 			return fail('Publishing in progress — try again shortly', 409);
+		}
+
+		if (conn.platform === 'tiktok' && conn.credentialsEncrypted && !isZernioConnection(conn.metaJson)) {
+			// TikTok keeps the grant after the tokens are dropped and would
+			// skip its consent page on reconnect; revoking clears it.
+			const creds = await decryptJson<ConnectionCredentials>(
+				conn.credentialsEncrypted,
+				locals.env.APP_ENCRYPTION_KEY
+			).catch(() => null);
+			if (creds) await tiktokRevoke(creds);
 		}
 
 		if (archived > 0) {

@@ -41,6 +41,7 @@ import {
 const AUTHORIZE_URL = 'https://www.tiktok.com/v2/auth/authorize/';
 const API = 'https://open.tiktokapis.com/v2';
 const TOKEN_URL = `${API}/oauth/token/`;
+const REVOKE_URL = `${API}/oauth/revoke/`;
 // video.publish covers creator_info, Direct Post and the status fetch;
 // creator_info also names the account, so user.info.profile is not needed.
 // video.list reads the counts of the account's own videos (metrics). A
@@ -1018,6 +1019,32 @@ function identity(user: TiktokUser, creator: TiktokCreator | null) {
 		displayName: creator?.nickname || user.display_name?.trim() || username || 'TikTok',
 		avatarUrl: user.avatar_url || creator?.avatarUrl
 	};
+}
+
+/**
+ * Withdraws CogSend's access on TikTok, so a reconnect starts from a fresh
+ * consent page. Best effort: a disconnect still goes through locally when
+ * TikTok is unreachable or the token has already expired.
+ */
+export async function tiktokRevoke(
+	creds: ConnectionCredentials,
+	fetchImpl: FetchLike = providerFetch
+): Promise<boolean> {
+	if (!creds.accessToken || !creds.clientId || !creds.clientSecret) return false;
+	try {
+		const res = await fetchImpl(REVOKE_URL, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({
+				client_key: creds.clientId,
+				client_secret: creds.clientSecret,
+				token: creds.accessToken
+			})
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
 }
 
 export async function tiktokExchangeCode(
