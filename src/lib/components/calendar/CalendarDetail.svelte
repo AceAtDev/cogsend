@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ExternalLink, PenLine, RotateCcw, X } from '@lucide/svelte';
+	import { ExternalLink, PenLine, RotateCcw, ShieldCheck, X } from '@lucide/svelte';
 	import CopyButton from '#lib/components/CopyButton.svelte';
 	import MediaPreview from '#lib/components/MediaPreview.svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
@@ -150,6 +150,18 @@
 				{/if}
 			</dl>
 
+			{#if item.status === 'review'}
+				<p class="rounded-2xl bg-violet-50 px-3 py-2 text-[13px] text-violet-900">
+					An agent wrote this. It keeps its time but goes out only once you approve it{item.at <=
+					Date.now()
+						? '; its time has passed, so approving sends it on the next tick'
+						: ''}.
+				</p>
+			{:else if item.status === 'rejected'}
+				<p class="rounded-2xl bg-stone-100 px-3 py-2 text-[13px] text-stone-700">
+					You rejected this; the agent can revise and resubmit it.
+				</p>
+			{/if}
 			{#if item.errorMessage}
 				<p
 					class="rounded-2xl px-3 py-2 text-[13px] {item.status === 'failed'
@@ -226,6 +238,14 @@
 					</form>
 				{:else}
 					<div class="flex flex-wrap justify-end gap-2">
+						{#if actions.includes('review')}
+							<a
+								href="/review#post-{encodeURIComponent(item.draftId)}"
+								class="{pill} bg-violet-600 text-white hover:bg-violet-700"
+							>
+								<ShieldCheck class="h-4 w-4" /> Review
+							</a>
+						{/if}
 						{#if actions.includes('cancel')}
 							<button
 								type="button"

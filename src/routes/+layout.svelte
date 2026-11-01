@@ -12,7 +12,9 @@
 		CalendarDays,
 		Users,
 		UserCog,
-		ChartColumn
+		ChartColumn,
+		ShieldCheck,
+		Activity
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { fly } from 'svelte/transition';
@@ -270,6 +272,27 @@
 							/> Calendar
 						</a>
 						<a
+							href="/review"
+							class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-bold transition-colors {page
+								.url.pathname === '/review'
+								? 'bg-stone-900 text-white shadow-md'
+								: 'text-stone-600 hover:bg-stone-50 hover:text-stone-900'}"
+							onclick={() => (showWorkspaceDropdown = false)}
+							role="menuitem"
+							data-testid="nav-review"
+						>
+							<ShieldCheck
+								class="h-4 w-4 {page.url.pathname === '/review' ? 'text-white' : 'text-stone-500'}"
+							/> Review
+							{#if data.reviewCount}
+								<span
+									class="ml-auto rounded-full bg-violet-600 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums"
+									>{data.reviewCount}</span
+								>
+								<span class="sr-only">waiting for review</span>
+							{/if}
+						</a>
+						<a
 							href="/insights"
 							class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-bold transition-colors {page
 								.url.pathname === '/insights'
@@ -299,6 +322,21 @@
 									: 'text-stone-500'}"
 							/> Accounts
 						</a>
+						<a
+							href="/activity"
+							class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-bold transition-colors {page
+								.url.pathname === '/activity'
+								? 'bg-stone-900 text-white shadow-md'
+								: 'text-stone-600 hover:bg-stone-50 hover:text-stone-900'}"
+							onclick={() => (showWorkspaceDropdown = false)}
+							role="menuitem"
+						>
+							<Activity
+								class="h-4 w-4 {page.url.pathname === '/activity'
+									? 'text-white'
+									: 'text-stone-500'}"
+							/> Activity
+						</a>
 						{#if data.showUsers}
 							<a
 								href="/admin/users"
@@ -323,6 +361,19 @@
 
 			<!-- RIGHT: Write Action & Profile (Pointer events re-enabled) -->
 			<div class="pointer-events-auto flex items-center gap-3">
+				<!-- Held posts are the one thing worth a tap from any page, phone included. -->
+				{#if data.reviewCount && page.url.pathname !== '/review'}
+					<a
+						href="/review"
+						data-testid="review-pill"
+						class="flex h-11 items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3.5 text-[13px] font-bold text-violet-800 shadow-[0_4px_16px_-6px_rgb(91_33_182/0.25)] transition-colors hover:bg-violet-100"
+						aria-label="{data.reviewCount} waiting for review"
+					>
+						<ShieldCheck class="h-4 w-4" />
+						<span class="tabular-nums">{data.reviewCount}</span>
+						<span class="hidden sm:inline">to review</span>
+					</a>
+				{/if}
 				<!-- Write: hidden only on an empty composer, where it would do nothing -->
 				{#if showWrite}
 					<a

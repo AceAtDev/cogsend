@@ -2,6 +2,7 @@ import type { LayoutServerLoad } from './$types';
 import { readStoredAppName } from '#lib/server/app-settings.js';
 import { isAdmin, isFullyVerified } from '#lib/server/auth.js';
 import { multiUserActive } from '#lib/server/registration.js';
+import { countAwaitingReview } from '#lib/server/review.js';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	// Name and photo ride along on the session read in hooks, so this load
@@ -13,8 +14,13 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		isFullyVerified(locals.user) && isAdmin(locals.user)
 			? await multiUserActive(locals.db, locals.env)
 			: false;
+	// The header's Review count. A failed count only hides the badge.
+	const reviewCount = isFullyVerified(locals.user)
+		? await countAwaitingReview(locals.db, locals.user!.id).catch(() => 0)
+		: 0;
 	return {
 		user: locals.user,
+		reviewCount,
 		displayName: locals.user?.displayName ?? null,
 		profilePictureUrl: locals.user?.profilePictureUrl ?? '',
 		appName: storedAppName ?? locals.env.APP_NAME,

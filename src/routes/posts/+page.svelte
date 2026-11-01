@@ -13,7 +13,9 @@
 		ChevronDown,
 		Check,
 		Users,
-		LoaderCircle
+		LoaderCircle,
+		ShieldCheck,
+		MessageSquareWarning
 	} from '@lucide/svelte';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import MediaPreview from '#lib/components/MediaPreview.svelte';
@@ -439,6 +441,9 @@
 			});
 	}
 
+	// Held for review and rejected posts are still to come: they keep their time.
+	const WAITING_STATUSES = ['scheduled', 'pending', 'publishing', 'awaiting_review', 'rejected'];
+
 	function targetCards(list: QueueTarget[]): Card[] {
 		const groups = new Map<string, QueueTarget[]>();
 		for (const t of list) {
@@ -468,11 +473,15 @@
 				? 'sending'
 				: hasFailed
 					? 'failed'
-					: waiting.length
-						? waiting.every((t) => isProcessing(t.errorMessage))
-							? 'processing'
-							: 'retrying'
-						: primary.status;
+					: group.some((t) => t.status === 'awaiting_review')
+						? 'awaiting_review'
+						: group.some((t) => t.status === 'rejected')
+							? 'rejected'
+							: waiting.length
+								? waiting.every((t) => isProcessing(t.errorMessage))
+									? 'processing'
+									: 'retrying'
+								: primary.status;
 
 			// Cancelled (discarded) platforms leave the card entirely: the
 			// error rows key off failed rows and the icon row off this list.
@@ -504,10 +513,10 @@
 				status: cardStatus,
 				body,
 				when,
-				sortKey: ['scheduled', 'pending', 'publishing'].includes(primary.status)
+				sortKey: WAITING_STATUSES.includes(primary.status)
 					? toTime(primary.scheduledFor ?? primary.updatedAt)
 					: toTime(primary.updatedAt ?? primary.scheduledFor),
-				whenLabel: ['scheduled', 'pending', 'publishing'].includes(primary.status)
+				whenLabel: WAITING_STATUSES.includes(primary.status)
 					? ('scheduled' as const)
 					: ('published' as const),
 				overdue: when != null && toTime(when) <= Date.now(),
@@ -527,9 +536,7 @@
 		});
 	}
 
-	const upcoming = $derived(
-		targets.filter((t) => ['scheduled', 'pending', 'publishing'].includes(t.status))
-	);
+	const upcoming = $derived(targets.filter((t) => WAITING_STATUSES.includes(t.status)));
 	const history = $derived(
 		targets.filter((t) => ['published', 'failed', 'cancelled'].includes(t.status))
 	);
@@ -927,6 +934,8 @@
 		'inline-flex min-h-11 flex-1 items-center justify-center rounded-full bg-stone-100 px-3 text-[12px] font-bold whitespace-nowrap transition-colors disabled:opacity-50 sm:-my-3 sm:flex-none sm:bg-transparent sm:px-0';
 
 	function statusBadge(status: string) {
+		if (status === 'awaiting_review') return 'review';
+		if (status === 'rejected') return 'rejected';
 		if (['scheduled', 'pending', 'publishing'].includes(status)) return 'scheduled';
 		if (status === 'sending') return 'sending';
 		if (status === 'retrying') return 'retrying';
@@ -1232,7 +1241,22 @@
 					</div>
 
 					<div class="flex items-center gap-3">
-						{#if badge === 'scheduled'}
+						{#if badge === 'review'}
+							<a
+								href="/review"
+								class="inline-flex items-center gap-1.5 rounded border border-dashed border-violet-300 bg-violet-50 px-2.5 py-1 text-[10px] font-bold tracking-widest text-violet-800 uppercase"
+								title="An agent wrote this; nothing goes out until you approve it"
+							>
+								<ShieldCheck class="h-3 w-3" /> Awaiting review
+							</a>
+						{:else if badge === 'rejected'}
+							<span
+								class="inline-flex items-center gap-1.5 rounded bg-stone-100 px-2.5 py-1 text-[10px] font-bold tracking-widest text-stone-600 uppercase"
+								title="You rejected it; the agent can revise and resubmit it"
+							>
+								<MessageSquareWarning class="h-3 w-3" /> Rejected
+							</span>
+						{:else if badge === 'scheduled'}
 							<span
 								class="inline-flex items-center gap-1.5 rounded bg-sky-50 px-2.5 py-1 text-[10px] font-bold tracking-widest text-sky-700 uppercase"
 							>
@@ -1412,6 +1436,12 @@
 						{#if card.status === 'sending' && card.when}
 							Started
 							<span class="text-stone-900" title={card.whenTitle}>{card.whenText}</span>
+						{:else if card.status === 'awaiting_review' && card.when}
+							{card.overdue ? 'Was due' : 'Planned for'}
+							<span class="text-stone-900" title={card.whenTitle}>{card.whenText}</span>
+						{:else if card.status === 'rejected' && card.when}
+							Was planned for
+							<span class="text-stone-900" title={card.whenTitle}>{card.whenText}</span>
 						{:else if card.whenLabel === 'scheduled' && card.when && card.overdue}
 							Due
 							<span class="text-stone-900" title={card.whenTitle}>{card.whenText}</span>
@@ -1449,6 +1479,31 @@
 								class="{cardAction} text-red-500 hover:text-red-700"
 							>
 								Remove
+							</button>
+						{:else if (badge === 'review' || badge === 'rejected') && card.targetId}
+							<a
+								href="/compose?id={card.draftId}"
+								class="{cardAction} text-stone-500 hover:text-stone-900"
+							>
+								Edit Post
+							</a>
+							{#if badge === 'review'}
+								<a href="/review" class="{cardAction} text-violet-700 hover:text-violet-900">
+									Review
+								</a>
+							{/if}
+							<button
+								type="button"
+								disabled={busy === card.key}
+								onclick={() =>
+									(pendingCancel = {
+										ids: cancelTargetIds(card.platforms),
+										label: draftExcerpt(card.body, 60) || 'post',
+										cardKey: card.key
+									})}
+								class="{cardAction} text-red-500 hover:text-red-700"
+							>
+								{busy === card.key ? 'Cancelling…' : 'Cancel'}
 							</button>
 						{:else if (badge === 'scheduled' || badge === 'retrying' || badge === 'processing') && card.targetId}
 							<a

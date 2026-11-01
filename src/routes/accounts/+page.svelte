@@ -52,7 +52,14 @@
 			longPosts?: boolean;
 		} | null;
 	};
-	type Brand = { id: string; name: string; slug: string; color: string };
+	type Brand = {
+		id: string;
+		name: string;
+		slug: string;
+		color: string;
+		requireApproval?: boolean;
+		paused?: boolean;
+	};
 	type ZernioAccount = {
 		id: string;
 		platform: string;
@@ -655,6 +662,24 @@
 		await brandRequest(`/api/brands/${brand.id}`, 'PATCH', { color });
 	}
 
+	async function setBrandReview(brand: Brand, requireApproval: boolean) {
+		if (
+			await brandRequest(`/api/brands/${brand.id}`, 'PATCH', {
+				requireApproval
+			})
+		)
+			msg = requireApproval
+				? `Agent posts on ${brand.name} now wait for your review`
+				: `${brand.name} is trusted: agent posts are scheduled without review`;
+	}
+
+	async function setBrandPaused(brand: Brand, paused: boolean) {
+		if (await brandRequest(`/api/brands/${brand.id}`, 'PATCH', { paused }))
+			msg = paused
+				? `Paused ${brand.name}: nothing of it is published until you resume it`
+				: `Resumed ${brand.name}: anything that came due while paused goes out on the next tick`;
+	}
+
 	async function confirmBrandDelete() {
 		const brand = pendingBrandDelete;
 		if (!brand) return;
@@ -785,6 +810,18 @@
 						{section.brand?.name ?? 'Unbranded'}
 					</h2>
 					<span class="text-[11px] font-medium text-stone-400">{section.accounts.length}</span>
+					{#if section.brand?.paused}
+						<span
+							class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900 uppercase"
+							>Paused</span
+						>
+					{/if}
+					{#if section.brand && section.brand.requireApproval === false}
+						<span
+							class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 uppercase"
+							title="Agent posts skip review">Trusted</span
+						>
+					{/if}
 				</div>
 				{#if !section.accounts.length}
 					<p class="border-b border-stone-100 px-4 py-3 text-xs font-medium text-stone-400 sm:px-6">
@@ -960,7 +997,10 @@
 			Group accounts by brand. Agents address an account as <code class="font-mono text-[12px]"
 				>brand.platform</code
 			>, such as <code class="font-mono text-[12px]">jobjob.linkedin</code>; renaming a brand keeps
-			its keys.
+			its keys. Posts an agent writes wait in
+			<a href="/review" class="font-bold underline">Review</a>
+			until you approve them, unless you untick review for a brand you trust; accounts with no brand are
+			always reviewed. A paused brand publishes nothing until you resume it.
 		</p>
 		{#if brands.length}
 			<ul class="mt-4 divide-y divide-stone-100">
@@ -996,6 +1036,34 @@
 						>
 							<X class="h-4 w-4" />
 						</button>
+						<div class="flex w-full flex-wrap gap-2 pl-10">
+							<label
+								class="inline-flex min-h-10 items-center gap-2 rounded-full border border-stone-200 px-3 text-[12px] font-bold text-stone-700"
+								title="Off: posts an agent writes for this brand are scheduled without waiting for you"
+							>
+								<input
+									type="checkbox"
+									checked={brand.requireApproval !== false}
+									disabled={brandBusy}
+									onchange={(e) => setBrandReview(brand, e.currentTarget.checked)}
+									data-testid="brand-review-{brand.slug}"
+									class="h-4 w-4 rounded"
+								/>
+								Review agent posts
+							</label>
+							<button
+								type="button"
+								disabled={brandBusy}
+								onclick={() => setBrandPaused(brand, !brand.paused)}
+								aria-pressed={Boolean(brand.paused)}
+								data-testid="brand-pause-{brand.slug}"
+								class="inline-flex min-h-10 items-center gap-1.5 rounded-full border px-3 text-[12px] font-bold {brand.paused
+									? 'border-amber-300 bg-amber-100 text-amber-900'
+									: 'border-stone-200 text-stone-700'}"
+							>
+								{brand.paused ? 'Paused — resume' : 'Pause publishing'}
+							</button>
+						</div>
 					</li>
 				{/each}
 			</ul>

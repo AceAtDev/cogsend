@@ -3,6 +3,9 @@
 
 	/** Chip tint per state; the brand colour stays on the left edge either way. */
 	export const STATUS_TONE: Record<CalendarStatus, string> = {
+		// Dashed and tinted, so a held post reads as "not going out yet" at a glance.
+		review: 'border-dashed bg-violet-50 text-violet-950',
+		rejected: 'border-dashed bg-stone-50 text-stone-500',
 		scheduled: 'bg-white text-stone-800',
 		due: 'bg-amber-50 text-amber-900',
 		sending: 'bg-sky-50 text-sky-900',
@@ -13,6 +16,8 @@
 	};
 
 	export const STATUS_DOT: Record<CalendarStatus, string> = {
+		review: 'bg-violet-500 ring-2 ring-violet-200',
+		rejected: 'bg-stone-400',
 		scheduled: 'bg-stone-400',
 		due: 'bg-amber-500',
 		sending: 'bg-sky-500 motion-safe:animate-pulse',
@@ -24,7 +29,7 @@
 </script>
 
 <script lang="ts">
-	import { Image } from '@lucide/svelte';
+	import { Image, ShieldCheck } from '@lucide/svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import { canDrag, formatDateTime, formatTime, STATUS_LABEL } from '#lib/domain/calendar.js';
 	import { displayAt } from '#lib/domain/channel-keys.js';
@@ -81,10 +86,14 @@
 			<PlatformLogo platform={item.channel.platform} size={11} />
 		</span>
 		<span
-			class="min-w-0 flex-1 truncate font-semibold {item.status === 'cancelled'
+			class="min-w-0 flex-1 truncate font-semibold {item.status === 'cancelled' ||
+			item.status === 'rejected'
 				? 'line-through'
 				: ''}">{handle || item.channel.platformName}</span
 		>
+		{#if item.status === 'review'}
+			<ShieldCheck class="h-3 w-3 shrink-0 text-violet-600" aria-hidden="true" />
+		{/if}
 		{#if item.mediaCount}
 			<Image class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
 		{/if}
