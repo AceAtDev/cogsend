@@ -445,6 +445,26 @@ describe('reschedule_posts', () => {
 	});
 });
 
+describe('slots far ahead', () => {
+	it('sees posts near an `after` past the usual window, in both tools', async () => {
+		// Monday 2027-01-11 is ten weeks out; its 09:00 is already taken.
+		await occupy(ids.linkedin, '2027-01-11T08:00:00.000Z');
+		const { id } = await occupy(ids.linkedin, TUE_09);
+		const after = { slot: 'next', after: '2027-01-11' };
+		const scheduled = data(
+			await call('schedule_posts', {
+				posts: [{ channels: ['jobjob.linkedin'], text: 'Far', runAt: after }],
+				dryRun: true
+			})
+		);
+		expect(scheduled.posts[0].deliveries[0].runAt.utc).toBe('2027-01-11T17:00:00.000Z');
+		const moved = data(
+			await call('reschedule_posts', { items: [{ deliveryId: id, runAt: after }], dryRun: true })
+		);
+		expect(moved.deliveries[0].after.utc).toBe('2027-01-11T17:00:00.000Z');
+	});
+});
+
 describe('move_post', () => {
 	it('refuses moving onto a channel whose day is full', async () => {
 		await occupy(ids.linkedin, MON_09);

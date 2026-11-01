@@ -1203,7 +1203,11 @@ export async function reschedulePostsOp(
 	const channelById = new Map(dir.channels.map((c) => [c.connectionId, c]));
 	const moving = picked.flatMap(({ item, rows }) => rows.map((row) => ({ item, row })));
 	const ignore = moving.map((m) => m.row.id);
-	const explicitTimes = times.flatMap((t) => (t && 'at' in t ? [t.at.getTime()] : []));
+	// The furthest named time or slot start, so the planner sees every post a
+	// check or a slot search could run into.
+	const explicitTimes = times.flatMap((t) =>
+		t ? ['at' in t ? t.at.getTime() : t.after.getTime()] : []
+	);
 	const planner = await createSlotPlanner(ctx.db, userId, {
 		timeZone,
 		now,
