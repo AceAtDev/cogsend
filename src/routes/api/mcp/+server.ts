@@ -41,6 +41,7 @@ import {
 	planDraftTiktok,
 	publishNowOp,
 	reschedulePostsOp,
+	resubmitForReviewOp,
 	saveDraftTiktok,
 	schedulePostsOp,
 	validateChannelsOp,
@@ -52,6 +53,7 @@ import { resolveChannelRef, candidateLines, type ChannelRef } from '#lib/domain/
 import { loadPlatformRequirements } from '#lib/server/platform-requirements.js';
 import { requireScope, requireUser } from '#lib/server/require.js';
 import { TIKTOK_PRIVACY_LEVELS } from '#lib/domain/tiktok.js';
+import { actorOf, recordActivity } from '#lib/server/activity.js';
 
 const id = z.string().min(1).max(128);
 const anyPlatform = z.enum(PLATFORM_IDS as [PlatformId, ...PlatformId[]]);
@@ -320,6 +322,7 @@ function registerForEvent<T extends z.ZodType>(
 				};
 				const result = await operation(input, agent);
 				const summary = typeof result.summary === 'string' ? result.summary : `${name}: done`;
+				if (spec.scope === 'write') await logToolCall(event, user.id, name, input, result, summary);
 				return {
 					content: [{ type: 'text' as const, text: `${summary}\n\n${JSON.stringify(result)}` }],
 					structuredContent: result
@@ -329,6 +332,33 @@ function registerForEvent<T extends z.ZodType>(
 			}
 		}) as never
 	);
+}
+
+/**
+ * One activity row per write that changed something: previews, confirmation
+ * requests and idempotent replays change nothing, so they leave none.
+ */
+async function logToolCall(
+	event: RequestEvent,
+	userId: string,
+	name: string,
+	input: unknown,
+	result: Record<string, unknown>,
+	summary: string
+) {
+	if (result.committed === false || result.idempotentReplay === true) return;
+	const args = (input ?? {}) as Record<string, unknown>;
+	const postId =
+		(typeof result.postId === 'string' && result.postId) ||
+		(typeof args.postId === 'string' && args.postId) ||
+		(typeof args.draftId === 'string' && args.draftId) ||
+		null;
+	await recordActivity(event.locals.db, userId, actorOf(event.locals), {
+		action: `mcp.${name}`,
+		targetType: postId ? 'post' : null,
+		targetId: postId,
+		summary: `${name}: ${summary.split('\n').slice(0, 3).join(' · ')}`
+	});
 }
 
 function canMakeJpegCopies(ctx: OperationContext): boolean {
@@ -426,7 +456,7 @@ function createServer(event: RequestEvent) {
 			title: 'List planned and past posts',
 			annotation: annotations.read,
 			description:
-				'Lists deliveries (one post on one channel) in time order, with post id, delivery id, channel key, brand, @handle, status and local and UTC time. By default it shows what is still to come or needs attention (scheduled, pending, publishing, failed); filter by brand, channel, status and a from/to range (a day such as "2026-11-03" means that whole day in the operator’s zone). Use status ["draft"] alone to list unscheduled drafts instead. Results are paged: pass nextCursor back as cursor. Use get_post for one post’s full text, media and checks.',
+				'Lists deliveries (one post on one channel) in time order, with post id, delivery id, channel key, brand, @handle, status and local and UTC time. By default it shows what is still to come or needs attention (awaiting_review, rejected, scheduled, pending, publishing, failed); a delivery held for review or rejected carries review.state and the reviewer’s review.note, so read the rejections here before revising and calling resubmit_for_review; filter by brand, channel, status and a from/to range (a day such as "2026-11-03" means that whole day in the operator’s zone). Use status ["draft"] alone to list unscheduled drafts instead. Results are paged: pass nextCursor back as cursor. Use get_post for one post’s full text, media and checks.',
 			outputSchema: loose({
 				now: instant,
 				statuses: z.array(z.string()),
@@ -440,7 +470,7 @@ function createServer(event: RequestEvent) {
 			.object({
 				brand: z.string().min(1).max(80).optional().describe('Brand slug or name.'),
 				channel: channelRef.optional(),
-				status: z.array(z.enum(LIST_STATUSES)).min(1).max(7).optional(),
+				status: z.array(z.enum(LIST_STATUSES)).min(1).max(9).optional(),
 				from: z.string().min(10).max(40).optional(),
 				to: z.string().min(10).max(40).optional(),
 				cursor: z.string().min(1).max(500).optional(),
@@ -458,7 +488,7 @@ function createServer(event: RequestEvent) {
 			title: 'Get one post',
 			annotation: annotations.read,
 			description:
-				'One post by postId: its text, per-platform variants, media (with mediaId for edit_media) and every delivery with channel key, @handle, status and local and UTC time. With response_format "detailed" it also returns full text and checks the post against every channel it still goes to, listing what a platform would refuse. Use list_posts to find post ids; use this before move_post or publish_now to see what will go out.',
+				'One post by postId: its text, per-platform variants, media (with mediaId for edit_media) and every delivery with channel key, @handle, status and local and UTC time. With response_format "detailed" it also returns full text and checks the post against every channel it still goes to, listing what a platform would refuse. Each delivery held for review or rejected carries review (state waiting, overdue or rejected, the reviewer’s note, when it was reviewed). Use list_posts to find post ids; use this before move_post or publish_now to see what will go out.',
 			outputSchema: loose({
 				now: instant,
 				post: loose({
@@ -576,7 +606,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create and schedule posts',
 			annotation: annotations.schedule,
-			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt. Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
+			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt. Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Review: on a brand that requires it (list_channels says which), committed deliveries come back as status awaiting_review: they keep their time but nothing goes out until the operator approves them in the Review inbox, so never resend them. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				now: instant,
@@ -698,7 +728,7 @@ function createServer(event: RequestEvent) {
 			title: 'Change post times',
 			annotation: annotations.reschedule,
 			description:
-				'Moves scheduled deliveries to a new time, leaving their channels and content alone. Each item names one delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels) and the new runAt; up to 20 items, all checked before any is changed. Repeating the same call is safe. Failed deliveries are rescheduled too; published, publishing and cancelled ones are refused. Use move_post to change channels and publish_now to send immediately.',
+				'Moves scheduled deliveries to a new time, leaving their channels and content alone. Each item names one delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels) and the new runAt; up to 20 items, all checked before any is changed. Repeating the same call is safe. Failed deliveries are rescheduled too; published, publishing, cancelled and rejected ones are refused. A delivery held for review stays held at its new time. Use move_post to change channels and publish_now to send immediately.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				deliveries: z.array(loose({ deliveryId: z.string(), channel: channelOut })),
@@ -778,13 +808,36 @@ function createServer(event: RequestEvent) {
 	);
 
 	register(
+		'resubmit_for_review',
+		{
+			scope: 'write',
+			title: 'Resubmit a rejected post for review',
+			annotation: annotations.reschedule,
+			description:
+				'Sends deliveries the operator rejected back to the Review inbox, after you revised the post as their note asked (read it with list_posts or get_post; change text with save_draft and media with edit_media or attach_media). Each item names a delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels); runAt gives them a new time, and is required when the old one has passed. Deliveries already waiting for review are left as they are, so repeating the call is safe. Nothing is published by this: the operator still approves.',
+			outputSchema: writeOut({
+				committed: z.boolean(),
+				deliveries: z.array(deliveryOut)
+			}),
+			example: { items: [{ postId: 'POST_ID' }], runAt: TIME_EXAMPLE }
+		},
+		z
+			.object({
+				items: z.array(z.object(deliverySelector).strict()).min(1).max(20),
+				runAt: runAt.optional()
+			})
+			.strict(),
+		(input, agent) => resubmitForReviewOp(agent, input)
+	);
+
+	register(
 		'publish_now',
 		{
 			scope: 'write',
 			title: 'Publish a post now',
 			annotation: annotations.publish,
 			description:
-				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure) unless save_draft stored them; there is no default. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
+				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure) unless save_draft stored them; there is no default. On a brand that requires review nothing is sent: the deliveries come back awaiting_review and go out on the next tick once the operator approves them. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				postId: z.string(),

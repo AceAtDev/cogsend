@@ -67,6 +67,9 @@ import {
 	type TiktokPlan
 } from '#lib/server/api/agent-tiktok.js';
 import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
+import { heldForReviewLine, reviewTiming } from '#lib/domain/review.js';
+import { actorOf } from '#lib/server/activity.js';
+import { resubmitDeliveries } from '#lib/server/review.js';
 import {
 	consumeConfirmation,
 	hashPayload,
@@ -96,7 +99,7 @@ export const CONFLICT_WINDOW_MS = 60 * 60_000;
 export const MAX_BATCH_POSTS = 10;
 export const MAX_BATCH_DELIVERIES = 20;
 
-const WAITING = ['scheduled', 'pending', 'failed'] as const;
+const WAITING = ['scheduled', 'pending', 'failed', 'awaiting_review'] as const;
 
 function fail(message: string, details?: Record<string, unknown>, status = 400): never {
 	throw new ApiOperationError(message, status, details);
@@ -281,12 +284,18 @@ export async function listChannelsOp(agent: AgentContext) {
 		...dir.brands.map((b) => ({ name: b.name, slug: b.slug, color: b.color, id: b.id })),
 		{ name: 'Unbranded', slug: UNBRANDED_SLUG, color: UNBRANDED_COLOR, id: null as string | null }
 	]
-		.map((b) => ({
-			name: b.name,
-			slug: b.slug,
-			color: b.color,
-			channels: dir.channels.filter((c) => c.brand.id === b.id).map(channelView)
-		}))
+		.map((b) => {
+			const review = b.id ? dir.review.get(b.id) : undefined;
+			return {
+				name: b.name,
+				slug: b.slug,
+				color: b.color,
+				// An account in no brand always waits for review.
+				requireApproval: review?.requireApproval ?? true,
+				paused: review?.paused ?? false,
+				channels: dir.channels.filter((c) => c.brand.id === b.id).map(channelView)
+			};
+		})
 		.filter((b) => b.channels.length || b.slug !== UNBRANDED_SLUG);
 	const platforms = PLATFORM_ORDER.filter((p) => dir.channels.some((c) => c.platform === p)).map(
 		(p) => ({ platform: p, name: platformName(p), summary: platformRequirements(p).summary })
@@ -300,7 +309,13 @@ export async function listChannelsOp(agent: AgentContext) {
 					)
 					.join('\n')
 			: '  (no channels)';
-		return `${g.name}:\n${list}`;
+		const flags = [
+			g.paused ? 'PAUSED: publishes nothing until the operator resumes it' : '',
+			g.requireApproval
+				? 'your posts wait for the operator’s review'
+				: 'trusted: your posts are scheduled without review'
+		].filter(Boolean);
+		return `${g.name} (${flags.join('; ')}):\n${list}`;
 	});
 	const now = nowView(agent);
 	return {
@@ -311,7 +326,8 @@ export async function listChannelsOp(agent: AgentContext) {
 		summary: [
 			`Now: ${now.display} (${now.utc}).`,
 			...lines,
-			'Target channels by key exactly as listed. A bare platform such as "instagram" is refused when more than one channel posts there.'
+			'Target channels by key exactly as listed. A bare platform such as "instagram" is refused when more than one channel posts there.',
+			'On a brand that requires review, what you schedule or publish waits as awaiting_review until the operator approves it in the Review inbox; a rejection comes back as status rejected with a note (list_posts, get_post). Revise the post and call resubmit_for_review.'
 		].join('\n')
 	};
 }
@@ -786,6 +802,8 @@ interface DeliveryOut {
 	runAt: InstantView | null;
 	permalink?: string | null;
 	error?: string | null;
+	/** waiting/overdue while held, rejected, or reviewed once approved with a note. */
+	review?: { state: string; note: string | null; reviewedAt: InstantView | null };
 }
 
 async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: string[]) {
@@ -914,20 +932,31 @@ async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: 
 	}
 	const deliveries = results.flatMap((r) => r.deliveries);
 	const publishedNow = plans.some((p) => p.runAt.now);
+	const held = deliveries.filter((d) => d.status === 'awaiting_review').length;
 	const nowOutcome = overallOutcome(
 		deliveries.map((d) => d.status),
 		false
 	);
+	const status =
+		held === deliveries.length && held > 0
+			? 'awaiting_review'
+			: publishedNow
+				? nowOutcome
+				: 'scheduled';
 	return {
-		status: publishedNow ? nowOutcome : 'scheduled',
+		status,
 		committed: true,
 		complete: true,
+		heldForReview: held,
 		now: nowView(agent),
 		posts: results,
 		warnings,
-		next: 'Done. list_posts shows them; reschedule_posts changes a time, move_post changes a channel, cancel_posts stops one.',
+		next: held
+			? `${heldForReviewLine(held)} list_posts with status ["awaiting_review", "rejected"] shows where each stands; a rejection carries the operator's note.`
+			: 'Done. list_posts shows them; reschedule_posts changes a time, move_post changes a channel, cancel_posts stops one.',
 		summary: [
-			`${publishedNow && nowOutcome !== 'published' ? `${nowOutcome.toUpperCase()}: ` : ''}${publishedNow ? 'Published/queued' : 'Scheduled'} ${deliveries.length} deliver${deliveries.length === 1 ? 'y' : 'ies'}:`,
+			...(held ? [heldForReviewLine(held)] : []),
+			`${publishedNow && nowOutcome !== 'published' && status !== 'awaiting_review' ? `${nowOutcome.toUpperCase()}: ` : ''}${status === 'awaiting_review' ? 'Submitted for review' : publishedNow ? 'Published/queued' : 'Scheduled'} ${deliveries.length} deliver${deliveries.length === 1 ? 'y' : 'ies'}:`,
 			...deliveries.map(
 				(d) =>
 					`${d.channel.key} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (post ${d.postId}, delivery ${d.deliveryId})${d.error ? ` — ${d.error}` : ''}`
@@ -978,7 +1007,28 @@ function deliveryOut(row: TargetRow, channel: ChannelView, timeZone: string): De
 		status: row.status,
 		runAt: view(row.scheduledFor, timeZone),
 		permalink: row.remoteUrl,
-		error: row.errorMessage
+		error: row.errorMessage,
+		...reviewOut(row, timeZone)
+	};
+}
+
+/** What review says about a delivery, once it has been near review at all. */
+function reviewOut(
+	row: Pick<TargetRow, 'status' | 'scheduledFor' | 'reviewNote' | 'reviewedAt'>,
+	timeZone: string
+): { review?: NonNullable<DeliveryOut['review']> } {
+	if (row.status !== 'awaiting_review' && row.status !== 'rejected' && !row.reviewNote) return {};
+	return {
+		review: {
+			state:
+				row.status === 'awaiting_review'
+					? reviewTiming(row.scheduledFor)
+					: row.status === 'rejected'
+						? 'rejected'
+						: 'reviewed',
+			note: row.reviewNote,
+			reviewedAt: view(row.reviewedAt, timeZone)
+		}
 	};
 }
 
@@ -1095,13 +1145,14 @@ export async function reschedulePostsOp(
 	);
 	const out = [];
 	for (const change of changes) {
-		if (!input.dryRun)
-			await rescheduleDelivery(ctx, userId, change.row.id, { runAt: change.to.toISOString() });
+		const done = input.dryRun
+			? null
+			: await rescheduleDelivery(ctx, userId, change.row.id, { runAt: change.to.toISOString() });
 		out.push({
 			deliveryId: change.row.id,
 			postId: change.row.draftId,
 			channel: change.channel,
-			status: input.dryRun ? change.row.status : 'scheduled',
+			status: done?.status ?? change.row.status,
 			before: view(change.row.scheduledFor, timeZone),
 			after: describeInstant(change.to, timeZone)
 		});
@@ -1119,7 +1170,7 @@ export async function reschedulePostsOp(
 			`${input.dryRun ? 'DRY RUN — would move' : 'Rescheduled'} ${out.length} deliver${out.length === 1 ? 'y' : 'ies'}:`,
 			...out.map(
 				(d) =>
-					`${d.channel.key} ${d.channel.handle ?? ''}: ${d.before?.display ?? 'unscheduled'} → ${d.after.display} (delivery ${d.deliveryId})`
+					`${d.channel.key} ${d.channel.handle ?? ''}: ${d.before?.display ?? 'unscheduled'} → ${d.after.display}${d.status === 'awaiting_review' ? ' (still held for review)' : ''} (delivery ${d.deliveryId})`
 			),
 			...warnings.map((w) => `Warning: ${w}`)
 		].join('\n')
@@ -1555,23 +1606,28 @@ export async function publishNowOp(
 				deliveries.map((d) => d.status),
 				Boolean(published.stopped)
 			);
+			const held = deliveries.filter((d) => d.status === 'awaiting_review').length;
 			return {
 				status: outcome,
 				committed: true,
+				heldForReview: held,
 				now: nowView(agent),
 				postId: input.postId,
 				channels: channels.map(channelView),
 				deliveries,
 				...(published.stopped ? { error: published.stoppedError } : {}),
 				next:
-					outcome === 'failed'
-						? 'Nothing was published. Read each delivery error, fix the cause, then call publish_now again for this post.'
-						: published.stopped
-							? 'Some channels were not reached; they are still due and go out on the next scheduler tick. Do not resend.'
-							: outcome === 'partial'
-								? 'Some deliveries failed; the rest went out. Fix the failed ones from their errors and publish_now only those channels; do not resend the published ones.'
-								: 'Done. Deliveries with status pending go out on the next scheduler tick; do not resend them.',
+					outcome === 'awaiting_review'
+						? `${heldForReviewLine(held)} Once approved it goes out on the next scheduler tick.`
+						: outcome === 'failed'
+							? 'Nothing was published. Read each delivery error, fix the cause, then call publish_now again for this post.'
+							: published.stopped
+								? 'Some channels were not reached; they are still due and go out on the next scheduler tick. Do not resend.'
+								: outcome === 'partial'
+									? 'Some deliveries failed; the rest went out. Fix the failed ones from their errors and publish_now only those channels; do not resend the published ones.'
+									: 'Done. Deliveries with status pending go out on the next scheduler tick; do not resend them.',
 				summary: [
+					...(held ? [heldForReviewLine(held)] : []),
 					`${outcome === 'failed' ? 'FAILED: ' : outcome === 'partial' ? 'PARTIAL: ' : ''}Publish of post ${input.postId}:`,
 					...deliveries.map(
 						(d) =>
@@ -1589,14 +1645,19 @@ export async function publishNowOp(
 export function overallOutcome(
 	statuses: string[],
 	stopped: boolean
-): 'published' | 'partial' | 'failed' {
-	const failed = statuses.filter((s) => s === 'failed').length;
-	if (statuses.length && failed === statuses.length) return 'failed';
+): 'published' | 'partial' | 'failed' | 'awaiting_review' {
+	// Held deliveries are neither sent nor failed: they wait for the operator.
+	const sent = statuses.filter((s) => s !== 'awaiting_review');
+	if (statuses.length && !sent.length) return 'awaiting_review';
+	const failed = sent.filter((s) => s === 'failed').length;
+	if (sent.length && failed === sent.length) return 'failed';
 	if (failed || stopped) return 'partial';
 	return 'published';
 }
 
 export const DELIVERY_STATUSES = [
+	'awaiting_review',
+	'rejected',
 	'scheduled',
 	'pending',
 	'publishing',
@@ -1605,7 +1666,14 @@ export const DELIVERY_STATUSES = [
 	'cancelled'
 ] as const;
 export const LIST_STATUSES = [...DELIVERY_STATUSES, 'draft'] as const;
-const DEFAULT_LIST_STATUSES = ['scheduled', 'pending', 'publishing', 'failed'];
+const DEFAULT_LIST_STATUSES = [
+	'awaiting_review',
+	'rejected',
+	'scheduled',
+	'pending',
+	'publishing',
+	'failed'
+];
 
 function parseBound(raw: string, end: boolean, timeZone: string, field: string): Date {
 	const day = /^\d{4}-\d{2}-\d{2}$/.test(raw.trim());
@@ -1765,7 +1833,8 @@ export async function listPostsOp(agent: AgentContext, input: ListInput) {
 				weekday: at.weekday,
 				scheduled: r.t.scheduledFor !== null
 			},
-			excerpt: draftExcerpt(body, 80)
+			excerpt: draftExcerpt(body, 80),
+			...reviewOut(r.t, timeZone)
 		};
 		if (!detailed) return base;
 		return {
@@ -1790,7 +1859,7 @@ export async function listPostsOp(agent: AgentContext, input: ListInput) {
 			`${items.length} deliver${items.length === 1 ? 'y' : 'ies'} (${statuses.join('/')})${hasMore ? ', more available' : ''}:`,
 			...items.map(
 				(i) =>
-					`${i.when.weekday.slice(0, 3)} ${i.when.local.slice(0, 16).replace('T', ' ')} · ${i.channel || '(disconnected)'} ${i.handle ?? ''} · ${i.status} · "${i.excerpt}" (post ${i.postId}, delivery ${i.deliveryId})`
+					`${i.when.weekday.slice(0, 3)} ${i.when.local.slice(0, 16).replace('T', ' ')} · ${i.channel || '(disconnected)'} ${i.handle ?? ''} · ${i.status}${i.review?.state === 'overdue' ? ' (time passed, still held)' : ''} · "${i.excerpt}" (post ${i.postId}, delivery ${i.deliveryId})${i.review?.note ? `\n    Reviewer: ${i.review.note}` : ''}`
 			),
 			hasMore
 				? `More: call list_posts again with cursor "${nextCursor}", or narrow with brand, channel, from or to.`
@@ -1912,8 +1981,13 @@ export async function getPostOp(
 			`Post ${draft.id}${draft.title ? ` "${draft.title}"` : ''} (${draft.status}): "${draftExcerpt(draft.baseBody, 120)}" — ${mediaSummary(draft.media, 0)}`,
 			...deliveries.map(
 				(d) =>
-					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})`
+					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})${d.review?.note ? `\n    Reviewer: ${d.review.note}` : ''}`
 			),
+			...(deliveries.some((d) => d.status === 'rejected')
+				? [
+						'Rejected in review: revise the post as the note asks (save_draft, edit_media), then call resubmit_for_review with this postId.'
+					]
+				: []),
 			...(check && !check.ok ? check.problems.map((p) => `  Problem: ${p}`) : [])
 		].join('\n')
 	};
@@ -2038,4 +2112,66 @@ export async function saveDraftTiktok(
 			}
 		}
 	});
+}
+
+/**
+ * An agent's answer to a rejection: after revising the post (save_draft,
+ * edit_media), its rejected deliveries wait for review again, at their own
+ * time or a new one. Deliveries already waiting are left as they are.
+ */
+export async function resubmitForReviewOp(
+	agent: AgentContext,
+	input: { items: DeliverySelector[]; runAt?: RunAtInput }
+) {
+	const { ctx, userId, timeZone, now } = agent;
+	let runAt: Date | null = null;
+	if (input.runAt !== undefined) {
+		const parsed = parseRunAt(input.runAt, now, timeZone);
+		if (!parsed.ok) fail(`runAt: ${parsed.message}`, { code: 'invalid_time' });
+		if (parsed.now)
+			fail('runAt: "now" is not a review time; send the time it should go out once approved.', {
+				code: 'invalid_time'
+			});
+		runAt = parsed.utc;
+	}
+	const { dir, picked } = await selectDeliveries(agent, input.items, 'items', [
+		'rejected',
+		'awaiting_review'
+	]);
+	const rows = picked.flatMap((p) => p.rows);
+	const { viewOf } = await channelsFor(agent, rows, dir);
+	const stale = rows.filter(
+		(r) => r.status === 'rejected' && !runAt && r.scheduledFor && r.scheduledFor <= now
+	);
+	if (stale.length)
+		fail(
+			`${stale.length} deliver${stale.length === 1 ? 'y’s' : 'ies’'} time has passed; send runAt with a new time.`,
+			{ code: 'invalid_time', deliveryIds: stale.map((r) => r.id) }
+		);
+	const result = await resubmitDeliveries(
+		ctx.db,
+		userId,
+		actorOf(ctx),
+		rows.map((r) => r.id),
+		runAt,
+		now
+	);
+	const fresh = result.resubmitted.length
+		? await ownedTargets(agent, inArray(publishTargets.id, result.resubmitted))
+		: [];
+	const deliveries = fresh.map((t) => deliveryOut(t, viewOf(t.connectionId), timeZone));
+	return {
+		status: 'awaiting_review',
+		committed: true,
+		now: nowView(agent),
+		deliveries,
+		next: `${heldForReviewLine(deliveries.length)} The operator sees your revision next to their earlier note.`,
+		summary: [
+			heldForReviewLine(deliveries.length),
+			...deliveries.map(
+				(d) =>
+					`  ${d.channel.key} ${d.channel.handle ?? ''}${d.runAt ? ` at ${d.runAt.display}` : ''} (post ${d.postId}, delivery ${d.deliveryId})`
+			)
+		].join('\n')
+	};
 }

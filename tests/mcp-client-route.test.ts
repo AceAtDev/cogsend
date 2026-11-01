@@ -16,6 +16,7 @@ const expectedTools = [
 	'reschedule_posts',
 	'move_post',
 	'cancel_posts',
+	'resubmit_for_review',
 	'publish_now',
 	'save_draft',
 	'attach_media',
@@ -56,6 +57,12 @@ const expectedAnnotations: Record<string, Record<string, boolean>> = {
 	cancel_posts: {
 		readOnlyHint: false,
 		destructiveHint: true,
+		idempotentHint: true,
+		openWorldHint: false
+	},
+	resubmit_for_review: {
+		readOnlyHint: false,
+		destructiveHint: false,
 		idempotentHint: true,
 		openWorldHint: false
 	},
@@ -498,12 +505,14 @@ describe('changing what is planned', () => {
 		expect(moved.status).toBe('moved');
 		const rows = await h.deliveries();
 		expect(rows.find((r) => r.connectionId === ids.jobjobLinkedin)!.status).toBe('cancelled');
+		// An account in no brand always reviews an agent's writes, so the new
+		// delivery keeps the time and waits for the operator.
 		const fresh = rows.find((r) => r.connectionId === ids.bluesky)!;
-		expect(fresh.status).toBe('scheduled');
+		expect(fresh.status).toBe('awaiting_review');
 		expect(fresh.scheduledFor!.toISOString()).toBe(preview.before[0].runAt.utc);
 		expect(moved.after[0]).toMatchObject({
 			channel: { key: 'unbranded.bluesky' },
-			status: 'scheduled'
+			status: 'awaiting_review'
 		});
 	});
 

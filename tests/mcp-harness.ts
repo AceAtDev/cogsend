@@ -61,12 +61,29 @@ export async function createMcpHarness({ timezone = 'UTC' }: { timezone?: string
 		return client;
 	}
 
-	async function brand(name: string, slug: string, color = '#2563eb') {
+	/**
+	 * Trusted unless asked otherwise: most suites exercise what scheduling does
+	 * once a write is allowed through, and review has its own (mcp-review).
+	 * The app's own default is the opposite.
+	 */
+	async function brand(
+		name: string,
+		slug: string,
+		color = '#2563eb',
+		{ requireApproval = false }: { requireApproval?: boolean } = {}
+	) {
 		const id = newId();
 		const now = new Date();
-		await db
-			.insert(brands)
-			.values({ id, userId: user.id, name, slug, color, createdAt: now, updatedAt: now });
+		await db.insert(brands).values({
+			id,
+			userId: user.id,
+			name,
+			slug,
+			color,
+			requireApproval,
+			createdAt: now,
+			updatedAt: now
+		});
 		return id;
 	}
 

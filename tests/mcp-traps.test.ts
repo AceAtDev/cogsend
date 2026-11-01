@@ -300,7 +300,8 @@ describe('agent traps: no write ever lands on a channel the request did not name
 		await call('cancel_posts', { items: [{ postId, channels: ['jobjob.linkedin'] }] });
 		const rows = await h.deliveries();
 		expect(rows.find((r) => r.connectionId === ch.jobjobLinkedin)!.status).toBe('cancelled');
-		expect(rows.find((r) => r.connectionId === ch.patDot)!.status).toBe('scheduled');
+		// Unbranded, so held for review rather than scheduled; untouched either way.
+		expect(rows.find((r) => r.connectionId === ch.patDot)!.status).toBe('awaiting_review');
 		await expectOnlyOn([ch.patDot]);
 	});
 
