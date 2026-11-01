@@ -23,7 +23,7 @@ describe('local timezone formatting', () => {
 	it('appends the zone and never shifts it', () => {
 		const d = new Date(2026, 8, 9, 14, 30, 0, 0);
 		expect(formatLocalDateTimeWithZone(d)).toBe(
-			`${formatLocalDateTime(d)} ${localTimezoneShort()}`
+			`${formatLocalDateTime(d)} ${localTimezoneShort(d)}`
 		);
 		const full = formatFullLocalWithZone(d);
 		expect(full).toContain('2026');

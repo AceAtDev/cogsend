@@ -126,7 +126,8 @@ export function formatLocalDateTime(iso: string | Date): string {
 export function formatLocalDateTimeWithZone(iso: string | Date): string {
 	const base = formatLocalDateTime(iso);
 	if (!base) return '';
-	return `${base} ${localTimezoneShort()}`;
+	// The zone in force at that instant: a summer date reads EDT even in winter.
+	return `${base} ${localTimezoneShort(typeof iso === 'string' ? new Date(iso) : iso)}`;
 }
 
 /** Full local timestamp for tooltips: "Sep 9, 2026, 2:30:00 PM CET". */
