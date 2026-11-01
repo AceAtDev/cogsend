@@ -177,7 +177,8 @@ export function satisfiedMigrations(state) {
 			'0022_user_roles.sql',
 			all(col('users', 'role'), col('users', 'status'), col('users', 'last_login_at'))
 		],
-		['0023_invites.sql', tables.has('invites')]
+		['0023_invites.sql', tables.has('invites')],
+		['0026_briefs_slots.sql', all(tables.has('brand_briefs'), tables.has('posting_schedules'))]
 	]
 		.filter(([, ok]) => ok)
 		.map(([name]) => String(name));

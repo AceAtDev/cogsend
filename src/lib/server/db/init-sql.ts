@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 + 0026 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -272,6 +272,29 @@ CREATE TABLE IF NOT EXISTS \`mcp_idempotency\` (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_idempotency_user_key_uq\` ON \`mcp_idempotency\` (\`user_id\`, \`key\`);
 CREATE INDEX IF NOT EXISTS \`mcp_idempotency_expires_idx\` ON \`mcp_idempotency\` (\`expires_at\`);
+
+CREATE TABLE IF NOT EXISTS \`brand_briefs\` (
+	\`brand_id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`sections_json\` text NOT NULL DEFAULT '{}',
+	\`platform_notes_json\` text NOT NULL DEFAULT '{}',
+	\`updated_at\` integer NOT NULL,
+	FOREIGN KEY (\`brand_id\`) REFERENCES \`brands\`(\`id\`) ON DELETE CASCADE,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS \`brand_briefs_user_idx\` ON \`brand_briefs\` (\`user_id\`);
+
+CREATE TABLE IF NOT EXISTS \`posting_schedules\` (
+	\`connection_id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`slots_json\` text NOT NULL DEFAULT '{}',
+	\`max_per_day\` integer,
+	\`min_gap_minutes\` integer,
+	\`updated_at\` integer NOT NULL,
+	FOREIGN KEY (\`connection_id\`) REFERENCES \`connections\`(\`id\`) ON DELETE CASCADE,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS \`posting_schedules_user_idx\` ON \`posting_schedules\` (\`user_id\`);
 `;
 
 async function execStatements(d1: D1Database, sql: string) {
@@ -488,6 +511,27 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_by text REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS invites_code_uq ON invites (code_hash);
+CREATE TABLE IF NOT EXISTS brand_briefs (
+	brand_id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	sections_json text NOT NULL DEFAULT '{}',
+	platform_notes_json text NOT NULL DEFAULT '{}',
+	updated_at integer NOT NULL,
+	FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS brand_briefs_user_idx ON brand_briefs (user_id);
+CREATE TABLE IF NOT EXISTS posting_schedules (
+	connection_id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	slots_json text NOT NULL DEFAULT '{}',
+	max_per_day integer,
+	min_gap_minutes integer,
+	updated_at integer NOT NULL,
+	FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS posting_schedules_user_idx ON posting_schedules (user_id);
 `;
 
 /**

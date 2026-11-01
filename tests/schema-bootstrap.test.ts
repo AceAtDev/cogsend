@@ -98,7 +98,9 @@ describe('ensureSchema', () => {
 			'totp_backup_codes',
 			'notification_state',
 			'draft_shares',
-			'brands'
+			'brands',
+			'brand_briefs',
+			'posting_schedules'
 		]) {
 			expect(names).toContain(table);
 		}
@@ -229,6 +231,25 @@ describe('ensureSchema', () => {
 		);
 		expect(indexes.rows.map((r) => String((r as unknown as { name: string }).name)).sort()).toEqual(
 			['draft_shares_draft_uq', 'draft_shares_token_uq']
+		);
+		client.close();
+	});
+
+	it('adds brand briefs and posting slots to a database bootstrapped before them', async () => {
+		const { client, binding } = await freshDb();
+		await ensureSchema(binding);
+		await client.execute('DROP TABLE brand_briefs');
+		await client.execute('DROP TABLE posting_schedules');
+		await forgetBootstrap(client);
+		await ensureSchema(binding);
+		const names = await tableNames(client);
+		expect(names).toContain('brand_briefs');
+		expect(names).toContain('posting_schedules');
+		const indexes = await client.execute(
+			"SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('brand_briefs', 'posting_schedules') AND sql IS NOT NULL"
+		);
+		expect(indexes.rows.map((r) => String((r as unknown as { name: string }).name)).sort()).toEqual(
+			['brand_briefs_user_idx', 'posting_schedules_user_idx']
 		);
 		client.close();
 	});
