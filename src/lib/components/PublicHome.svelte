@@ -33,6 +33,23 @@
 		}
 	];
 	const platforms = ['TikTok', 'Instagram', 'Threads', 'LinkedIn', 'Bluesky', 'Mastodon', 'X'];
+	const screens = [
+		{
+			src: '/screens/compose.webp',
+			alt: 'The composer with a caption and an attached video, ready to publish or schedule.',
+			caption: 'Write the post and attach a video or photos.'
+		},
+		{
+			src: '/screens/tiktok-settings.webp',
+			alt: 'TikTok post settings: who can see the video, comments, Duet, Stitch and content disclosure.',
+			caption: 'Pick TikTok privacy, interactions and disclosure for each post.'
+		},
+		{
+			src: '/screens/accounts.webp',
+			alt: 'Connected accounts: two TikTok accounts and a Bluesky account.',
+			caption: 'Connect your own accounts and group them by brand.'
+		}
+	];
 </script>
 
 <svelte:head>
@@ -93,6 +110,20 @@
 			<p class="mt-6 text-[12px] font-bold tracking-wide text-stone-500 uppercase">
 				Works with {platforms.join(' · ')}
 			</p>
+		</section>
+
+		<section class="pb-16" data-testid="public-home-screens">
+			<h2 class="sr-only">See it in action</h2>
+			<div class="grid gap-4 md:grid-cols-3">
+				{#each screens as s (s.src)}
+					<figure class="overflow-hidden rounded-3xl border border-stone-200 bg-white">
+						<img src={s.src} alt={s.alt} loading="lazy" class="block w-full" />
+						<figcaption class="border-t border-stone-200 px-5 py-4 text-[13px] font-bold text-stone-700">
+							{s.caption}
+						</figcaption>
+					</figure>
+				{/each}
+			</div>
 		</section>
 
 		<section class="grid gap-4 pb-16 sm:grid-cols-2">
