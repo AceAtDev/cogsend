@@ -99,7 +99,11 @@ export const brands = sqliteTable(
 		slug: text('slug').notNull(),
 		color: text('color').notNull(),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+		// Agent writes to the brand wait for review unless this is off (0024).
+		requireApproval: integer('require_approval', { mode: 'boolean' }).notNull().default(true),
+		// Set while the brand is paused: nothing of it is published (0024).
+		pausedAt: integer('paused_at', { mode: 'timestamp_ms' })
 	},
 	(t) => [uniqueIndex('brands_user_slug_uq').on(t.userId, t.slug)]
 );
@@ -231,7 +235,12 @@ export const publishTargets = sqliteTable(
 		attemptCount: integer('attempt_count').notNull().default(0),
 		jobId: text('job_id'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+		// The reviewer's note (a rejection reason, usually) for the agent to read (0024).
+		reviewNote: text('review_note'),
+		reviewedAt: integer('reviewed_at', { mode: 'timestamp_ms' }),
+		// When the tick first saw a held delivery's time pass; the overdue alert fires once.
+		reviewOverdueAt: integer('review_overdue_at', { mode: 'timestamp_ms' })
 	},
 	(t) => [
 		index('publish_targets_status_when_idx').on(t.status, t.scheduledFor),
@@ -370,5 +379,33 @@ export const mcpIdempotency = sqliteTable(
 	(t) => [
 		uniqueIndex('mcp_idempotency_user_key_uq').on(t.userId, t.key),
 		index('mcp_idempotency_expires_idx').on(t.expiresAt)
+	]
+);
+
+/** Who changed what, for the Activity page (0024). `actor_label` is what the
+ *  page shows: "You (signed in)", an API key's prefix, or "Scheduler". */
+export const activityLog = sqliteTable(
+	'activity_log',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		actorType: text('actor_type', {
+			enum: ['session', 'api_key', 'api_token', 'system']
+		}).notNull(),
+		actorId: text('actor_id'),
+		actorLabel: text('actor_label').notNull(),
+		action: text('action').notNull(),
+		targetType: text('target_type'),
+		targetId: text('target_id'),
+		summary: text('summary').notNull(),
+		beforeSummary: text('before_summary'),
+		afterSummary: text('after_summary'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		index('activity_log_user_created_idx').on(t.userId, t.createdAt),
+		index('activity_log_created_idx').on(t.createdAt)
 	]
 );

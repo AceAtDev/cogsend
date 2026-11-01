@@ -30,7 +30,10 @@ describe('pickTargetWinner', () => {
 			attemptCount: 1,
 			jobId: null,
 			createdAt: now,
-			updatedAt: new Date('2026-08-17T11:00:00Z')
+			updatedAt: new Date('2026-08-17T11:00:00Z'),
+			reviewNote: null,
+			reviewedAt: null,
+			reviewOverdueAt: null
 		};
 		const scheduled = {
 			...published,
@@ -457,7 +460,10 @@ describe('classifyWinner', () => {
 		attemptCount: 0,
 		jobId: null,
 		createdAt: now,
-		updatedAt: now
+		updatedAt: now,
+		reviewNote: null,
+		reviewedAt: null,
+		reviewOverdueAt: null
 	};
 
 	it('classifies missing, published, in-flight, and reusable', () => {

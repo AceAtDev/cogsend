@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 + 0024 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS \`brands\` (
 	\`color\` text NOT NULL,
 	\`created_at\` integer NOT NULL,
 	\`updated_at\` integer NOT NULL,
+	\`require_approval\` integer NOT NULL DEFAULT 1,
+	\`paused_at\` integer,
 	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS \`brands_user_slug_uq\` ON \`brands\` (\`user_id\`, \`slug\`);
@@ -166,6 +168,9 @@ CREATE TABLE IF NOT EXISTS \`publish_targets\` (
 	\`job_id\` text,
 	\`created_at\` integer NOT NULL,
 	\`updated_at\` integer NOT NULL,
+	\`review_note\` text,
+	\`reviewed_at\` integer,
+	\`review_overdue_at\` integer,
 	FOREIGN KEY (\`draft_id\`) REFERENCES \`drafts\`(\`id\`) ON DELETE CASCADE,
 	FOREIGN KEY (\`connection_id\`) REFERENCES \`connections\`(\`id\`) ON DELETE CASCADE,
 	FOREIGN KEY (\`variant_id\`) REFERENCES \`draft_variants\`(\`id\`) ON DELETE SET NULL
@@ -272,6 +277,24 @@ CREATE TABLE IF NOT EXISTS \`mcp_idempotency\` (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_idempotency_user_key_uq\` ON \`mcp_idempotency\` (\`user_id\`, \`key\`);
 CREATE INDEX IF NOT EXISTS \`mcp_idempotency_expires_idx\` ON \`mcp_idempotency\` (\`expires_at\`);
+
+CREATE TABLE IF NOT EXISTS \`activity_log\` (
+	\`id\` text PRIMARY KEY NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`actor_type\` text NOT NULL,
+	\`actor_id\` text,
+	\`actor_label\` text NOT NULL,
+	\`action\` text NOT NULL,
+	\`target_type\` text,
+	\`target_id\` text,
+	\`summary\` text NOT NULL,
+	\`before_summary\` text,
+	\`after_summary\` text,
+	\`created_at\` integer NOT NULL,
+	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS \`activity_log_user_created_idx\` ON \`activity_log\` (\`user_id\`, \`created_at\`);
+CREATE INDEX IF NOT EXISTS \`activity_log_created_idx\` ON \`activity_log\` (\`created_at\`);
 `;
 
 async function execStatements(d1: D1Database, sql: string) {
@@ -378,6 +401,21 @@ const COLUMN_BACKFILLS: Array<{ table: string; columns: { name: string; ddl: str
 	{
 		table: 'connections',
 		columns: [{ name: 'brand_id', ddl: 'brand_id text REFERENCES brands(id) ON DELETE SET NULL' }]
+	},
+	{
+		table: 'brands',
+		columns: [
+			{ name: 'require_approval', ddl: 'require_approval integer NOT NULL DEFAULT 1' },
+			{ name: 'paused_at', ddl: 'paused_at integer' }
+		]
+	},
+	{
+		table: 'publish_targets',
+		columns: [
+			{ name: 'review_note', ddl: 'review_note text' },
+			{ name: 'reviewed_at', ddl: 'reviewed_at integer' },
+			{ name: 'review_overdue_at', ddl: 'review_overdue_at integer' }
+		]
 	}
 ];
 
@@ -447,6 +485,8 @@ CREATE TABLE IF NOT EXISTS brands (
 	color text NOT NULL,
 	created_at integer NOT NULL,
 	updated_at integer NOT NULL,
+	require_approval integer NOT NULL DEFAULT 1,
+	paused_at integer,
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS brands_user_slug_uq ON brands (user_id, slug);
@@ -488,6 +528,23 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_by text REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS invites_code_uq ON invites (code_hash);
+CREATE TABLE IF NOT EXISTS activity_log (
+	id text PRIMARY KEY NOT NULL,
+	user_id text NOT NULL,
+	actor_type text NOT NULL,
+	actor_id text,
+	actor_label text NOT NULL,
+	action text NOT NULL,
+	target_type text,
+	target_id text,
+	summary text NOT NULL,
+	before_summary text,
+	after_summary text,
+	created_at integer NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS activity_log_user_created_idx ON activity_log (user_id, created_at);
+CREATE INDEX IF NOT EXISTS activity_log_created_idx ON activity_log (created_at);
 `;
 
 /**

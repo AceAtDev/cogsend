@@ -66,6 +66,8 @@ export const INTROSPECTION_SQL = `SELECT
   (SELECT group_concat(name, ' ') FROM pragma_table_info('drafts')) AS drafts_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('draft_media')) AS draft_media_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('connections')) AS connections_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('brands')) AS brands_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('publish_targets')) AS publish_targets_cols,
   (SELECT group_concat(name || ':' || "unique", ' ') FROM pragma_index_list('publish_targets')) AS publish_targets_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('oauth_pending')) AS oauth_pending_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('mfa_challenges')) AS mfa_challenges_idx,
@@ -89,7 +91,16 @@ export function readState(row) {
 			.filter(Boolean);
 	/** @type {Map<string, Set<string>>} */
 	const columns = new Map();
-	for (const table of ['users', 'sessions', 'api_keys', 'drafts', 'draft_media', 'connections']) {
+	for (const table of [
+		'users',
+		'sessions',
+		'api_keys',
+		'drafts',
+		'draft_media',
+		'connections',
+		'brands',
+		'publish_targets'
+	]) {
 		columns.set(table, new Set(list(row?.[`${table}_cols`])));
 	}
 	/** @type {Map<string, Map<string, boolean>>} */
@@ -177,7 +188,18 @@ export function satisfiedMigrations(state) {
 			'0022_user_roles.sql',
 			all(col('users', 'role'), col('users', 'status'), col('users', 'last_login_at'))
 		],
-		['0023_invites.sql', tables.has('invites')]
+		['0023_invites.sql', tables.has('invites')],
+		[
+			'0024_approvals.sql',
+			all(
+				col('brands', 'require_approval'),
+				col('brands', 'paused_at'),
+				col('publish_targets', 'review_note'),
+				col('publish_targets', 'reviewed_at'),
+				col('publish_targets', 'review_overdue_at'),
+				tables.has('activity_log')
+			)
+		]
 	]
 		.filter(([, ok]) => ok)
 		.map(([name]) => String(name));
