@@ -110,7 +110,11 @@ export async function loadInsights(
 					handle: connections.handle,
 					displayName: connections.displayName,
 					avatarUrl: connections.avatarUrl,
-					status: connections.status
+					status: connections.status,
+					// One index lookup per account, however long its history.
+					lastAt: sql<
+						number | null
+					>`(select max(pt.updated_at) from publish_targets pt where pt.connection_id = "connections"."id" and pt.status = 'published')`
 				})
 				.from(connections)
 				.where(eq(connections.userId, userId)),
@@ -132,14 +136,11 @@ export async function loadInsights(
 				.select({
 					connectionId: publishTargets.connectionId,
 					published: sql<number>`coalesce(sum(case when ${publishTargets.status} = 'published' and ${publishTargets.updatedAt} >= ${frames.sinceMs} then 1 else 0 end), 0)`,
-					failed: sql<number>`coalesce(sum(case when ${publishTargets.status} = 'failed' and ${publishTargets.updatedAt} >= ${frames.sinceMs} then 1 else 0 end), 0)`,
-					lastAt: sql<
-						number | null
-					>`max(case when ${publishTargets.status} = 'published' then ${publishTargets.updatedAt} end)`
+					failed: sql<number>`coalesce(sum(case when ${publishTargets.status} = 'failed' and ${publishTargets.updatedAt} >= ${frames.sinceMs} then 1 else 0 end), 0)`
 				})
 				.from(publishTargets)
 				.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
-				.where(owned)
+				.where(and(owned, gte(publishTargets.updatedAt, new Date(frames.sinceMs))))
 				.groupBy(publishTargets.connectionId),
 			db
 				.select({
@@ -166,9 +167,10 @@ export async function loadInsights(
 				displayName: string | null;
 				avatarUrl: string | null;
 				status: string;
+				lastAt: unknown;
 			}[],
 			{ n: unknown; nextAt: unknown }[],
-			{ connectionId: string; published: unknown; failed: unknown; lastAt: unknown }[],
+			{ connectionId: string; published: unknown; failed: unknown }[],
 			{ connectionId: string; errorMessage: string | null; n: unknown }[],
 			...Record<string, unknown>[]
 		];
@@ -214,7 +216,7 @@ export async function loadInsights(
 				published: publishedCount,
 				failed: failedCount,
 				rate: rateOf(publishedCount, failedCount),
-				lastPublishedAt: toMs(stats?.lastAt)
+				lastPublishedAt: toMs(c.lastAt)
 			};
 		})
 		.sort(

@@ -6,8 +6,10 @@ import {
 } from '#lib/domain/threads-error.js';
 import { validateThreadsText } from '#lib/domain/validation/text.js';
 import {
+	ensureCalls,
 	mediaByteLength,
 	processingError,
+	STEP_RESERVE_CALLS,
 	ProviderError,
 	PublishPartialError,
 	providerErrorForStatus,
@@ -610,6 +612,9 @@ export const threadsProvider: PlatformProvider = {
 			attempts = CONTAINER_STATUS_ATTEMPTS
 		): Promise<void> {
 			for (let attempt = 0; attempt < attempts; attempt++) {
+				// Keep the calls the publish and its checkpoint need: when the
+				// request runs low, stop waiting and try publishing as below.
+				if ((opts?.callsLeft?.() ?? Infinity) < STEP_RESERVE_CALLS) return;
 				const state = await readContainerStatus(containerId);
 				// Unreadable status: let the publish call decide (unchanged).
 				if (!state) return;
@@ -902,6 +907,12 @@ export const threadsProvider: PlatformProvider = {
 			try {
 				const seg = segments[i];
 				const { text, media } = normalizeSegment(seg);
+				// A container (one per carousel image plus the parent), a status
+				// read each, the publish and the checkpoint. A video budgets its own.
+				if (!segmentVideo(media)) {
+					const containers = media.length > 1 ? media.length + 1 : 1;
+					ensureCalls(opts, 'Threads', i, containers * 2 + 2);
+				}
 				const mediaId = await publishSegment(i, text, media, replyTo);
 				segmentIds.push(mediaId);
 				if (!permalinkPromise && mediaId) {

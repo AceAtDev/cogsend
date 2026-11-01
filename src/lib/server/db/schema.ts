@@ -254,6 +254,7 @@ export const publishTargets = sqliteTable(
 		index('publish_targets_status_updated_idx').on(t.status, t.updatedAt),
 		index('publish_targets_draft_idx').on(t.draftId),
 		index('publish_targets_conn_status_idx').on(t.connectionId, t.status, t.scheduledFor),
+		index('publish_targets_conn_status_updated_idx').on(t.connectionId, t.status, t.updatedAt),
 		uniqueIndex('publish_targets_draft_conn_idx').on(t.draftId, t.connectionId)
 	]
 );

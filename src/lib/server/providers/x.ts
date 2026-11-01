@@ -1,11 +1,12 @@
 import { validateXText, xWeightedLength } from '#lib/domain/validation/text.js';
 import { storedXLimit, xLimitFor } from '#lib/domain/x-limits.js';
-import { mediaByteLength, processingError, resumedVideoState } from './types';
+import { ensureCalls, mediaByteLength, processingError, resumedVideoState } from './types';
 import {
 	isVideoAttachment,
 	PART_UPLOAD_MS,
-	readVideoSlice,
+	openVideoRange,
 	requireMediaReader,
+	streamedMultipart,
 	segmentVideo,
 	storedVideoSize,
 	videoValidation
@@ -606,15 +607,23 @@ async function uploadVideo(
 		if (callsLeft() < X_VIDEO_RESERVE_CALLS + 2 || timeLeft() < PART_UPLOAD_MS) park(state, 15_000);
 		const start = state.next * X_UPLOAD_CHUNK_BYTES;
 		const end = Math.min(state.size, start + X_UPLOAD_CHUNK_BYTES) - 1;
-		const slice = await readVideoSlice(reader, storageKey, start, end);
-		const form = new FormData();
-		form.append('segment_index', String(state.next));
-		form.append('media', new Blob([slice as BlobPart], { type: 'video/mp4' }), 'upload');
+		// Streamed, not read into memory: copying 5 MB a chunk costs CPU time.
+		const part = await openVideoRange(reader, storageKey, start, end);
+		const upload = streamedMultipart(
+			{ segment_index: String(state.next) },
+			{ name: 'media', filename: 'upload', mime: 'video/mp4', ...part },
+			`cogsend-${state.mediaId}-${state.next}`
+		);
 		const appRes = await fetchImpl(`${X_API}/2/media/upload/${state.mediaId}/append`, {
 			method: 'POST',
-			headers: { Authorization: `Bearer ${token}` },
-			body: form
-		});
+			headers: {
+				Authorization: `Bearer ${token}`,
+				'Content-Type': upload.contentType,
+				'Content-Length': String(upload.length)
+			},
+			body: upload.body,
+			duplex: 'half'
+		} as RequestInit);
 		if (!appRes.ok) throw await xFailure('X media upload', appRes);
 		state = { ...state, next: state.next + 1 };
 	}
@@ -738,6 +747,9 @@ export const xProvider: PlatformProvider = {
 				}
 				const text = (seg.text || '').trim();
 				if (!text && segMedia.length === 0) throw new Error('Segment needs text or media');
+				// Four calls an image (initialize, append, finalize, alt text),
+				// then the post and its checkpoint. A video budgets its own upload.
+				ensureCalls(opts, 'X', i, (video ? 0 : segMedia.length * 4) + 2);
 
 				const mediaIds: string[] = [];
 				if (video) {

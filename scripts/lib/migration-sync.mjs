@@ -212,6 +212,10 @@ export function satisfiedMigrations(state) {
 		[
 			'0027_post_metrics.sql',
 			all(tables.has('delivery_metrics'), tables.has('delivery_metric_snapshots'))
+		],
+		[
+			'0028_insights_last_published.sql',
+			idx('publish_targets', 'publish_targets_conn_status_updated_idx')
 		]
 	]
 		.filter(([, ok]) => ok)

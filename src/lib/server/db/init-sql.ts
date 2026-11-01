@@ -1,7 +1,7 @@
 import { fnv1a } from '#lib/domain/hash.js';
 import { rawBinding } from '../budget';
 
-/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
+/** Bootstrap DDL for first request. Squashed to latest: 0001 + 0002 + 0004-final + 0005 + 0007 + 0008 + 0009 + 0010 + 0012 + 0014 + 0015 + 0016 + 0017 + 0018 + 0019 + 0020 + 0021 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028 (+ 0003 transient). Keep in lockstep with drizzle/*.sql; `tests/schema-bootstrap.test.ts` fails when an index a migration creates is missing here. */
 export const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS \`users\` (
 	\`id\` text PRIMARY KEY NOT NULL,
@@ -179,6 +179,7 @@ CREATE INDEX IF NOT EXISTS \`publish_targets_status_when_idx\` ON \`publish_targ
 CREATE INDEX IF NOT EXISTS \`publish_targets_status_updated_idx\` ON \`publish_targets\` (\`status\`, \`updated_at\`);
 CREATE INDEX IF NOT EXISTS \`publish_targets_draft_idx\` ON \`publish_targets\` (\`draft_id\`);
 CREATE INDEX IF NOT EXISTS \`publish_targets_conn_status_idx\` ON \`publish_targets\` (\`connection_id\`, \`status\`, \`scheduled_for\`);
+CREATE INDEX IF NOT EXISTS \`publish_targets_conn_status_updated_idx\` ON \`publish_targets\` (\`connection_id\`, \`status\`, \`updated_at\`);
 CREATE UNIQUE INDEX IF NOT EXISTS \`publish_targets_draft_conn_idx\` ON \`publish_targets\` (\`draft_id\`, \`connection_id\`);
 
 CREATE TABLE IF NOT EXISTS \`publish_attempts\` (
@@ -424,7 +425,8 @@ const BACKFILL_INDEXES = [
 	'CREATE INDEX IF NOT EXISTS publish_targets_status_updated_idx ON publish_targets (status, updated_at)',
 	'CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at)',
 	'CREATE INDEX IF NOT EXISTS mfa_challenges_expires_idx ON mfa_challenges (expires_at)',
-	'CREATE INDEX IF NOT EXISTS connections_brand_idx ON connections (brand_id)'
+	'CREATE INDEX IF NOT EXISTS connections_brand_idx ON connections (brand_id)',
+	'CREATE INDEX IF NOT EXISTS publish_targets_conn_status_updated_idx ON publish_targets (connection_id, status, updated_at)'
 ];
 
 async function tableColumns(d1: D1Database, table: string): Promise<Set<string>> {

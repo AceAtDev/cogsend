@@ -347,6 +347,86 @@ describe('xProvider.publish', () => {
 		expect(calls).toEqual(['init', 'append', 'finalize', 'metadata', 'tweet']);
 	});
 
+	it('stops before a segment the request cannot finish, and resumes it next run without reposting', async () => {
+		let used = 0;
+		const posted: string[] = [];
+		const img = () => ({
+			bytes: new Uint8Array([1, 2, 3, 4]),
+			mime: 'image/png',
+			alt: 'a',
+			size: 4
+		});
+		const counting =
+			(inner: FetchLike): FetchLike =>
+			async (input, init) => {
+				used += 1;
+				return inner(input, init);
+			};
+		const fetchImpl = counting(
+			mockFetch({
+				'/2/media/upload/initialize': () => Response.json({ data: { id: 'm1' } }),
+				'/2/media/upload/m1/append': () => new Response(null, { status: 204 }),
+				'/2/media/upload/m1/finalize': () => Response.json({ data: { id: 'm1' } }),
+				'/2/media/metadata': () => Response.json({}),
+				'/2/tweets': async (req) => {
+					const body = (await req.json()) as { text: string };
+					posted.push(body.text);
+					return Response.json({ data: { id: `t${posted.length}` } }, { status: 201 });
+				}
+			})
+		);
+		const thread = {
+			text: 's1',
+			thread: [
+				{ text: 's1', media: [img(), img(), img(), img()] },
+				{ text: 's2', media: [img(), img(), img(), img()] },
+				{ text: 's3', media: [img(), img(), img(), img()] }
+			]
+		};
+		const creds = { accessToken: 'tok', xUserId: '42', xUsername: 'someone' };
+		const checkpoints: string[][] = [];
+		// 30 calls left of a 50-call request: room for one 4-image segment, not two.
+		const first = await xProvider
+			.publish(thread, creds, undefined, fetchImpl, {
+				callsLeft: () => 30 - used,
+				callsLimit: 50,
+				checkpoint: (state) => {
+					checkpoints.push([...state.segmentIds]);
+				}
+			})
+			.then(
+				() => null,
+				(err: unknown) => err
+			);
+		expect(posted).toEqual(['s1']);
+		expect(first).toMatchObject({ name: 'PublishPartialError', segmentIds: ['t1'] });
+		expect((first as { pending?: { storageKey: string } }).pending?.storageKey).toMatch(/^budget:/);
+
+		// The next run resumes from the checkpoint with a fresh budget.
+		used = 0;
+		const result = await xProvider.publish(thread, creds, undefined, fetchImpl, {
+			callsLeft: () => 50 - used,
+			callsLimit: 50,
+			resume: { segmentIds: ['t1'], remoteUrl: 'https://x.com/someone/status/t1' }
+		});
+		expect(posted).toEqual(['s1', 's2', 's3']);
+		expect(result.segmentIds).toEqual(['t1', 't2', 't3']);
+	});
+
+	it('attempts a step too big for any request rather than parking it for ever', async () => {
+		const fetchImpl = mockFetch({
+			'/2/tweets': () => Response.json({ data: { id: 't1' } }, { status: 201 })
+		});
+		const result = await xProvider.publish(
+			{ text: 'x' },
+			{ accessToken: 'tok', xUserId: '42' },
+			undefined,
+			fetchImpl,
+			{ callsLeft: () => 3, callsLimit: 10 }
+		);
+		expect(result.remotePostId).toBe('t1');
+	});
+
 	it('posts a thread as a reply chain', async () => {
 		const bodies: Array<Record<string, unknown>> = [];
 		let n = 0;

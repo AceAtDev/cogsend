@@ -31,7 +31,7 @@ import type {
 import {
 	PART_UPLOAD_MS,
 	pollVideo,
-	readVideoSlice,
+	openVideoRange,
 	requireMediaReader,
 	segmentVideo,
 	storedVideoSize,
@@ -634,7 +634,8 @@ export const tiktokProvider: PlatformProvider = {
 					park(current, PART_RETRY_MS);
 				}
 				const [start, end] = tiktokChunkRange(current, current.size, current.next);
-				const slice = await readVideoSlice(
+				// Streamed, not read into memory: copying 20 MB a part costs CPU time.
+				const part = await openVideoRange(
 					requireMediaReader(opts?.mediaReader),
 					storageKey,
 					start,
@@ -647,10 +648,12 @@ export const tiktokProvider: PlatformProvider = {
 						method: 'PUT',
 						headers: {
 							'Content-Type': 'video/mp4',
+							'Content-Length': String(part.length),
 							'Content-Range': `bytes ${start}-${end}/${current.size}`
 						},
-						body: slice as unknown as BodyInit
-					});
+						body: part.body,
+						duplex: 'half'
+					} as RequestInit);
 				} catch {
 					// A part sent again goes into the same upload, so it cannot post
 					// twice. The last one may have landed, and then the post is on its

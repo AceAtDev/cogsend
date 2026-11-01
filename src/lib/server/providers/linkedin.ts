@@ -15,6 +15,7 @@ import type {
 	ValidationIssue
 } from './types';
 import {
+	ensureCalls,
 	mediaByteLength,
 	MetricsError,
 	metricsErrorForStatus,
@@ -596,6 +597,9 @@ export const linkedinProvider: PlatformProvider = {
 			}
 			videoUrn = await readyVideo(video, token, owner, fetchImpl, opts);
 		}
+		// Each image is a storage read, an upload registration and the bytes;
+		// then the post and its checkpoint.
+		if (images.length) ensureCalls(opts, 'LinkedIn', 0, images.length * 3 + 2);
 		const imageUrns: string[] = [];
 		for (const m of images) {
 			const bytes = await loadBytes(m);

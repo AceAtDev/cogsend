@@ -42,6 +42,7 @@ import {
 import { purgeOldActivity } from './activity';
 import { runTokenUpkeep } from './token-upkeep';
 import { purgePublishedMedia } from './media-retention';
+import { runBackupStep } from './backup';
 import { sweepOverdueReviews } from './review';
 import { countingFetch, type SubrequestBudget } from './budget';
 import { mastodonInstanceLimits } from './providers/mastodon';
@@ -667,6 +668,13 @@ export async function runSchedulerTick(
 		metrics = await collectDueMetrics(db, env, { fetchImpl: opts.fetchImpl, budget });
 	} catch (err) {
 		console.error('[scheduler] metrics pass failed', err);
+	}
+	// After everything else, on what is left: a weekly copy of the database to
+	// R2, written a few files a tick until it is complete.
+	try {
+		await runBackupStep(db, opts.store, { budget });
+	} catch (err) {
+		console.error('[scheduler] backup step failed', err);
 	}
 	const deferred = results.filter((r) => r.status === 'deferred').length;
 	return {

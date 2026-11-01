@@ -29,6 +29,7 @@ import {
 } from './db/schema';
 import type { AppEnv } from './env';
 import {
+	BUDGET_PARK_KEY,
 	classifyProviderError,
 	estimateKeyFor,
 	providerFor,
@@ -748,6 +749,7 @@ export async function publishTarget(
 					verifiedMediaUrlFor: (storageKey: string) => verifiedMediaUrlFor(env, storageKey),
 					mediaReader: mediaReaderFor(store),
 					callsLeft: () => options.budget?.remaining ?? Infinity,
+					callsLimit: options.budget?.limit ?? Infinity,
 					timeLeft: () =>
 						options.deadline === undefined ? Infinity : options.deadline - Date.now(),
 					checkpoint,
@@ -837,7 +839,9 @@ export async function publishTarget(
 		const errorDetail = err instanceof ProviderError ? (err.detail ?? null) : null;
 		const parked = parkedVideo(err, resumeState.from?.pending ?? null, now.getTime());
 		const finalMessage = parked?.expired
-			? `${message.split(` ${PROCESSING_MARK}`)[0]} took too long to process the video — Retry starts it again`
+			? isBudgetPark(parked.pending.storageKey)
+				? `${message.split(':')[0]}: the post could not finish within the request limits for hours — Retry starts it again`
+				: `${message.split(` ${PROCESSING_MARK}`)[0]} took too long to process the video — Retry starts it again`
 			: message;
 		// The returned status is what callers report to the UI: `scheduled`
 		// means "retrying automatically", `failed` means terminal.
@@ -901,11 +905,24 @@ function parkedVideo(
 		prior.storageKey === source.pending.storageKey;
 	const startedAt = same ? prior.startedAt : nowMs;
 	const wait = Math.min(Math.max(source.retryAfterMs ?? 30_000, 15_000), 10 * 60_000);
+	// A run parked for want of calls (ensureCalls) is not waiting on a video:
+	// it only needs a tick with room, which comes within minutes even under a
+	// backlog, so it gets longer before it is given up on.
+	const deadline = isBudgetPark(source.pending.storageKey)
+		? BUDGET_PARK_DEADLINE_MS
+		: VIDEO_PROCESSING_DEADLINE_MS;
 	return {
 		pending: { ...source.pending, startedAt },
 		retryAt: new Date(nowMs + wait),
-		expired: nowMs - startedAt > VIDEO_PROCESSING_DEADLINE_MS
+		expired: nowMs - startedAt > deadline
 	};
+}
+
+/** How long a post parked for want of calls may keep waiting for a roomier tick. */
+export const BUDGET_PARK_DEADLINE_MS = 6 * 60 * 60_000;
+
+function isBudgetPark(storageKey: string | undefined): boolean {
+	return typeof storageKey === 'string' && storageKey.startsWith(BUDGET_PARK_KEY);
 }
 
 /**

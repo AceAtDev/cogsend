@@ -260,6 +260,42 @@ export function processingError(
 	);
 }
 
+/** Calls kept back after a step for its checkpoint, the failure write and the caller's reads. */
+export const STEP_RESERVE_CALLS = 8;
+/** Calls a fresh run spends before a provider starts (claim, reads, refresh). */
+export const RUN_OVERHEAD_CALLS = 16;
+/** The `storageKey` of a run parked for want of calls, not for a video. */
+export const BUDGET_PARK_KEY = 'budget:';
+
+/**
+ * Before a step that creates something on the platform (an image upload, a
+ * thread segment): when this request has too few calls left to finish it and
+ * record it, stop here and continue on the next tick instead of running out
+ * part-way, which on X, LinkedIn and Threads could post a segment twice. It
+ * parks like a processing video: the attempt is handed back, and segments
+ * already posted resume from the checkpoint. A step too big for even a fresh
+ * request is attempted anyway, so nothing can park for ever.
+ */
+export function ensureCalls(
+	opts: { callsLeft?: () => number; callsLimit?: number } | undefined,
+	platformLabel: string,
+	segment: number,
+	needed: number
+): void {
+	const left = opts?.callsLeft?.() ?? Infinity;
+	if (left >= needed + STEP_RESERVE_CALLS) return;
+	const limit = opts?.callsLimit ?? Infinity;
+	if (needed + STEP_RESERVE_CALLS + RUN_OVERHEAD_CALLS > limit) return;
+	throw new ProviderError(
+		`${platformLabel}: the rest of this post goes out on the next run (request limit reached)`,
+		{
+			code: 'processing',
+			pending: { segment, storageKey: `${BUDGET_PARK_KEY}${segment}`, state: { budget: true } },
+			retryAfterMs: 15_000
+		}
+	);
+}
+
 /** The provider state a resume carries for this segment's video, or null to start it fresh. */
 export function resumedVideoState(
 	resume: PublishResume | undefined,
@@ -501,6 +537,10 @@ export interface PlatformProvider {
 			/** Calls left in this request, so a long upload parks before it runs
 			 *  out instead of failing half-way. Infinity without a budget. */
 			callsLeft?: () => number;
+			/** The whole request's call budget (50 on the Free plan), so a
+			 *  provider can tell a step that fits a fresh run from one that
+			 *  never will. Infinity without a budget. */
+			callsLimit?: number;
 			/** Milliseconds this run may still spend on uploads and waits before
 			 *  it must park. A run started by a browser request is cut off 30s
 			 *  after the tab goes away; Infinity in the scheduler. */

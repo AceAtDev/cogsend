@@ -60,6 +60,54 @@ export async function readVideoSlice(
 	return bytes;
 }
 
+/**
+ * Bytes `start`–`end` of a stored video as a stream with a known length, so a
+ * chunk goes out without being copied into memory first: copying a 5–20 MB
+ * part each time costs CPU time a Free-plan request does not have.
+ */
+export async function openVideoRange(
+	reader: MediaReader,
+	storageKey: string,
+	start: number,
+	end: number
+): Promise<{ body: ReadableStream<Uint8Array>; length: number }> {
+	const opened = await reader.open(storageKey, { start, end });
+	if (!opened) throw new Error(MISSING_VIDEO_MESSAGE);
+	const length = end - start + 1;
+	return { body: fixedLengthBody(opened.body as ReadableStream<Uint8Array>, length), length };
+}
+
+/**
+ * A multipart/form-data body of `fields` then one streamed file part, with
+ * its exact length, without buffering the file.
+ */
+export function streamedMultipart(
+	fields: Record<string, string>,
+	file: {
+		name: string;
+		filename: string;
+		mime: string;
+		body: ReadableStream<Uint8Array>;
+		length: number;
+	},
+	boundary: string
+): { body: ReadableStream<Uint8Array>; length: number; contentType: string } {
+	const enc = new TextEncoder();
+	let head = '';
+	for (const [name, value] of Object.entries(fields)) {
+		head += `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+	}
+	head += `--${boundary}\r\nContent-Disposition: form-data; name="${file.name}"; filename="${file.filename}"\r\nContent-Type: ${file.mime}\r\n\r\n`;
+	const before = enc.encode(head);
+	const after = enc.encode(`\r\n--${boundary}--\r\n`);
+	const length = before.length + file.length + after.length;
+	return {
+		body: fixedLengthBody(wrapStream(before, file.body, after), length),
+		length,
+		contentType: `multipart/form-data; boundary=${boundary}`
+	};
+}
+
 /** The size the store reports, which is what gets uploaded. */
 export async function storedVideoSize(reader: MediaReader, storageKey: string): Promise<number> {
 	const size = await reader.size(storageKey);
