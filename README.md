@@ -48,7 +48,7 @@ Hosted schedulers usually charge per channel and keep your posts and tokens on t
 - **Publish or schedule**: see results per account, then cancel, reschedule or retry from Posts
 - **Automatic retries**: temporary failures retry on their own, up to five attempts
 - **Calendar**: every post per account on a week or month grid, colour-coded and filtered by brand, with drag to reschedule
-- **Insights**: published against failed over 7, 30 or 90 days, and why posts failed
+- **Insights**: published against failed over 7, 30 or 90 days, why posts failed, and how posts performed (likes, shares, views) per brand and channel on Bluesky, Mastodon, TikTok and LinkedIn pages
 - **Link previews**: cards for URLs in a post
 - **Secure by default**: encrypted credentials and 2FA on the admin account
 - **AI agents (MCP)**: connect Claude Code, Codex or any MCP client to draft, attach media, schedule and publish with your API key
@@ -114,7 +114,7 @@ Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
 **Use it**
 
 - [Writing and publishing](docs/composer.md): threads, per-platform overrides, images, video and alt text, scheduling
-- [Posts and Insights](docs/posts.md): the queue, the calendar, what each post can do, and the delivery stats
+- [Posts and Insights](docs/posts.md): the queue, the calendar, what each post can do, the delivery stats and performance metrics
 - [API](docs/api.md): personal API keys, every endpoint, and worked examples
 - [MCP server](docs/mcp.md): connecting Claude Code, Codex and other agents
 

@@ -8,6 +8,7 @@ endpoint.
 
 - The cron trigger ships enabled in `wrangler.jsonc` (`"triggers"`) and runs every minute.
 - A tick always publishes the oldest due post, then starts each further one only if its estimated calls still fit in the request's Cloudflare budget. That budget covers every D1 statement, R2 read and call to a platform, and is 50 on the Workers Free plan. Anything that doesn't fit stays due for the next tick, so on Free a backlog drains a post or two a minute. This stops a request from running out half-way through a post the platform already accepted, which would publish it twice. On a paid plan, set `SUBREQUEST_LIMIT` (see [Configuration](configuration.md#secrets)) and a tick publishes everything due at once.
+- After publishing, a tick reads the [performance metrics](posts.md#performance-metrics) of posts that are due a reading, with what is left of the budget, and stops before it would run short. A tick with fewer than eight calls left reads none.
 - Ticks are idempotent: a duplicated or delayed caller is harmless.
 - A tick that runs out of the plan's CPU budget also leaves the rest due for the next minute.
 

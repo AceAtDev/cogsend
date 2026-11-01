@@ -55,7 +55,8 @@ An agent's first call is `list_channels`. Everything after it names channels by 
 | --------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
 | `list_channels`             | Read-only    | Brands and their channels (key, platform, @handle, status, colour), `now`, platform summaries      |
 | `list_posts`                | Read-only    | Deliveries in time order, filtered by brand, channel, status and date range, paged; or drafts      |
-| `get_post`                  | Read-only    | One post: text, variants, media, every delivery, and (detailed) what a platform would refuse       |
+| `get_post`                  | Read-only    | One post: text, variants, media, every delivery with its latest metrics, and (detailed) checks     |
+| `get_performance`           | Read-only    | Totals per brand and channel and the top posts over a date range, by engagement, views or recency  |
 | `get_platform_requirements` | Read-only    | Each platform's text, image and video limits, per channel when asked                               |
 | `validate_post`             | Read-only    | Checks text or a draft against channels, the way publishing will                                   |
 | `schedule_posts`            | Read + write | Creates and schedules up to 10 posts in one call, with a preview and confirmation                  |
@@ -70,7 +71,7 @@ An agent's first call is `list_channels`. Everything after it names channels by 
 
 A post is what the composer calls a draft, and a delivery is that post on one channel; `postId` and `deliveryId` are their ids. Every tool answers a short summary and the same data as JSON, also as structured content matching the tool's output schema. Every write echoes what it resolved (post id, delivery id, brand, channel key, @handle, local and UTC time, status) and a `next` hint. A refused call is an error result that names each problem, says how to fix it and quotes a valid call. Each tool's `_meta["cogsend/inputExamples"]` holds example arguments.
 
-The server also offers one resource, `cogsend://platform-requirements`, which holds what `get_platform_requirements` answers without arguments. Settings, insights, account and brand management, key management, scheduler administration and the internal publish endpoint are not exposed, and neither are prompts or sampling.
+The server also offers one resource, `cogsend://platform-requirements`, which holds what `get_platform_requirements` answers without arguments. Settings, the Insights publish history, account and brand management, key management, scheduler administration and the internal publish endpoint are not exposed, and neither are prompts or sampling.
 
 ### Moving from the earlier tools
 
@@ -91,6 +92,16 @@ The first version had 27 tools that mirrored the REST API. They are gone; this i
 | `create_media_upload`, `complete_media_upload`, `abort_media_upload`        | `media_upload` (`action`)                                                                        |
 | `update_media`, `remove_media`, `set_video_cover`, `remove_video_cover`     | `edit_media` (`action`)                                                                          |
 | `validate_post`, `get_platform_requirements`                                | the same names, with `channels` instead of `connectionIds`                                       |
+
+## Performance
+
+`get_performance` answers how published posts did over a range of publish dates (the last 30 days unless `from` and `to` say otherwise; a day such as `"2026-10-01"` is that whole day in the operator's zone): totals per brand and per channel, and the top deliveries with their channel key, publish time, counts and text. Filter by `brand` and `channels`; `sort` is `engagement` (likes + comments + shares + quotes, the default), `likes`, `comments`, `shares`, `views` (TikTok), `impressions` (LinkedIn pages) or `recent`. For example:
+
+```json
+{ "brand": "jobjob", "from": "2026-10-01", "to": "2026-10-31", "sort": "engagement", "limit": 5 }
+```
+
+Each published delivery in `get_post` carries `metrics`: `state` (`ok`, `pending`, `reconnect`, `unsupported`, `not_found`, `unavailable`, `rate_limited` or `error`), `counts`, when they were read and when the next reading is due, and a `note` saying why there are none. [Performance metrics](posts.md#performance-metrics) lists what each platform reports.
 
 ## Naming channels
 
