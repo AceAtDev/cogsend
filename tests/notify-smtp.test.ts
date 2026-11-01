@@ -6,7 +6,13 @@ import {
 	formatAddress,
 	rfc5322Date
 } from '#lib/server/notify/mime.js';
-import { dotStuff, sendSmtp, SmtpError, type SmtpSendOptions } from '#lib/server/notify/smtp.js';
+import {
+	dotStuff,
+	NO_SOCKETS,
+	sendSmtp,
+	SmtpError,
+	type SmtpSendOptions
+} from '#lib/server/notify/smtp.js';
 import { gmailTransport, SendError } from '#lib/server/notify/transport.js';
 import { fakeSmtp, type FakeSmtpOptions } from './fake-smtp';
 
@@ -203,6 +209,11 @@ describe('Gmail transport errors', () => {
 
 		const tls = await sendWith({ openError: 'TLS handshake failed' });
 		expect(tls.err?.kind).toBe('tls');
+
+		// Under vite dev there is no socket module at all: no port advice for that.
+		const dev = await sendWith({ connectError: NO_SOCKETS });
+		expect(dev.err?.message).toMatch(/^Cannot send from here: .*npm run preview/);
+		expect(dev.err?.message).not.toMatch(/try port/);
 	});
 
 	it('sends a MIME message the server receives intact', async () => {

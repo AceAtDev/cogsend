@@ -1,5 +1,5 @@
 import { buildMessage, formatAddress, type OutgoingMail } from './mime';
-import { sendSmtp, SmtpError, type SmtpConnect, type SmtpFailure } from './smtp';
+import { NO_SOCKETS, sendSmtp, SmtpError, type SmtpConnect, type SmtpFailure } from './smtp';
 
 export const GMAIL_SMTP_HOST = 'smtp.gmail.com';
 
@@ -28,6 +28,9 @@ export class SendError extends Error {
 export function describeSmtpError(err: SmtpError, host: string, port: number): SendError {
 	const where = `${host}:${port}`;
 	const reply = err.reply ? `${err.reply.code} ${err.reply.lines.join(' ')}`.trim() : err.message;
+	if (err.message.includes(NO_SOCKETS)) {
+		return new SendError('connect', `Cannot send from here: ${NO_SOCKETS}.`);
+	}
 	switch (err.kind) {
 		case 'connect':
 			return new SendError(

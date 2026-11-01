@@ -1,4 +1,4 @@
-import type { SmtpConnect } from './smtp';
+import { NO_SOCKETS, type SmtpConnect } from './smtp';
 
 /**
  * Workers TCP sockets. Cloudflare blocks outbound port 25 only; 465 and 587 are
@@ -11,9 +11,7 @@ export const workersConnect: SmtpConnect = async (address, options) => {
 	try {
 		sockets = await import('cloudflare:sockets');
 	} catch {
-		throw new Error(
-			'TCP sockets are only available inside the Worker (npm run preview or a deployment), not under vite dev'
-		);
+		throw new Error(NO_SOCKETS);
 	}
 	return sockets.connect(address, options);
 };

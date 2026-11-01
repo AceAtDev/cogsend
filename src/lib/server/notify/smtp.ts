@@ -69,6 +69,10 @@ export interface SmtpSendOptions {
 }
 
 const MAX_LINE = 64 * 1024;
+
+/** What the socket module throws outside workerd (under `vite dev`). */
+export const NO_SOCKETS =
+	'TCP sockets are only available inside the Worker (npm run preview or a deployment), not under vite dev';
 const TLS_HINT = /tls|ssl|certificate|handshake/i;
 
 function replyText(reply: SmtpReply): string {
