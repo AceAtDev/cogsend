@@ -199,7 +199,8 @@ export function satisfiedMigrations(state) {
 				col('publish_targets', 'review_overdue_at'),
 				tables.has('activity_log')
 			)
-		]
+		],
+		['0026_briefs_slots.sql', all(tables.has('brand_briefs'), tables.has('posting_schedules'))]
 	]
 		.filter(([, ok]) => ok)
 		.map(([name]) => String(name));

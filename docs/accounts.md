@@ -68,6 +68,10 @@ Each brand in the list has two switches.
 
 An API key may pause a brand or turn its review back on, but only you, signed in, can resume a brand or trust one: an agent can never let its own posts through.
 
+### Briefs and posting slots
+
+**Brief and posting slots** on a brand's heading in **Accounts** opens its settings. The brief is what agents read before they write for the brand (voice and tone, audience, do and don't, links, hashtags, calls to action, and a note per platform, all markdown). Posting slots are the times each account posts on each day of the week, in your time zone, with an optional cap on posts a day and a minimum number of minutes between posts. An agent asking for the next slot gets the first open one, and a time that breaks the limits is refused with the next allowed time ([MCP → Brand briefs and posting slots](mcp.md#brand-briefs-and-posting-slots)). Accounts without a brand have posting slots but no brief. The calendar shows open slots as faint dashed marks.
+
 ## When an account needs reconnecting
 
 A token that stops working marks the account as needing a reconnect, both here and

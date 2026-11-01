@@ -409,3 +409,36 @@ export const activityLog = sqliteTable(
 		index('activity_log_created_idx').on(t.createdAt)
 	]
 );
+
+export const brandBriefs = sqliteTable(
+	'brand_briefs',
+	{
+		brandId: text('brand_id')
+			.primaryKey()
+			.references(() => brands.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		sectionsJson: text('sections_json').notNull().default('{}'),
+		platformNotesJson: text('platform_notes_json').notNull().default('{}'),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('brand_briefs_user_idx').on(t.userId)]
+);
+
+export const postingSchedules = sqliteTable(
+	'posting_schedules',
+	{
+		connectionId: text('connection_id')
+			.primaryKey()
+			.references(() => connections.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		slotsJson: text('slots_json').notNull().default('{}'),
+		maxPerDay: integer('max_per_day'),
+		minGapMinutes: integer('min_gap_minutes'),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('posting_schedules_user_idx').on(t.userId)]
+);

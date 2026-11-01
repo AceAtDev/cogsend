@@ -64,6 +64,28 @@
 		}
 		return map;
 	});
+	// Open posting slots: a hint of where an agent's next post would go.
+	const openSlots = $derived(
+		(data.openSlots ?? []).flatMap((slot) => {
+			const channel = channelById.get(slot.connectionId);
+			if (!channel) return [];
+			const { key, minutes } = zonedParts(slot.at, tz);
+			return [{ ...slot, channel, day: key, hour: Math.floor(minutes / 60) }];
+		})
+	);
+	const slotsByHour = $derived.by(() => {
+		const map = new Map<string, typeof openSlots>();
+		for (const slot of openSlots) {
+			const key = `${slot.day}:${slot.hour}`;
+			map.set(key, [...(map.get(key) ?? []), slot]);
+		}
+		return map;
+	});
+	const slotsByDay = $derived.by(() => {
+		const map = new Map<string, number>();
+		for (const slot of openSlots) map.set(slot.day, (map.get(slot.day) ?? 0) + 1);
+		return map;
+	});
 	const weeks = $derived(
 		Array.from({ length: Math.ceil(days.length / 7) }, (_, i) => days.slice(i * 7, i * 7 + 7))
 	);
@@ -246,7 +268,7 @@
 		return failed ? humanizeError(failed.error || fallback) : null;
 	}
 
-	function channelName(item: ViewItem): string {
+	function channelName(item: Pick<ViewItem, 'channel'>): string {
 		const handle = item.channel.handle ? ` ${displayAt(item.channel.handle)}` : '';
 		return `${item.channel.brand.name} · ${item.channel.platformName}${handle}`;
 	}
@@ -728,6 +750,20 @@
 												onPointerDown={startPress}
 											/>
 										{/each}
+										{#each slotsByHour.get(`${day}:${hour}`) ?? [] as open (`${open.connectionId}:${open.at}`)}
+											<span
+												class="flex items-center gap-1 truncate rounded-lg border border-dashed border-stone-200 px-1.5 py-0.5 text-[10px] font-medium text-stone-400"
+												title="Open slot for {open.channel.key} at {formatTime(open.at, tz)}"
+												data-testid="open-slot"
+											>
+												<span class="sr-only">Open slot:</span>
+												<span class="tabular-nums">{formatTime(open.at, tz)}</span>
+												<span style="color: {open.channel.brand.color}" class="opacity-60">
+													<PlatformLogo platform={open.channel.platform} size={10} />
+												</span>
+												<span class="sr-only">{channelName(open)}</span>
+											</span>
+										{/each}
 									</div>
 								{/each}
 							{/each}
@@ -789,6 +825,13 @@
 												onPointerDown={startPress}
 											/>
 										{/each}
+										{#if slotsByDay.get(day)}
+											<span
+												class="px-1 text-[10px] font-medium text-stone-400"
+												data-testid="open-slots-{day}"
+												>{slotsByDay.get(day)} open slot{slotsByDay.get(day) === 1 ? '' : 's'}</span
+											>
+										{/if}
 										{#if list.length > MONTH_CHIPS}
 											<a
 												href={href({ view: 'week', date: day })}
@@ -914,6 +957,15 @@
 						{STATUS_LABEL[status]}
 					</li>
 				{/each}
+				{#if openSlots.length}
+					<li class="flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
+						<span
+							class="h-2 w-3 rounded-sm border border-dashed border-stone-300"
+							aria-hidden="true"
+						></span>
+						Open posting slot
+					</li>
+				{/if}
 			</ul>
 		</div>
 

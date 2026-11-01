@@ -10,8 +10,10 @@ import { newId, type AppDb } from '#lib/server/db/client.js';
 import {
 	activityLog,
 	apiKeys,
+	brandBriefs,
 	brands,
 	connections,
+	postingSchedules,
 	mcpConfirmations,
 	mcpIdempotency,
 	draftMedia,
@@ -44,6 +46,9 @@ import * as connectionRoute from '../src/routes/api/connections/[id]/+server';
 import * as creatorInfoRoute from '../src/routes/api/connections/[id]/creator-info/+server';
 import * as brandsRoute from '../src/routes/api/brands/+server';
 import * as brandRoute from '../src/routes/api/brands/[id]/+server';
+import * as briefRoute from '../src/routes/api/brands/[id]/brief/+server';
+import * as slotsRoute from '../src/routes/api/connections/[id]/slots/+server';
+import * as brandSettingsPage from '../src/routes/accounts/[slug]/+page.server';
 import * as calendarPage from '../src/routes/calendar/+page.server';
 import * as verifyRoute from '../src/routes/api/connections/[id]/verify/+server';
 import * as cancelRoute from '../src/routes/api/targets/[id]/cancel/+server';
@@ -214,6 +219,31 @@ async function seed(owner: SessionUser, mediaKey: string) {
 		createdAt: now,
 		updatedAt: now
 	});
+	// Same-named brand, same platform: only the owner's brief and slots may show.
+	const who = owner.email.split('@')[0];
+	await db.insert(brandBriefs).values({
+		brandId: brand,
+		userId: owner.id,
+		sectionsJson: JSON.stringify({ voice: `${who} brief voice` }),
+		platformNotesJson: JSON.stringify({ mastodon: `${who} mastodon note` }),
+		updatedAt: now
+	});
+	await db.insert(postingSchedules).values({
+		connectionId: connection,
+		userId: owner.id,
+		slotsJson: JSON.stringify({
+			mon: ['09:00'],
+			tue: ['09:00'],
+			wed: ['09:00'],
+			thu: ['09:00'],
+			fri: ['09:00'],
+			sat: ['09:00'],
+			sun: ['09:00']
+		}),
+		maxPerDay: 3,
+		minGapMinutes: null,
+		updatedAt: now
+	});
 	const share = await createShare(db, TEST_ENV.APP_ENCRYPTION_KEY, draft, 86_400_000);
 	const apiKey = (await rotateApiKey(db, owner.id)).raw;
 	return {
@@ -290,7 +320,14 @@ async function aliceSnapshot() {
 	const keys = await db.select().from(apiKeys).where(eq(apiKeys.userId, alice.id));
 	const ownBrands = await db.select().from(brands).where(eq(brands.userId, alice.id));
 	const [tiktok] = await db.select().from(connections).where(eq(connections.id, a.tiktok));
+	const briefs = await db.select().from(brandBriefs).where(eq(brandBriefs.userId, alice.id));
+	const schedules = await db
+		.select()
+		.from(postingSchedules)
+		.where(eq(postingSchedules.userId, alice.id));
 	return JSON.stringify({
+		briefs,
+		schedules,
 		draft,
 		conn,
 		tiktok,
@@ -494,6 +531,36 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 					params: { id: a.target },
 					body: { runAt: new Date(Date.now() + 7_200_000).toISOString() }
 				})
+		],
+		[
+			'read her brand brief',
+			() => call(briefRoute.GET, bobAs(), { method: 'GET', params: { id: a.brand } })
+		],
+		[
+			'overwrite her brand brief',
+			() =>
+				call(briefRoute.PUT, bobAs(), {
+					method: 'PUT',
+					params: { id: a.brand },
+					body: { sections: { voice: 'pwned' } }
+				})
+		],
+		[
+			'clear her brand brief',
+			() => call(briefRoute.PUT, bobAs(), { method: 'PUT', params: { id: a.brand }, body: {} })
+		],
+		[
+			'read her posting slots',
+			() => call(slotsRoute.GET, bobAs(), { method: 'GET', params: { id: a.connection } })
+		],
+		[
+			'change her posting slots',
+			() =>
+				call(slotsRoute.PUT, bobAs(), {
+					method: 'PUT',
+					params: { id: a.connection },
+					body: { slots: { mon: ['03:00'] }, maxPerDay: 50 }
+				})
 		]
 	])('cannot %s', async (_label, attempt) => {
 		const before = await aliceSnapshot();
@@ -502,7 +569,58 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		expect([400, 401, 403, 404, 409]).toContain(res.status);
 		const text = await res.text();
 		expect(text).not.toContain('secret words of alice');
+		expect(text).not.toContain('alice brief voice');
 		expect(await aliceSnapshot()).toBe(before);
+	});
+
+	it('reads only his own briefs and slots through MCP, even under the same brand slug', async () => {
+		const before = await aliceSnapshot();
+		const bobKey = personaOf(bob, 'key');
+		for (const [name, args] of [
+			['get_brand_brief', { channel: a.connection }],
+			['list_slots', { channels: [a.connection] }],
+			['list_slots', { channels: [a.tiktok] }]
+		] as const) {
+			const res = (await mcpCall(bobKey, name, args)) as { result?: { isError?: boolean } };
+			expect(res.result?.isError, `${name}: ${JSON.stringify(res)}`).toBe(true);
+			expect(JSON.stringify(res)).not.toMatch(/alice/);
+		}
+		for (const [name, args] of [
+			['get_brand_brief', { brand: 'shared' }],
+			['get_brand_brief', {}],
+			['list_slots', { brand: 'shared' }],
+			['list_slots', {}],
+			['list_channels', {}]
+		] as const) {
+			const res = await mcpCall(bobKey, name, args);
+			const body = JSON.stringify(res);
+			expect(res.result?.isError, `${name}: ${body}`).toBeFalsy();
+			expect(body).not.toMatch(/alice/);
+			expect(body).not.toContain(a.connection);
+		}
+		const own = JSON.stringify(await mcpCall(bobKey, 'get_brand_brief', { brand: 'shared' }));
+		expect(own).toContain('bob brief voice');
+		const resource = await mcpRequest(bobKey, 'resources/read', {
+			uri: 'cogsend://brands/shared/brief'
+		});
+		expect(JSON.stringify(resource)).toContain('bob brief voice');
+		expect(JSON.stringify(resource)).not.toContain('alice');
+		const listed = await mcpRequest(bobKey, 'resources/list', {});
+		expect(JSON.stringify(listed)).not.toContain('alice');
+		expect(await aliceSnapshot()).toBe(before);
+	});
+
+	it('sees only his own brief and slots on the brand settings page', async () => {
+		const loaded = (await brandSettingsPage.load({
+			locals: { db, env: TEST_ENV, user: bob },
+			params: { slug: 'shared' }
+		} as never)) as Record<string, unknown>;
+		const text = JSON.stringify(loaded);
+		expect(text).toContain('bob brief voice');
+		expect(text).toContain(b.connection);
+		expect(text).not.toMatch(/alice/);
+		expect(text).not.toContain(a.connection);
+		expect(text).not.toContain(a.brand);
 	});
 
 	it('cannot point his own draft at her account', async () => {
@@ -803,6 +921,45 @@ describe('MCP confirmations and idempotency keys belong to one account', () => {
 	});
 });
 
+async function mcpRequest(persona: Persona, method: string, params: Record<string, unknown>) {
+	const request = new Request('https://cogsend.example/api/mcp', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			accept: 'application/json, text/event-stream',
+			'mcp-method': method,
+			...(typeof params.uri === 'string' ? { 'mcp-name': params.uri } : {}),
+			'mcp-protocol-version': '2026-07-28'
+		},
+		body: JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method,
+			params: {
+				...params,
+				_meta: { [PROTOCOL_VERSION_META_KEY]: '2026-07-28', [CLIENT_CAPABILITIES_META_KEY]: {} }
+			}
+		})
+	});
+	const res = await mcpRoute.POST({
+		request,
+		url: new URL(request.url),
+		locals: {
+			db,
+			env: TEST_ENV,
+			media,
+			queue: null,
+			user: persona.user,
+			authMethod: persona.authMethod,
+			authCredential: 'personal_api_key',
+			apiKeyScopes: persona.scopes,
+			bindings: {},
+			waitUntil: () => {}
+		}
+	} as never);
+	return (await res.json()) as { result?: unknown; error?: unknown };
+}
+
 async function mcpCall(persona: Persona, name: string, args: Record<string, unknown>) {
 	const params = {
 		name,
@@ -865,6 +1022,13 @@ describe('the same requests from Alice herself', () => {
 			body: { baseBody: 'secret words of alice@localhost, edited' }
 		});
 		expect(patched.status, await patched.clone().text()).toBe(200);
+		const brief = await call(briefRoute.GET, asAlice, { method: 'GET', params: { id: a.brand } });
+		expect(await brief.text()).toContain('alice brief voice');
+		const slots = await call(slotsRoute.GET, asAlice, {
+			method: 'GET',
+			params: { id: a.connection }
+		});
+		expect((await slots.json()).rules.maxPerDay).toBe(3);
 		const cancelled = await call(cancelRoute.POST, asAlice, { params: { id: a.target } });
 		expect([200, 409]).toContain(cancelled.status);
 		const queue = await (await call(reviewRoute.GET, asAlice, { method: 'GET' })).text();
@@ -1061,6 +1225,11 @@ describe('deleting an account', () => {
 		const before = await aliceSnapshot();
 		const bobRows = async () => ({
 			brands: await db.select().from(brands).where(eq(brands.userId, bob.id)),
+			briefs: await db.select().from(brandBriefs).where(eq(brandBriefs.userId, bob.id)),
+			schedules: await db
+				.select()
+				.from(postingSchedules)
+				.where(eq(postingSchedules.userId, bob.id)),
 			confirmations: await db
 				.select()
 				.from(mcpConfirmations)
@@ -1072,8 +1241,17 @@ describe('deleting an account', () => {
 		expect(had.brands.length).toBeGreaterThan(0);
 		expect(had.keys.length).toBeGreaterThan(0);
 		expect(had.activity.length).toBeGreaterThan(0);
+		expect(had.briefs.length).toBe(1);
+		expect(had.schedules.length).toBe(1);
 		expect((await deleteUserAndData(db, media, bob.id)).done).toBe(true);
-		expect(await bobRows()).toEqual({ brands: [], confirmations: [], keys: [], activity: [] });
+		expect(await bobRows()).toEqual({
+			brands: [],
+			briefs: [],
+			schedules: [],
+			confirmations: [],
+			keys: [],
+			activity: []
+		});
 		expect(
 			(await db.select().from(activityLog).where(eq(activityLog.userId, alice.id))).length
 		).toBeGreaterThan(0);

@@ -299,7 +299,9 @@ describe('brands API', () => {
 describe('brands on an existing database', () => {
 	it('adds the table and the column to a database bootstrapped before them', async () => {
 		const client = createClient({ url: ':memory:' });
-		const older = INIT_SQL.replace(/CREATE TABLE IF NOT EXISTS `brands`[\s\S]*?;\n/, '')
+		const older = INIT_SQL.replace(/CREATE TABLE IF NOT EXISTS `brand_briefs`[\s\S]*?;\n/, '')
+			.replace(/CREATE INDEX IF NOT EXISTS `brand_briefs_user_idx`[^;]*;/, '')
+			.replace(/CREATE TABLE IF NOT EXISTS `brands`[\s\S]*?;\n/, '')
 			.replace(/CREATE UNIQUE INDEX IF NOT EXISTS `brands_user_slug_uq`[^;]*;/, '')
 			.replace(/CREATE INDEX IF NOT EXISTS `connections_brand_idx`[^;]*;/, '')
 			.replace(/\t`brand_id` text,\n/, '')
@@ -327,6 +329,7 @@ describe('brands on an existing database', () => {
 			await client.execute("SELECT name FROM sqlite_master WHERE type='table'")
 		).rows.map((r) => String((r as unknown as { name: string }).name));
 		expect(tables).toContain('brands');
+		expect(tables).toContain('brand_briefs');
 		client.close();
 	});
 });
