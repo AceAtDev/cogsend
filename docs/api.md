@@ -41,6 +41,8 @@ A failed request answers a JSON object with an `error` property.
 - `GET /api/queue`: upcoming and recent deliveries.
 - `POST /api/validate`: check a post against each platform's rules.
 - `GET /api/insights`: delivery stats. `?days=` and `?tz=` are optional.
+- `GET /api/insights/performance`: totals per brand and per channel, and the top posts, over `?days=` (7, 30 or 90). See [Performance metrics](posts.md#performance-metrics).
+- `GET /api/targets/:id/metrics`: one published delivery's latest counts, its state and its readings.
 - `GET /api/settings`: read settings.
 - `GET /api/review`: what waits for [review](posts.md#review), by brand: `{groups, counts, truncated}`, each group a brand with `paused` and `requireApproval` and its `cards`, one per post, with the deliveries, time, text and media. `?rejected=0` leaves out rejected posts.
 - `GET /api/activity`: the [activity log](posts.md#activity), newest first, as `{entries, next}`. `?actor=` (`session`, `api_key`, `api_token` or `system`), `?action=` (an action such as `review.approve`, or a family such as `review`), `?target=` (a post, delivery or brand id), `?limit=` (up to 200) and `?cursor=` (the previous page's `next`).
@@ -67,6 +69,7 @@ A failed request answers a JSON object with an `error` property.
 - `POST /api/targets/:id/cancel`: cancel one delivery.
 - `POST /api/targets/:id/retry`: retry one delivery.
 - `POST /api/targets/:id/reschedule`: `{"runAt": "<ISO date>"}` moves one delivery.
+- `POST /api/targets/:id/metrics`: read the delivery's counts from the platform now. Answers `{refreshed, reason?, metrics}`; within five minutes of the last reading it answers the stored counts with `refreshed: false`.
 - `POST /api/targets/bulk`: `{"op", "ids", "runAt?"}` acts on up to 10 deliveries at once. `op` is `cancel`, `retry` or `reschedule`.
 - `PATCH /api/settings`: change settings.
 

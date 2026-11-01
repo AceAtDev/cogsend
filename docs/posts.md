@@ -55,7 +55,7 @@ A post going to three accounts is three entries, one per account. Each shows its
 
 The brand chips double as the legend. Pick one or more brands, accounts, or both, to see only those; brands and accounts add up, so **JobJob** with **@465cal** shows JobJob's accounts and that one. **All** clears the filter.
 
-Pressing an entry opens it: the full text, its media, the channel key an agent uses for that account (with a copy button), and its state. **Open in composer** edits the post and **View post** opens it on the platform once it is published. A scheduled or due entry offers **Reschedule** and **Cancel**, a failed one **Retry** and **Remove**, the same as its card in Posts; each acts on that one account only.
+Pressing an entry opens it: the full text, its media, the channel key an agent uses for that account (with a copy button), and its state. **Open in composer** edits the post and **View post** opens it on the platform once it is published. A published entry also shows its [performance](#performance-metrics), with **Refresh** to read it now. A scheduled or due entry offers **Reschedule** and **Cancel**, a failed one **Retry** and **Remove**, the same as its card in Posts; each acts on that one account only.
 
 To move a scheduled entry, drag it to another hour (week) or day (month; it keeps its time of day). A confirmation shows the account and the old and new times before anything changes, and an **Undo** button stays up for a few seconds after. On a touch screen hold the entry a moment before dragging, or open it and press **Reschedule** to pick a new time. With a keyboard, the arrow keys move between days, **Page Up** and **Page Down** change the week or month, and **Tab** reaches the entries.
 
@@ -97,3 +97,24 @@ it, so the days follow you if you move or travel.
   one bad post — with a link to review them in Posts.
 - A row per account, including disconnected ones, which are kept and marked
   **Archived** so their history still counts.
+
+Below the accounts, **Performance** sums what people did with the posts published in the same range: engagement (likes, comments, shares and quotes), and views or impressions where a platform reports them, per brand and per channel, with the ten top posts. See [Performance metrics](#performance-metrics) for where the numbers come from.
+
+## Performance metrics
+
+CogSend reads each published post's public counts about **1 hour**, **1 day** and **7 days** after it goes out, and keeps every reading with its time. The latest counts show on the post's card in **Posts**, in the calendar entry (with the history of readings and a **Refresh** button that reads them again, at most every five minutes), on **Insights**, and to agents through MCP (`get_post` and `get_performance`).
+
+| Platform  | What CogSend reads                                               | Permission it needs                                                           |
+| --------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Bluesky   | Likes, reposts, replies, quotes                                  | None: public posts are read from Bluesky's public API                         |
+| Mastodon  | Favourites, boosts, replies, and quotes on Mastodon 4.5 or later | The account's existing token (`read`), on its own server                      |
+| TikTok    | Views, likes, comments, shares of the account's public videos    | `video.list`, asked for since this release; older connections must reconnect  |
+| LinkedIn  | Company pages only: impressions, likes, comments, shares, clicks | `rw_organization_admin` as a page administrator, with `r_organization_social` |
+| Instagram | Not collected yet                                                |                                                                               |
+| Threads   | Not collected yet                                                |                                                                               |
+| X         | Not collected yet                                                |                                                                               |
+
+- **TikTok** accounts connected before CogSend asked for `video.list` keep posting as before; their posts say **Reconnect this TikTok account to enable metrics** until you connect the account again from **Accounts**. TikTok only answers for public videos, so a post published as **Only me** (every post, while the app is unaudited) has no counts.
+- **LinkedIn** reports post statistics only for company pages. CogSend connects personal profiles, so their posts say **Not available on LinkedIn for personal profiles**.
+- A post deleted on the platform keeps its last counts and is marked as no longer there. An account that needs reconnecting is asked again once a day, and nothing is read for a post more than nine days old except with **Refresh**.
+- The readings run at the end of each scheduler tick, with whatever is left of its [budget](scheduling.md#how-a-tick-works) once posts are published, so they never hold a post back. A platform that asks CogSend to slow down is left alone for as long as it asked.

@@ -2,6 +2,7 @@
 	import { ExternalLink, PenLine, RotateCcw, ShieldCheck, X } from '@lucide/svelte';
 	import CopyButton from '#lib/components/CopyButton.svelte';
 	import MediaPreview from '#lib/components/MediaPreview.svelte';
+	import MetricsPanel from '#lib/components/MetricsPanel.svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import { dialogFocus } from '#lib/components/dialog-focus.js';
 	import {
@@ -182,6 +183,12 @@
 					maxHeight={220}
 					extra={Math.max(0, shownMedia.length - 4)}
 				/>
+			{/if}
+
+			{#if item.status === 'published'}
+				{#key item.id}
+					<MetricsPanel targetId={item.id} {timeZone} />
+				{/key}
 			{/if}
 
 			<div class="flex flex-wrap gap-2">

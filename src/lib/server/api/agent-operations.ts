@@ -86,6 +86,8 @@ import {
 	peekIdempotent,
 	withIdempotency
 } from '#lib/server/api/mcp-safety.js';
+import { latestMetricsFor } from '#lib/server/metrics.js';
+import { metricsOut } from '#lib/server/metrics-report.js';
 
 /**
  * The workflows behind the MCP tools. Posts are drafts and deliveries are
@@ -154,7 +156,7 @@ interface Resolved {
 	unresolved: Array<{ field: string; ref: string; reason: string; candidates: ChannelView[] }>;
 }
 
-function resolveRefs(
+export function resolveRefs(
 	refs: ChannelRef[],
 	dir: Directory,
 	field: string,
@@ -282,7 +284,7 @@ function view(at: Date | number | null | undefined, timeZone: string): InstantVi
 	return describeInstant(at, timeZone);
 }
 
-function nowView(agent: AgentContext) {
+export function nowView(agent: AgentContext) {
 	return describeInstant(agent.now, agent.timeZone);
 }
 
@@ -1874,7 +1876,7 @@ const DEFAULT_LIST_STATUSES = [
 	'failed'
 ];
 
-function parseBound(raw: string, end: boolean, timeZone: string, field: string): Date {
+export function parseBound(raw: string, end: boolean, timeZone: string, field: string): Date {
 	const day = /^\d{4}-\d{2}-\d{2}$/.test(raw.trim());
 	if (day) {
 		const start = zonedLocalToUtc(`${raw.trim()}T00:00`, timeZone);
@@ -2146,7 +2148,16 @@ export async function getPostOp(
 		fail(`No post "${input.postId}". list_posts shows post ids.`, { code: 'not_found' }, 404);
 	const targets = await ownedTargets(agent, eq(publishTargets.draftId, input.postId));
 	const { viewOf } = await channelsFor(agent, targets);
-	const deliveries = targets.map((t) => deliveryOut(t, viewOf(t.connectionId), timeZone));
+	const metrics = await latestMetricsFor(
+		ctx.db,
+		userId,
+		targets.filter((t) => t.status === 'published').map((t) => t.id)
+	);
+	const deliveries = targets.map((t) => {
+		const out = deliveryOut(t, viewOf(t.connectionId), timeZone);
+		const m = metrics.get(t.id);
+		return m ? { ...out, metrics: metricsOut(m, timeZone) } : out;
+	});
 	const detailed = input.response_format === 'detailed';
 	const live = targets
 		.filter((t) => t.status !== 'cancelled' && t.status !== 'published')
@@ -2180,7 +2191,7 @@ export async function getPostOp(
 			`Post ${draft.id}${draft.title ? ` "${draft.title}"` : ''} (${draft.status}): "${draftExcerpt(draft.baseBody, 120)}" — ${mediaSummary(draft.media, 0)}`,
 			...deliveries.map(
 				(d) =>
-					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})${d.review?.note ? `\n    Reviewer: ${d.review.note}` : ''}`
+					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})${'metrics' in d && d.metrics ? ` — ${d.metrics.summary}` : ''}${d.review?.note ? `\n    Reviewer: ${d.review.note}` : ''}`
 			),
 			...(deliveries.some((d) => d.status === 'rejected')
 				? [

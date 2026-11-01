@@ -42,6 +42,7 @@ import type { FetchLike } from './providers/types';
 import { purgeExpiredMfaChallenges } from './totp';
 import { purgeExpiredSessions } from './auth';
 import { readAppSetting, writeAppSetting } from './app-settings';
+import { collectDueMetrics, type MetricsTickResult } from './metrics';
 
 export const HEARTBEAT_ID = 'default';
 /** Display-only. GitHub throttles the every-minute tick to ~1 run per 2h, so
@@ -602,8 +603,23 @@ export async function runSchedulerTick(
 	} catch (err) {
 		console.error('[scheduler] failure digest failed', err);
 	}
+	// Last, so it only spends what publishing and alerting left over, and never
+	// throws: a platform's stats endpoint being down is no reason to fail a tick.
+	let metrics: MetricsTickResult | null = null;
+	try {
+		metrics = await collectDueMetrics(db, env, { fetchImpl: opts.fetchImpl, budget });
+	} catch (err) {
+		console.error('[scheduler] metrics pass failed', err);
+	}
 	const deferred = results.filter((r) => r.status === 'deferred').length;
-	return { processed: results.length - deferred, deferred, results, digest, reviewAlerts };
+	return {
+		processed: results.length - deferred,
+		deferred,
+		results,
+		digest,
+		reviewAlerts,
+		metrics
+	};
 }
 
 export async function consumePublishJob(

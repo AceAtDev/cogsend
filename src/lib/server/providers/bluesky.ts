@@ -10,6 +10,7 @@ import type {
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	MetricsOutcome,
 	NormalizedPost,
 	PlatformProvider,
 	PublishResult,
@@ -17,6 +18,8 @@ import type {
 } from './types';
 import {
 	mediaByteLength,
+	MetricsError,
+	metricsErrorForStatus,
 	processingError,
 	providerErrorForStatus,
 	ProviderError,
@@ -570,6 +573,9 @@ async function publishOne(
 	}
 }
 
+/** app.bsky.feed.getPosts takes at most 25 AT-URIs (its lexicon's `maxLength`). */
+export const BLUESKY_METRICS_BATCH = 25;
+
 export const blueskyProvider: PlatformProvider = {
 	id: 'bluesky',
 	capabilities: {
@@ -731,8 +737,80 @@ export const blueskyProvider: PlatformProvider = {
 		const exp = jwtExpiryMs(creds.accessJwt);
 		if (creds.did && exp !== null && exp - Date.now() > ACCESS_JWT_SKEW_MS) return creds;
 		return refreshSession(creds, fetchImpl);
-	}
+	},
+
+	metricsBatchSize: BLUESKY_METRICS_BATCH,
+	fetchMetrics: (ids, _creds, _meta, fetchImpl) => blueskyMetrics(ids, fetchImpl)
 };
+
+/** Bluesky's public AppView: `app.bsky.*` reads of public posts need no session. */
+export const BLUESKY_PUBLIC_APPVIEW = 'https://public.api.bsky.app';
+
+/**
+ * Like, repost, reply and quote counts from the public AppView, so no session
+ * (and no call to the PDS, nor a token refresh) is spent on it. getPosts
+ * answers only for posts it can show: a deleted post is simply absent.
+ */
+export async function blueskyMetrics(
+	uris: string[],
+	fetchImpl: FetchLike = providerFetch
+): Promise<Map<string, MetricsOutcome>> {
+	const out = new Map<string, MetricsOutcome>();
+	const valid = uris.filter((u) => u.startsWith('at://'));
+	for (const uri of uris) {
+		if (!uri.startsWith('at://'))
+			out.set(uri, {
+				kind: 'unavailable',
+				reason: 'Bluesky did not return a post address for this post.'
+			});
+	}
+	if (!valid.length) return out;
+	const query = valid
+		.slice(0, BLUESKY_METRICS_BATCH)
+		.map((u) => `uris=${encodeURIComponent(u)}`)
+		.join('&');
+	let res: Response;
+	try {
+		res = await fetchImpl(`${BLUESKY_PUBLIC_APPVIEW}/xrpc/app.bsky.feed.getPosts?${query}`, {
+			headers: { Accept: 'application/json' }
+		});
+	} catch (err) {
+		throw new MetricsError(
+			'transient',
+			`Bluesky getPosts: ${err instanceof Error ? err.message : String(err)}`
+		);
+	}
+	if (!res.ok)
+		throw metricsErrorForStatus('Bluesky getPosts', res, await res.text().catch(() => ''));
+	const data = (await res.json().catch(() => null)) as { posts?: unknown } | null;
+	if (!data || !Array.isArray(data.posts))
+		throw new MetricsError('transient', 'Bluesky getPosts answered without a post list');
+	const found = new Map<string, Record<string, unknown>>();
+	for (const post of data.posts as Array<Record<string, unknown>>) {
+		if (post && typeof post.uri === 'string') found.set(post.uri, post);
+	}
+	for (const uri of valid.slice(0, BLUESKY_METRICS_BATCH)) {
+		const post = found.get(uri);
+		if (!post) {
+			out.set(uri, { kind: 'not_found' });
+			continue;
+		}
+		out.set(uri, {
+			kind: 'ok',
+			counts: {
+				likes: countOf(post.likeCount),
+				shares: countOf(post.repostCount),
+				comments: countOf(post.replyCount),
+				quotes: countOf(post.quoteCount)
+			}
+		});
+	}
+	return out;
+}
+
+function countOf(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 export async function blueskyCreateSession(
 	handle: string,

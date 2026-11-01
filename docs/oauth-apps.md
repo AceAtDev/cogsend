@@ -58,6 +58,8 @@ partners, so a self-created app gets a 60-day access token and nothing to renew
 it with. Posts keep going out until that token expires; after that the account
 shows as expired, and **Reconnect** on the Accounts page starts a new 60 days.
 
+LinkedIn reports post statistics only for company pages, through the Community Management API's share statistics, which need `rw_organization_admin` from a page administrator (and `r_organization_social` to read the page's posts). CogSend connects personal profiles, so LinkedIn posts show no [performance metrics](posts.md#performance-metrics); the scopes are asked for only once a company page can be connected.
+
 ### Threads
 
 1. Create an app in the [Meta for Developers](https://developers.facebook.com/apps/)
@@ -111,7 +113,7 @@ CogSend posts videos to TikTok through the Content Posting API's Direct Post. On
 
 3. Add the **Login Kit** product, choose **Web**, and enter the redirect URI as the **Redirect URI**. It must be `https`.
 4. Add the **Content Posting API** product and turn on **Direct Post** in its configuration.
-5. Under scopes, add `user.info.basic` and `video.publish`, and nothing else. `video.publish` also covers the creator info and post status CogSend reads, so `video.upload` is not needed.
+5. Under scopes, add `user.info.basic`, `video.publish` and `video.list`, and nothing else. `video.publish` also covers the creator info and post status CogSend reads, so `video.upload` is not needed; `video.list` lets CogSend read the view, like, comment and share counts of the account's public videos for [performance metrics](posts.md#performance-metrics). Accounts connected before `video.list` was added keep posting, and need connecting again for their metrics.
 6. Copy the **Client key** and **Client secret** from the app's page.
 7. Give CogSend the credentials in the accounts dialog, or set the secrets:
 
@@ -180,7 +182,7 @@ A script for the demo video, one take:
 8. Show the result saying TikTok can take a few minutes, then **Posts** with the post processing and then published, and the video on the TikTok account (private, while the app is unaudited).
 9. Optionally schedule a second post the same way, to show a scheduled post carries its choices.
 
-Scopes to request, and why: `user.info.basic` to show which account a post goes to (avatar and display name), and `video.publish` to read creator info, post with Direct Post and read the post's status. A suggested description, to adjust to your use: _{instance name} is a publishing service for social media accounts. Its operator schedules and publishes videos to the TikTok accounts of their own brands and of creators and partner businesses who connect their accounts through Login Kit. Each post is previewed and gets its own privacy, interaction and content-disclosure settings before it is sent._
+Scopes to request, and why: `user.info.basic` to show which account a post goes to (avatar and display name), `video.publish` to read creator info, post with Direct Post and read the post's status, and `video.list` to show the creator how their published videos perform (views, likes, comments and shares). A suggested description, to adjust to your use: _{instance name} is a publishing service for social media accounts. Its operator schedules and publishes videos to the TikTok accounts of their own brands and of creators and partner businesses who connect their accounts through Login Kit. Each post is previewed and gets its own privacy, interaction and content-disclosure settings before it is sent._
 
 TikTok's guidelines also say an app must be "intended for a wide audience, not limited to internal groups/private use", and give "a utility tool to help upload contents to the account(s) you or your team manages" as not acceptable. An instance used only for its operator's own accounts may be refused on that ground, whatever the app does; describe the accounts you actually publish for.
 
@@ -218,7 +220,7 @@ cannot succeed. Mastodon and Bluesky keep working either way.
 | LinkedIn  | OAuth (`openid profile email w_member_social`)                           | 3000                                         | 4, 8MB (no WebP)                                          | 3 s to 30 min, 500MB                                                                                  | no — flattened into one post |
 | Threads   | OAuth (`threads_basic threads_content_publish` `threads_manage_replies`) | 500, max 5 links                             | 4 uploadable, 10 allowed, 8MB JPEG/PNG                    | up to 5 min, 1GB                                                                                      | yes                          |
 | Instagram | OAuth (`instagram_business_basic instagram_business_content_publish`)    | 2200, max 30 hashtags                        | required: 1 to 10, 8MB JPEG (PNG and WebP sent as a copy) | a Reel on its own: 3 s to 15 min, 300MB                                                               | no — flattened into one post |
-| TikTok    | OAuth (`user.info.basic video.publish`)                                  | 2200 (UTF-16 units: an emoji counts 2)       | not supported                                             | required: one video, up to the account's own limit (3 to 10 min), 23 to 60 fps, 360 to 4096 px a side | no — flattened into one post |
+| TikTok    | OAuth (`user.info.basic video.publish video.list`)                       | 2200 (UTF-16 units: an emoji counts 2)       | not supported                                             | required: one video, up to the account's own limit (3 to 10 min), 23 to 60 fps, 360 to 4096 px a side | no — flattened into one post |
 | X         | OAuth 2.0 + PKCE                                                         | 280 (25,000 with a paid plan), max 1 cashtag | 4, 5MB (15MB GIF)                                         | 0.5 s to 2:20 (longer with X Premium), 512MB                                                          | yes                          |
 
 LinkedIn rejects WebP at publish time — upload JPEG, PNG or GIF.

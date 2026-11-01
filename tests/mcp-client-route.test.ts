@@ -12,6 +12,7 @@ const expectedTools = [
 	'list_slots',
 	'list_posts',
 	'get_post',
+	'get_performance',
 	'get_platform_requirements',
 	'validate_post',
 	'schedule_posts',
@@ -38,6 +39,7 @@ const expectedAnnotations: Record<string, Record<string, boolean>> = {
 	list_slots: read,
 	list_posts: read,
 	get_post: read,
+	get_performance: read,
 	get_platform_requirements: read,
 	validate_post: read,
 	schedule_posts: {

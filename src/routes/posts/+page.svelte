@@ -22,6 +22,7 @@
 	import { markPublishSeen, publishActivity } from '#lib/components/publish-tracker.svelte.js';
 	import { platformColorClass } from '#lib/components/platform-color.js';
 	import SocialIcon from '#lib/components/SocialIcon.svelte';
+	import { metricLabel, PLATFORM_METRICS, compactCount } from '#lib/domain/metrics.js';
 	import { displayHandle, platformName, platformRank } from '#lib/domain/platforms.js';
 	import { draftExcerpt } from '#lib/domain/excerpt.js';
 	import { safeHttpUrl } from '#lib/domain/links.js';
@@ -205,6 +206,21 @@
 	let queueHasMore = $state(data.queueHasMore);
 	// svelte-ignore state_referenced_locally
 	let targets = $state<QueueTarget[]>(data.targets);
+	const metrics = $derived(data.metrics ?? {});
+
+	/** "12 likes · 3 reposts" for a published delivery, or the reason there are none. */
+	function metricsText(targetId: string | undefined, platform: string): string | null {
+		const m = targetId ? metrics[targetId] : undefined;
+		if (!m) return null;
+		if (m.counts) {
+			const line = (PLATFORM_METRICS[platform] ?? [])
+				.filter((k) => typeof m.counts?.[k] === 'number')
+				.map((k) => `${compactCount(m.counts?.[k] ?? 0)} ${metricLabel(platform, k).toLowerCase()}`)
+				.join(' · ');
+			if (line) return line;
+		}
+		return m.state === 'pending' ? null : m.message;
+	}
 	// svelte-ignore state_referenced_locally
 	let error = $state<string | null>(data.loadFailed ? 'Could not load posts' : null);
 	// What the composer just did with the post that sent you here.
@@ -1329,6 +1345,23 @@
 							{/if}
 						</div>
 					{/if}
+				{/if}
+
+				{#if card.platforms.some((p) => p.status === 'published' && metricsText(p.targetId, p.name))}
+					<ul class="mb-4 flex flex-col gap-1" data-testid="post-metrics">
+						{#each card.platforms.filter((p) => p.status === 'published') as platform (platform.targetId)}
+							{@const line = metricsText(platform.targetId, platform.name)}
+							{#if line}
+								<li class="flex items-center gap-2 text-[12px] text-stone-600">
+									<SocialIcon
+										platform={platform.name}
+										className="h-3.5 w-3.5 shrink-0 {platformColorClass(platform.name)}"
+									/>
+									<span class="tabular-nums">{line}</span>
+								</li>
+							{/if}
+						{/each}
+					</ul>
 				{/if}
 
 				{#if failedOf(card).length > 0}

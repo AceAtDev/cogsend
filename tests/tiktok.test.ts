@@ -193,7 +193,7 @@ describe('TikTok OAuth', () => {
 		expect(url.origin + url.pathname).toBe('https://www.tiktok.com/v2/auth/authorize/');
 		expect(Object.fromEntries(url.searchParams)).toEqual({
 			client_key: 'tt-key',
-			scope: 'user.info.basic,video.publish',
+			scope: 'user.info.basic,video.publish,video.list',
 			response_type: 'code',
 			redirect_uri: 'https://social.example/api/connections/tiktok/callback',
 			state: 'st4te'

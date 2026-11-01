@@ -911,7 +911,7 @@ function parkedVideo(
  * race into a success instead of an "expired" account. A refusal with nothing
  * newer stored is a real one and propagates.
  */
-async function refreshWithStoredRetry(
+export async function refreshWithStoredRetry(
 	db: AppDb,
 	env: AppEnv,
 	connectionId: string,

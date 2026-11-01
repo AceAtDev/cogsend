@@ -200,7 +200,11 @@ export function satisfiedMigrations(state) {
 				tables.has('activity_log')
 			)
 		],
-		['0026_briefs_slots.sql', all(tables.has('brand_briefs'), tables.has('posting_schedules'))]
+		['0026_briefs_slots.sql', all(tables.has('brand_briefs'), tables.has('posting_schedules'))],
+		[
+			'0027_post_metrics.sql',
+			all(tables.has('delivery_metrics'), tables.has('delivery_metric_snapshots'))
+		]
 	]
 		.filter(([, ok]) => ok)
 		.map(([name]) => String(name));
