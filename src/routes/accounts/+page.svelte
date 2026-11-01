@@ -785,6 +785,14 @@
 						{section.brand?.name ?? 'Unbranded'}
 					</h2>
 					<span class="text-[11px] font-medium text-stone-400">{section.accounts.length}</span>
+					{#if section.accounts.length || section.brand}
+						<a
+							href="/accounts/{section.brand?.slug ?? 'unbranded'}"
+							class="ml-auto text-[11px] font-bold text-stone-500 hover:text-stone-900"
+							data-testid="brand-settings-{section.brand?.slug ?? 'unbranded'}"
+							>{section.brand ? 'Brief and posting slots' : 'Posting slots'}</a
+						>
+					{/if}
 				</div>
 				{#if !section.accounts.length}
 					<p class="border-b border-stone-100 px-4 py-3 text-xs font-medium text-stone-400 sm:px-6">
