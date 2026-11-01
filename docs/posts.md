@@ -1,6 +1,6 @@
 # Posts and Insights
 
-**Posts** is everything you have written, and what happened to it. **Calendar** lays the same posts out by day, per brand. **Insights** is
+**Posts** is everything you have written, and what happened to it. **Calendar** lays the same posts out by day, per brand. **Review** holds what agents wrote until you approve it, and **Activity** says who changed what. **Insights** is
 how publishing has gone over time.
 
 ## Posts
@@ -18,12 +18,14 @@ A post being sent right now is marked **Sending** and offers nothing to press un
 
 What a card offers depends on its state:
 
-| State     | Actions                                                                                                     |
-| --------- | ----------------------------------------------------------------------------------------------------------- |
-| Scheduled | **Edit Post**, **Reschedule** (an offset or a specific time), **Cancel**                                    |
-| Failed    | **Edit & re-draft**, **Post again**, **Retry** (or **Retry N failed** for many)                             |
-| Published | **Post again**, which copies it into a new draft; on X, **Quote on X**, which starts a new draft quoting it |
-| Draft     | **Edit Post**, **Duplicate**, **Remove**                                                                    |
+| State           | Actions                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------------------- |
+| Awaiting review | **Edit Post**, **Review**, **Cancel**                                                                       |
+| Rejected        | **Edit Post**, **Cancel**                                                                                   |
+| Scheduled       | **Edit Post**, **Reschedule** (an offset or a specific time), **Cancel**                                    |
+| Failed          | **Edit & re-draft**, **Post again**, **Retry** (or **Retry N failed** for many)                             |
+| Published       | **Post again**, which copies it into a new draft; on X, **Quote on X**, which starts a new draft quoting it |
+| Draft           | **Edit Post**, **Duplicate**, **Remove**                                                                    |
 
 **Edit Post** on a scheduled card opens it in the composer, which shows when and where it goes out and offers **Change time** and **Unschedule** there too; see [Publish now, or schedule](composer.md#publish-now-or-schedule).
 
@@ -49,7 +51,7 @@ The link shows the latest save, so a reviewer who refreshes sees your newest edi
 
 **Calendar** shows every post going to every account on a week (the default) or month grid, in your account's time zone, which is named under the heading. On a phone it is a list of days instead. The arrows step a week or a month, **Today** comes back, and the view, the date and the filters stay in the address, so a link opens the same calendar.
 
-A post going to three accounts is three entries, one per account. Each shows its time, the account's platform and handle, the first line of its text (the version written for that platform, if there is one), a mark when it has images or video, and a dot for its state: **Scheduled**, **Due** (its time has passed and the next tick sends it), **Sending**, **Processing**, **Published**, **Failed** or **Cancelled**. The left edge takes the colour of the account's brand ([Brands](accounts.md#brands)); accounts with no brand are grey and grouped as **Unbranded**. A post published straight away, and a cancelled one, sit at the time they last changed. Cancelled posts are hidden until you press **Show cancelled**.
+A post going to three accounts is three entries, one per account. Each shows its time, the account's platform and handle, the first line of its text (the version written for that platform, if there is one), a mark when it has images or video, and a dot for its state: **Awaiting review** (dashed and violet, with a shield: an agent wrote it and it goes out only once you approve it), **Rejected**, **Scheduled**, **Due** (its time has passed and the next tick sends it), **Sending**, **Processing**, **Published**, **Failed** or **Cancelled**. The left edge takes the colour of the account's brand ([Brands](accounts.md#brands)); accounts with no brand are grey and grouped as **Unbranded**. A post published straight away, and a cancelled one, sit at the time they last changed. Cancelled posts are hidden until you press **Show cancelled**.
 
 The brand chips double as the legend. Pick one or more brands, accounts, or both, to see only those; brands and accounts add up, so **JobJob** with **@465cal** shows JobJob's accounts and that one. **All** clears the filter.
 
@@ -58,6 +60,25 @@ Pressing an entry opens it: the full text, its media, the channel key an agent u
 To move a scheduled entry, drag it to another hour (week) or day (month; it keeps its time of day). A confirmation shows the account and the old and new times before anything changes, and an **Undo** button stays up for a few seconds after. On a touch screen hold the entry a moment before dragging, or open it and press **Reschedule** to pick a new time. With a keyboard, the arrow keys move between days, **Page Up** and **Page Down** change the week or month, and **Tab** reaches the entries.
 
 Drafts with no time yet are listed beside the calendar under **Unscheduled drafts**; open one in the composer to schedule it.
+
+## Review
+
+**Review** in the workspace menu is where posts an agent wrote wait for you: anything scheduled or published through an API key or [MCP](mcp.md#review-before-publishing) on a brand that reviews agent posts ([Review and pause](accounts.md#review-and-pause)), which is every brand until you trust one. While a post waits it keeps its time on the calendar, but nothing sends it. A violet button in the header says how many wait, on every page, so it is one tap from a phone.
+
+Posts are grouped by brand, one card per post and brand, with the channels it goes to, when, its text (and each platform's own version when it differs), and its images or video. Each card offers:
+
+- **Approve**: it goes out at its own time. A post whose time has already passed while it waited (the card says so) goes out on the next tick.
+- **Edit** opens it in the composer; save, then approve it here. Your own edits never send a post back to review.
+- **New time** approves it for a time you pick.
+- **Reject** asks for a note, which the agent reads back (through `list_posts` and `get_post`) before it revises the post and resubmits it. A resubmitted post comes back with your earlier note beside it.
+
+**Approve N shown** approves everything the filters show: tap brands to narrow the list, and tick **Past their time only** to clear the backlog that is already late. **Approve all <brand>** does one brand. Rejected posts are listed under **Show rejected** until the agent resubmits them, where **Approve anyway** and **Cancel it** are there too.
+
+An agent never approves anything: approving and rejecting need you signed in, and an agent that edits a post you already approved on a reviewed brand sends it back here.
+
+## Activity
+
+**Activity** lists who changed what over the last 90 days: you in the app, an agent with your API key (named by the key's first characters), the API_TOKEN, or the scheduler. Each line says what happened, when, before and after where that applies, and links to the post. Filter by who and by what: review decisions, posts, deliveries, brands or MCP tool calls. Every write through the REST API or MCP is recorded, as are approvals, rejections, pauses, trust changes and posts that reached their time while waiting for review. The composer's own saves as you type are not, so they do not bury the rest.
 
 ## Insights
 

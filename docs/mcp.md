@@ -62,6 +62,7 @@ An agent's first call is `list_channels`. Everything after it names channels by 
 | `reschedule_posts`          | Read + write | Changes the time of deliveries or whole posts                                                      |
 | `move_post`                 | Read + write | Changes a post's channels, with confirmation                                                       |
 | `cancel_posts`              | Read + write | Cancels deliveries, or deletes whole posts                                                         |
+| `resubmit_for_review`       | Read + write | Sends deliveries the operator rejected back to review after the agent revised the post             |
 | `publish_now`               | Read + write | Publishes an existing post now, or retries a failed delivery, with confirmation                    |
 | `save_draft`                | Read + write | Creates or edits a draft: text, per-platform variants and options, intended channels               |
 | `attach_media`              | Read + write | Attaches an image or video from a URL, or a small image inline; creates a draft when none is given |
@@ -91,6 +92,27 @@ The first version had 27 tools that mirrored the REST API. They are gone; this i
 | `create_media_upload`, `complete_media_upload`, `abort_media_upload`        | `media_upload` (`action`)                                                                        |
 | `update_media`, `remove_media`, `set_video_cover`, `remove_video_cover`     | `edit_media` (`action`)                                                                          |
 | `validate_post`, `get_platform_requirements`                                | the same names, with `channels` instead of `connectionIds`                                       |
+
+## Review before publishing
+
+On a brand that reviews agent posts, which is every brand until the operator trusts it in **Accounts**, and on every account with no brand ([Review and pause](accounts.md#review-and-pause)), a committed `schedule_posts`, `publish_now` or `move_post` writes each delivery as `awaiting_review` instead of scheduling or sending it. The delivery keeps its time, and nothing goes out until the operator approves it in the [Review inbox](posts.md#review); a held "publish now" goes out on the next tick once approved. `list_channels` gives each brand `requireApproval` and `paused`, and says the same in its summary.
+
+A write that held anything answers `heldForReview` (how many) and starts its summary with a line an agent cannot miss:
+
+```text
+HELD FOR REVIEW: 1 delivery waits for the operator, who approves in the Review inbox. Nothing is published until then; do not resend or publish_now it.
+Submitted for review 1 delivery:
+jobjob.linkedin @jobjob — awaiting_review at Tue 3 Nov 2026, 09:00 (Europe/Berlin) (post 7f…, delivery 2c…)
+```
+
+Its `status` is `awaiting_review` when every delivery was held; a batch across a trusted and a reviewed brand answers `scheduled` and holds only the reviewed ones.
+
+- `list_posts` lists `awaiting_review` and `rejected` deliveries by default, beside the scheduled, pending, publishing and failed ones, and takes either in `status`. Each carries `review`: `state` (`waiting`, `overdue` once its time has passed unapproved, or `rejected`), the reviewer's `note` and `reviewedAt`. `get_post` adds the same `review` to each delivery.
+- The operator approves (it becomes `scheduled`) or rejects it with a note (`rejected`). Read the note, revise the post with `save_draft`, `attach_media` or `edit_media`, then call `resubmit_for_review` with the `postId` (or `deliveryId`s); give `runAt` when the old time has passed. It answers the deliveries back in `awaiting_review`, and repeating it changes nothing more.
+- `reschedule_posts` keeps a held delivery held at its new time and refuses a rejected one. Changing the text, variants or media of a post the operator already approved sends its deliveries on reviewed brands back to `awaiting_review`.
+- An agent cannot approve: there is no tool for it, and the REST routes for it refuse every API key. A paused brand publishes nothing until the operator resumes it, whatever its deliveries' state.
+
+Every committed write tool call is recorded in **Activity** with the key that made it.
 
 ## Naming channels
 

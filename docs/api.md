@@ -42,11 +42,13 @@ A failed request answers a JSON object with an `error` property.
 - `POST /api/validate`: check a post against each platform's rules.
 - `GET /api/insights`: delivery stats. `?days=` and `?tz=` are optional.
 - `GET /api/settings`: read settings.
+- `GET /api/review`: what waits for [review](posts.md#review), by brand: `{groups, counts, truncated}`, each group a brand with `paused` and `requireApproval` and its `cards`, one per post, with the deliveries, time, text and media. `?rejected=0` leaves out rejected posts.
+- `GET /api/activity`: the [activity log](posts.md#activity), newest first, as `{entries, next}`. `?actor=` (`session`, `api_key`, `api_token` or `system`), `?action=` (an action such as `review.approve`, or a family such as `review`), `?target=` (a post, delivery or brand id), `?limit=` (up to 200) and `?cursor=` (the previous page's `next`).
 
 ### With a Read + write key
 
 - `POST /api/brands`: `{"name", "color?", "slug?"}` answers `201` with `{brand}`. The slug is made from the name unless given; `unbranded` is reserved, and a slug another brand uses answers **409**.
-- `PATCH /api/brands/:id`: `{"name?", "color?", "slug?"}`. A rename keeps the slug, so channel keys stay the same; only `slug` changes them.
+- `PATCH /api/brands/:id`: `{"name?", "color?", "slug?", "requireApproval?", "paused?"}`. A rename keeps the slug, so channel keys stay the same; only `slug` changes them. A key may set `paused: true` or `requireApproval: true`; `paused: false` and `requireApproval: false` answer **403** to anything but a signed-in session ([Review and pause](accounts.md#review-and-pause)).
 - `DELETE /api/brands/:id`: answers `{ok, unbranded}`, the number of accounts that are now unbranded.
 - `POST /api/drafts`: `{"title?", "baseBody?", "selectedConnectionIds?"}` answers `201` with `{draft}`.
 - `PATCH /api/drafts/:id`: edit the title, body or `selectedConnectionIds`. **409** while publishing.
@@ -65,6 +67,8 @@ A failed request answers a JSON object with an `error` property.
 - `POST /api/targets/:id/reschedule`: `{"runAt": "<ISO date>"}` moves one delivery.
 - `POST /api/targets/bulk`: `{"op", "ids", "runAt?"}` acts on up to 10 deliveries at once. `op` is `cancel`, `retry` or `reschedule`.
 - `PATCH /api/settings`: change settings.
+
+Approving and rejecting are the operator's alone, so `POST /api/review/approve` (`{"deliveryIds": []}`, `{"brandId"}` or `{"all": true}`, with an optional future `runAt`) and `POST /api/review/reject` (the same selection and an optional `note` of up to 2,000 characters) answer **401** to every key.
 
 ## MCP server
 
@@ -119,6 +123,7 @@ A video's `meta` holds what the server read from it (`durationMs`, `videoCodec`,
 - Do not call `/api/targets/:id/retry` unless the row is `failed` (or a stuck `publishing` older than 7 minutes).
 - Publish and schedule answer **400** with `platform: "instagram"` and `issues` when the request includes an Instagram account and the post cannot go there, such as one with no photo or video. Nothing is scheduled or sent for any account; drop the Instagram account or fix the media and send it again. A TikTok account does the same with `platform: "tiktok"` for a post that is not exactly one video.
 - A TikTok post needs the choices TikTok's guidelines leave to the creator, made for that post: send `"tiktok"` with publish or schedule, either one object for every TikTok account in the request or an object keyed by connection id. Its fields are `privacy` (`PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` or `SELF_ONLY`, one of the levels TikTok offers the account), and `allowComment`, `allowDuet`, `allowStitch`, `disclose`, `yourBrand` and `brandedContent`, all `false` unless sent. Nothing has a default: without a `privacy` the request answers **400** with `code: "tiktok_privacy_required"` and the `connectionId`, and a choice TikTok would refuse (a level it does not offer, branded content as `SELF_ONLY`, `disclose` without `yourBrand` or `brandedContent`, a video longer than the account may post) answers **400** with `code: "tiktok_options"`. The choices are kept on the draft, in the `tiktok` variant's `options.tiktok`, and a later publish or schedule without `"tiktok"` uses them.
+- With a key, publish and schedule on a brand that [reviews agent posts](accounts.md#review-and-pause) answer success but write the delivery as `awaiting_review` (publish answers it with `heldForReview: true`, schedule lists it in `heldForReview`): it keeps its time and goes out only once approved. Retrying anything but a `failed` delivery is held the same way, and an agent's edit of an approved post's text, variants or media sends its deliveries on reviewed brands back to `awaiting_review`. Rescheduling a held delivery keeps it held; a `rejected` one answers **409**. Publish and retry on a paused brand answer **409** with `code: "brand_paused"`.
 - Schedule returns **409** if that account is already published or still publishing. Check `error`, `alreadyPublished`, and `inFlight` instead of treating HTTP 200 as "it was scheduled".
 - Schedule adds the accounts it is sent and leaves the draft's other accounts as they are. Send `"cancelOthers": true` to make the list the whole set: the draft's other accounts that are still waiting (`scheduled` or `pending`, not yet being sent) are cancelled, and the response lists their connection ids in `cancelled`.
 - Once every account of a draft is published (cancelled ones aside), changing its text, variants or media answers **409** with `Already published — duplicate it to post again`. `POST /api/drafts/:id/duplicate` copies it into a new draft. A draft that failed on some accounts stays editable.

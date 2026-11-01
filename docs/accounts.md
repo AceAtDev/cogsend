@@ -59,6 +59,15 @@ Every account has a **channel key**, shown next to it, which is how agents and t
 
 Assigning an account to a brand changes its key, so it is done from the browser only; an API key can manage brands but cannot move an account between them.
 
+### Review and pause
+
+Each brand in the list has two switches.
+
+- **Review agent posts**, on for every brand to begin with: what an agent schedules or publishes on the brand's accounts through an API key or [MCP](mcp.md#review-before-publishing) waits in [Review](posts.md#review) until you approve it. Untick it for a brand you trust and agent posts are scheduled straight away. What you write in the app is never held. Accounts with no brand are always reviewed, so to trust an account, put it in a brand and untick that brand.
+- **Pause publishing** stops the brand: nothing of it is published, by the scheduler or by **Publish now**, and its posts keep their place instead of failing. Resuming sends anything that came due while it was paused on the next tick, so cancel or reschedule what should no longer go out first.
+
+An API key may pause a brand or turn its review back on, but only you, signed in, can resume a brand or trust one: an agent can never let its own posts through.
+
 ## When an account needs reconnecting
 
 A token that stops working marks the account as needing a reconnect, both here and

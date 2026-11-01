@@ -10,6 +10,7 @@ endpoint.
 - A tick always publishes the oldest due post, then starts each further one only if its estimated calls still fit in the request's Cloudflare budget. That budget covers every D1 statement, R2 read and call to a platform, and is 50 on the Workers Free plan. Anything that doesn't fit stays due for the next tick, so on Free a backlog drains a post or two a minute. This stops a request from running out half-way through a post the platform already accepted, which would publish it twice. On a paid plan, set `SUBREQUEST_LIMIT` (see [Configuration](configuration.md#secrets)) and a tick publishes everything due at once.
 - Ticks are idempotent: a duplicated or delayed caller is harmless.
 - A tick that runs out of the plan's CPU budget also leaves the rest due for the next minute.
+- Posts waiting for [review](posts.md#review), rejected ones, and everything of a [paused brand](accounts.md#review-and-pause) are never published, however late they are. A held post whose time passes stays held; the first tick to notice logs it in [Activity](posts.md#activity) and raises an overdue alert for notifications to pick up. Once approved, it goes out on the next tick.
 
 The trigger is registered the moment the Worker is deployed, but the first tick
 can take a few minutes — Cloudflare runs a Worker's cron on machines that have
