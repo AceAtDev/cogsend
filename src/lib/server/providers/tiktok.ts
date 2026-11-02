@@ -474,8 +474,8 @@ export const tiktokProvider: PlatformProvider = {
 		notes: [
 			'Exactly one video per post; photo posts need a verified domain and are not supported',
 			'Who can see it, comments, Duet, Stitch and the commercial-content disclosure are chosen for each post, from what TikTok offers the account, with no default',
-			'Until TikTok audits the app, every post is Only me and only private accounts can post',
-			'Or send it as a draft (draft: true): the video lands in the TikTok inbox without the caption, and the creator chooses the rest and posts it in the TikTok app'
+			'Until TikTok audits the app, Direct Post can only post as Only me',
+			'For a public post before then, send it as a draft (draft: true): the video lands in the TikTok inbox without the caption, and the creator chooses who can see it and posts it in the TikTok app'
 		]
 	},
 

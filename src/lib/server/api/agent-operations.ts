@@ -2201,7 +2201,7 @@ export async function getPostOp(
 			`Post ${draft.id}${draft.title ? ` "${draft.title}"` : ''} (${draft.status}): "${draftExcerpt(draft.baseBody, 120)}" — ${mediaSummary(draft.media, 0)}`,
 			...deliveries.map(
 				(d) =>
-					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})${'metrics' in d && d.metrics ? ` — ${d.metrics.summary}` : ''}${d.review?.note ? `\n    Reviewer: ${d.review.note}` : ''}`
+					`  ${d.channel.key || '(disconnected)'} ${d.channel.handle ?? ''} — ${d.status}${d.runAt ? ` at ${d.runAt.display}` : ''} (delivery ${d.deliveryId})${d.tiktokInbox ? ` — ${d.tiktokInbox}` : 'metrics' in d && d.metrics ? ` — ${d.metrics.summary}` : ''}${d.review?.note ? `\n    Reviewer: ${d.review.note}` : ''}`
 			),
 			...(deliveries.some((d) => d.status === 'rejected')
 				? [
