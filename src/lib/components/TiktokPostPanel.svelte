@@ -7,6 +7,7 @@
 		EMPTY_TIKTOK_CHOICE,
 		TIKTOK_BRANDED_PRIVATE_MESSAGE,
 		TIKTOK_DISCLOSURE_MISSING_MESSAGE,
+		TIKTOK_DRAFT_NOTE,
 		TIKTOK_PROCESSING_NOTE,
 		tiktokDisclosureNotice,
 		tiktokDurationProblem,
@@ -47,6 +48,7 @@
 
 	const choiceOf = (id: string): TiktokPostChoice => choices[id] ?? EMPTY_TIKTOK_CHOICE;
 	const anyBranded = $derived(accounts.some((a) => tiktokNeedsBrandedConsent(choiceOf(a.id))));
+	const anyDirect = $derived(accounts.some((a) => !choiceOf(a.id).draft));
 
 	function update(id: string, patch: Partial<TiktokPostChoice>) {
 		const next = { ...choiceOf(id), ...patch };
@@ -148,148 +150,171 @@
 					<p class="mt-2 text-[12px] font-bold text-red-700" role="alert">{tooLong}</p>
 				{/if}
 
-				<label class="mt-3 flex flex-col gap-1.5 text-[11px] font-bold text-stone-500">
-					Who can see this video
-					<select
-						data-testid="tiktok-privacy-{account.id}"
-						value={choice.privacy ?? ''}
+				<label
+					class="mt-3 flex items-center justify-between gap-3 text-[12px] font-bold text-stone-900"
+				>
+					Send as a draft to the TikTok inbox
+					<input
+						type="checkbox"
+						role="switch"
+						data-testid="tiktok-draft-{account.id}"
+						checked={choice.draft}
 						{disabled}
-						required
-						onchange={(e) =>
-							update(account.id, {
-								privacy: (e.currentTarget.value || null) as TiktokPostChoice['privacy']
-							})}
-						class="rounded-lg border bg-stone-50 px-2.5 py-1.5 text-[12px] font-bold text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none pointer-coarse:text-base {choice.privacy
-							? 'border-stone-200'
-							: 'border-amber-400'}"
-					>
-						<option value="" disabled>Choose who can see it</option>
-						{#each levels as level (level)}
-							{@const allowed = tiktokPrivacyAllowed(level, choice)}
-							<option
-								value={level}
-								disabled={!allowed}
-								title={allowed ? undefined : TIKTOK_BRANDED_PRIVATE_MESSAGE}
-								>{tiktokPrivacyLabel(level)}{allowed ? '' : ' (not for branded content)'}</option
-							>
-						{/each}
-					</select>
+						onchange={(e) => update(account.id, { draft: e.currentTarget.checked })}
+					/>
 				</label>
-				{#if !choice.privacy}
-					<p class="mt-1 text-[11px] font-medium text-amber-700">
-						TikTok asks you to choose this for every post.
+				{#if choice.draft}
+					<p class="mt-1 text-[11px] font-medium text-stone-500" data-testid="tiktok-draft-note">
+						{TIKTOK_DRAFT_NOTE}
 					</p>
-				{/if}
-
-				<fieldset class="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
-					<legend class="sr-only">Interactions</legend>
-					{#each INTERACTIONS as option (option.key)}
-						{@const off = creator[option.off]}
-						<label
-							class="flex items-center gap-1.5 text-[12px] font-bold {off
-								? 'text-stone-400'
-								: 'text-stone-700'}"
-							title={off ? 'Turned off in this account’s TikTok privacy settings' : undefined}
+				{:else}
+					<label class="mt-3 flex flex-col gap-1.5 text-[11px] font-bold text-stone-500">
+						Who can see this video
+						<select
+							data-testid="tiktok-privacy-{account.id}"
+							value={choice.privacy ?? ''}
+							{disabled}
+							required
+							onchange={(e) =>
+								update(account.id, {
+									privacy: (e.currentTarget.value || null) as TiktokPostChoice['privacy']
+								})}
+							class="rounded-lg border bg-stone-50 px-2.5 py-1.5 text-[12px] font-bold text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none pointer-coarse:text-base {choice.privacy
+								? 'border-stone-200'
+								: 'border-amber-400'}"
 						>
+							<option value="" disabled>Choose who can see it</option>
+							{#each levels as level (level)}
+								{@const allowed = tiktokPrivacyAllowed(level, choice)}
+								<option
+									value={level}
+									disabled={!allowed}
+									title={allowed ? undefined : TIKTOK_BRANDED_PRIVATE_MESSAGE}
+									>{tiktokPrivacyLabel(level)}{allowed ? '' : ' (not for branded content)'}</option
+								>
+							{/each}
+						</select>
+					</label>
+					{#if !choice.privacy}
+						<p class="mt-1 text-[11px] font-medium text-amber-700">
+							TikTok asks you to choose this for every post.
+						</p>
+					{/if}
+
+					<fieldset class="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+						<legend class="sr-only">Interactions</legend>
+						{#each INTERACTIONS as option (option.key)}
+							{@const off = creator[option.off]}
+							<label
+								class="flex items-center gap-1.5 text-[12px] font-bold {off
+									? 'text-stone-400'
+									: 'text-stone-700'}"
+								title={off ? 'Turned off in this account’s TikTok privacy settings' : undefined}
+							>
+								<input
+									type="checkbox"
+									data-testid="tiktok-{option.key}-{account.id}"
+									checked={choice[option.key] && !off}
+									disabled={disabled || off}
+									onchange={(e) => update(account.id, { [option.key]: e.currentTarget.checked })}
+								/>
+								{option.label}
+							</label>
+						{/each}
+					</fieldset>
+					{#if creator.commentDisabled || creator.duetDisabled || creator.stitchDisabled}
+						<p class="mt-1 text-[11px] font-medium text-stone-400">
+							Greyed out: turned off in this account's TikTok privacy settings.
+						</p>
+					{/if}
+
+					<div class="mt-4">
+						<label
+							class="flex items-center justify-between gap-3 text-[12px] font-bold text-stone-900"
+						>
+							Disclose video content
 							<input
 								type="checkbox"
-								data-testid="tiktok-{option.key}-{account.id}"
-								checked={choice[option.key] && !off}
-								disabled={disabled || off}
-								onchange={(e) => update(account.id, { [option.key]: e.currentTarget.checked })}
+								role="switch"
+								data-testid="tiktok-disclose-{account.id}"
+								checked={choice.disclose}
+								{disabled}
+								onchange={(e) => update(account.id, { disclose: e.currentTarget.checked })}
 							/>
-							{option.label}
 						</label>
-					{/each}
-				</fieldset>
-				{#if creator.commentDisabled || creator.duetDisabled || creator.stitchDisabled}
-					<p class="mt-1 text-[11px] font-medium text-stone-400">
-						Greyed out: turned off in this account's TikTok privacy settings.
-					</p>
-				{/if}
-
-				<div class="mt-4">
-					<label
-						class="flex items-center justify-between gap-3 text-[12px] font-bold text-stone-900"
-					>
-						Disclose video content
-						<input
-							type="checkbox"
-							role="switch"
-							data-testid="tiktok-disclose-{account.id}"
-							checked={choice.disclose}
-							{disabled}
-							onchange={(e) => update(account.id, { disclose: e.currentTarget.checked })}
-						/>
-					</label>
-					<p class="mt-1 text-[11px] font-medium text-stone-500">
-						Turn on to disclose that this video promotes goods or services in exchange for something
-						of value. Your video could promote yourself, a third party, or both.
-					</p>
-					{#if choice.disclose}
-						<div class="mt-2 flex flex-col gap-2 rounded-lg bg-stone-50 p-2.5">
-							<label class="flex items-start gap-2 text-[12px] font-bold text-stone-800">
-								<input
-									type="checkbox"
-									class="mt-0.5"
-									data-testid="tiktok-your-brand-{account.id}"
-									checked={choice.yourBrand}
-									{disabled}
-									onchange={(e) => update(account.id, { yourBrand: e.currentTarget.checked })}
-								/>
-								<span>
-									Your brand
-									<span class="block text-[11px] font-medium text-stone-500"
-										>You are promoting yourself or your own business. This video will be classified
-										as Brand Organic.</span
-									>
-								</span>
-							</label>
-							<label
-								class="flex items-start gap-2 text-[12px] font-bold {choice.privacy === 'SELF_ONLY'
-									? 'text-stone-400'
-									: 'text-stone-800'}"
-								title={choice.privacy === 'SELF_ONLY' ? TIKTOK_BRANDED_PRIVATE_MESSAGE : undefined}
-							>
-								<input
-									type="checkbox"
-									class="mt-0.5"
-									data-testid="tiktok-branded-{account.id}"
-									checked={choice.brandedContent}
-									disabled={disabled || choice.privacy === 'SELF_ONLY'}
-									onchange={(e) => update(account.id, { brandedContent: e.currentTarget.checked })}
-								/>
-								<span>
-									Branded content
-									<span class="block text-[11px] font-medium text-stone-500"
-										>You are promoting another brand or a third party. This video will be classified
-										as Branded Content.</span
-									>
-									{#if choice.privacy === 'SELF_ONLY'}
-										<span class="block text-[11px] font-medium text-amber-700"
-											>{TIKTOK_BRANDED_PRIVATE_MESSAGE}</span
+						<p class="mt-1 text-[11px] font-medium text-stone-500">
+							Turn on to disclose that this video promotes goods or services in exchange for
+							something of value. Your video could promote yourself, a third party, or both.
+						</p>
+						{#if choice.disclose}
+							<div class="mt-2 flex flex-col gap-2 rounded-lg bg-stone-50 p-2.5">
+								<label class="flex items-start gap-2 text-[12px] font-bold text-stone-800">
+									<input
+										type="checkbox"
+										class="mt-0.5"
+										data-testid="tiktok-your-brand-{account.id}"
+										checked={choice.yourBrand}
+										{disabled}
+										onchange={(e) => update(account.id, { yourBrand: e.currentTarget.checked })}
+									/>
+									<span>
+										Your brand
+										<span class="block text-[11px] font-medium text-stone-500"
+											>You are promoting yourself or your own business. This video will be
+											classified as Brand Organic.</span
 										>
-									{/if}
-								</span>
-							</label>
-							{#if notice}
-								<p class="text-[11px] font-bold text-stone-700" data-testid="tiktok-label-notice">
-									{notice}
-								</p>
-							{:else}
-								<p class="text-[11px] font-bold text-amber-700" role="alert">
-									{TIKTOK_DISCLOSURE_MISSING_MESSAGE}
-								</p>
-							{/if}
-						</div>
-					{/if}
-				</div>
+									</span>
+								</label>
+								<label
+									class="flex items-start gap-2 text-[12px] font-bold {choice.privacy ===
+									'SELF_ONLY'
+										? 'text-stone-400'
+										: 'text-stone-800'}"
+									title={choice.privacy === 'SELF_ONLY'
+										? TIKTOK_BRANDED_PRIVATE_MESSAGE
+										: undefined}
+								>
+									<input
+										type="checkbox"
+										class="mt-0.5"
+										data-testid="tiktok-branded-{account.id}"
+										checked={choice.brandedContent}
+										disabled={disabled || choice.privacy === 'SELF_ONLY'}
+										onchange={(e) =>
+											update(account.id, { brandedContent: e.currentTarget.checked })}
+									/>
+									<span>
+										Branded content
+										<span class="block text-[11px] font-medium text-stone-500"
+											>You are promoting another brand or a third party. This video will be
+											classified as Branded Content.</span
+										>
+										{#if choice.privacy === 'SELF_ONLY'}
+											<span class="block text-[11px] font-medium text-amber-700"
+												>{TIKTOK_BRANDED_PRIVATE_MESSAGE}</span
+											>
+										{/if}
+									</span>
+								</label>
+								{#if notice}
+									<p class="text-[11px] font-bold text-stone-700" data-testid="tiktok-label-notice">
+										{notice}
+									</p>
+								{:else}
+									<p class="text-[11px] font-bold text-amber-700" role="alert">
+										{TIKTOK_DISCLOSURE_MISSING_MESSAGE}
+									</p>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 		</div>
 	{/each}
 
 	<div class="mt-4 border-t border-stone-100 pt-3">
-		<TiktokConsent branded={anyBranded} />
+		{#if anyDirect}<TiktokConsent branded={anyBranded} />{/if}
 		<p class="mt-1 text-[11px] font-medium text-stone-400">{TIKTOK_PROCESSING_NOTE}</p>
 	</div>
 </section>

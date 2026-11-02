@@ -77,7 +77,7 @@ export const PLATFORM_SETUP: Record<OAuthPlatformId, PlatformSetup> = {
 		consoleUrl: 'https://developers.tiktok.com/apps/',
 		consoleName: 'TikTok for Developers',
 		consoleRequirement:
-			'Create an app, add the Login Kit and Content Posting API products, turn on Direct Post under Content Posting API, and add the user.info.basic and video.publish scopes. Until TikTok audits the app, it posts only to private accounts and only as Only me.',
+			'Create an app, add the Login Kit and Content Posting API products, turn on Direct Post under Content Posting API, and add the user.info.basic, video.publish and video.upload scopes. Until TikTok audits the app, it posts only to private accounts and only as Only me.',
 		redirectField: 'Login Kit → Redirect URI (Web)',
 		docsAnchor: 'tiktok',
 		note: 'Video only. An app TikTok has not audited can post only to private accounts, visible to the creator alone.'

@@ -286,7 +286,7 @@ describe('connect routes', () => {
 		const res = await call(tiktokPOST, undefined, { env: { ...env, TIKTOK_METRICS: 'true' } });
 		expect(res.status).toBe(200);
 		const url = new URL(((await res.json()) as { authorizeUrl: string }).authorizeUrl);
-		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish,video.list');
+		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish,video.upload,video.list');
 	});
 
 	it('returns a TikTok authorize URL with client_key, comma scopes and a bound state', async () => {
@@ -298,7 +298,7 @@ describe('connect routes', () => {
 		expect(url.searchParams.get('client_key')).toBe('tt-key');
 		expect(url.searchParams.has('client_id')).toBe(false);
 		// Posting scopes only: video.list waits until the app has it (TIKTOK_METRICS).
-		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish');
+		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish,video.upload');
 		expect(url.searchParams.get('response_type')).toBe('code');
 		expect(url.searchParams.get('redirect_uri')).toMatch(/\/api\/connections\/tiktok\/callback$/);
 		expect(url.searchParams.get('state')).toBeTruthy();

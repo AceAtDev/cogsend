@@ -32,6 +32,12 @@ import {
 	type MediaAttachment
 } from '#lib/server/providers/types.js';
 import { verifiedMediaUrlFor } from '#lib/server/publish.js';
+import {
+	describeTiktokChoice,
+	planTiktokChoices,
+	tiktokConsentLine
+} from '#lib/server/api/agent-tiktok.js';
+import type { Channel } from '#lib/domain/channel-keys.js';
 import { handle, isPublicPath, tiktokVerificationResponse } from '../src/hooks.server';
 import { useWorkerEnv } from './cloudflare-workers';
 import { GET as creatorInfoGET } from '../src/routes/api/connections/[id]/creator-info/+server';
@@ -153,6 +159,43 @@ describe('TikTok post choices', () => {
 			'Choose who can see this TikTok post'
 		);
 		expect(tiktokAccountProblem(ready, choice({ privacy: 'SELF_ONLY' }), null)).toBeNull();
+	});
+
+	it('lets a draft go out with no other choice, since the creator makes them in TikTok', () => {
+		const parsed = parseTiktokChoice({
+			draft: true,
+			privacy: 'PUBLIC_TO_EVERYONE',
+			disclose: true
+		});
+		expect(parsed).toEqual({ ok: true, choice: choice({ draft: true }) });
+		const draft = choice({ draft: true });
+		expect(tiktokChoiceProblem(draft)).toBeNull();
+		expect(tiktokChoiceProblem(draft, { maxVideoSec: 60 }, 90_000)).toMatch(/up to 1:00/);
+		expect(tiktokAccountProblem({ status: 'loading' }, draft, null)).toBeNull();
+		expect(tiktokNeedsBrandedConsent(draft)).toBe(false);
+	});
+
+	it('takes a bare draft from an agent and leaves it out of the consent line', () => {
+		const channel = {
+			key: 'acme.tiktok',
+			platform: 'tiktok',
+			connectionId: 'c1'
+		} as unknown as Channel;
+		const plan = planTiktokChoices({
+			field: 'tiktok',
+			input: { draft: true },
+			channels: [channel],
+			dir: { brands: [], channels: [channel] },
+			stored: {},
+			rulesOf: () => ({ privacyOptions: ['SELF_ONLY'] })
+		});
+		expect(plan.problems).toEqual([]);
+		expect(plan.choices).toEqual({ c1: choice({ draft: true }) });
+		expect(describeTiktokChoice(plan.choices.c1)).toMatch(/inbox/);
+		expect(tiktokConsentLine([plan.choices.c1])).toBeNull();
+		expect(tiktokConsentLine([plan.choices.c1, choice({ privacy: 'SELF_ONLY' })])).toMatch(
+			/Music Usage/
+		);
 	});
 
 	it('maps the choice to post_info, keeping off what the creator turned off', () => {

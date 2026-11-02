@@ -138,10 +138,13 @@ const TIKTOK_REQUIREMENTS: TiktokRequirements = {
 			allowStitch: 'true or false',
 			disclose: 'true when the post promotes a brand, product or service',
 			yourBrand: "with disclose: promotes the operator's own business",
-			brandedContent: 'with disclose: paid partnership promoting a third party'
+			brandedContent: 'with disclose: paid partnership promoting a third party',
+			draft:
+				'true to send the video to the TikTok inbox as a draft instead, with no other field: the creator adds the caption, picks who can see it and posts it in the TikTok app'
 		},
 		rules: [
-			'Nothing has a default: every field but yourBrand and brandedContent must be chosen for each post',
+			'Nothing has a default: every field but yourBrand, brandedContent and draft must be chosen for each post, unless draft is true',
+			'A draft lands in the inbox without the caption; TikTok holds at most 5 waiting drafts from apps a day',
 			'With disclose true, at least one of yourBrand and brandedContent must be true',
 			'Branded content cannot be SELF_ONLY',
 			'An interaction the creator turned off in the TikTok app stays off'

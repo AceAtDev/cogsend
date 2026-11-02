@@ -168,6 +168,8 @@ A TikTok post needs the choices TikTok's guidelines leave to the creator, made f
 - With `disclose: true`, set `yourBrand` (promotes your own business), `brandedContent` (a paid partnership), or both. Branded content cannot be `SELF_ONLY`.
 - A video longer than the account may post is refused.
 
+`{"draft": true}` on its own sends the video to the creator's TikTok inbox instead: none of the other choices apply, the caption does not go with it, and the creator finishes and posts it in the TikTok app. TikTok holds at most 5 waiting drafts from apps a day.
+
 A call with no choices answers `code: "tiktok_privacy_required"` with `tiktokMissing`, each TikTok channel and the levels it offers, so the agent can ask the operator; a choice TikTok would refuse answers `code: "tiktok_options"`; `tiktok` on a post with no TikTok channel is refused. The preview shows each TikTok delivery's choices and the consent line the operator agrees to by posting (TikTok's Music Usage Confirmation, and its Branded Content Policy for branded content). The choices are kept on the draft, as the composer and the [REST API](api.md#publishing-behaviour) keep them.
 
 ## Performance

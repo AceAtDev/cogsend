@@ -52,6 +52,12 @@ export interface TiktokPostChoice {
 	yourBrand: boolean;
 	/** Promotes a third party in exchange for something (`brand_content_toggle`). */
 	brandedContent: boolean;
+	/**
+	 * Send the video to the creator's TikTok inbox instead of posting it. The
+	 * creator adds the caption, picks who can see it and posts it in the
+	 * TikTok app, so none of the choices above apply.
+	 */
+	draft: boolean;
 }
 
 export const EMPTY_TIKTOK_CHOICE: Readonly<TiktokPostChoice> = Object.freeze({
@@ -61,7 +67,8 @@ export const EMPTY_TIKTOK_CHOICE: Readonly<TiktokPostChoice> = Object.freeze({
 	allowStitch: false,
 	disclose: false,
 	yourBrand: false,
-	brandedContent: false
+	brandedContent: false,
+	draft: false
 });
 
 /** What creator_info says the account may do, as far as a post's choices go. */
@@ -80,7 +87,8 @@ const CHOICE_KEYS = [
 	'allowStitch',
 	'disclose',
 	'yourBrand',
-	'brandedContent'
+	'brandedContent',
+	'draft'
 ] as const;
 
 /**
@@ -114,6 +122,8 @@ export function parseTiktokChoice(
 		}
 		choice[key] = input[key];
 	}
+	// The creator makes every other choice in the TikTok app.
+	if (choice.draft) return { ok: true, choice: { ...EMPTY_TIKTOK_CHOICE, draft: true } };
 	// Brand choices mean nothing with disclosure off, and keeping them would
 	// label a post the creator said promotes nothing.
 	if (!choice.disclose) {
@@ -176,8 +186,16 @@ export function tiktokDisclosureNotice(choice: TiktokPostChoice): string | null 
 
 /** Whether posting also means agreeing to TikTok's Branded Content Policy. */
 export function tiktokNeedsBrandedConsent(choice: TiktokPostChoice): boolean {
-	return choice.disclose && choice.brandedContent;
+	return !choice.draft && choice.disclose && choice.brandedContent;
 }
+
+/** Whether the creator has said enough for this choice to go out. */
+export function tiktokChoiceMade(choice: TiktokPostChoice | null | undefined): boolean {
+	return !!choice && (choice.draft || choice.privacy !== null);
+}
+
+export const TIKTOK_DRAFT_NOTE =
+	'Goes to the TikTok inbox as a draft: open the notification in the TikTok app to add the caption, choose who can see it and post it.';
 
 export function formatSeconds(totalSec: number): string {
 	const whole = Math.max(0, Math.round(totalSec));
@@ -209,6 +227,7 @@ export function tiktokChoiceProblem(
 	rules?: TiktokCreatorRules | null,
 	durationMs?: number | null
 ): string | null {
+	if (choice?.draft) return tiktokDurationProblem(rules?.maxVideoSec, durationMs);
 	if (!choice?.privacy) return TIKTOK_PRIVACY_MISSING_MESSAGE;
 	if (choice.disclose && !choice.yourBrand && !choice.brandedContent) {
 		return TIKTOK_DISCLOSURE_MISSING_MESSAGE;
@@ -267,6 +286,8 @@ export function tiktokAccountProblem(
 	choice: TiktokPostChoice | undefined,
 	durationMs: number | null | undefined
 ): string | null {
+	// creator_info's limits are Direct Post's; a draft waits for nothing but the video.
+	if (choice?.draft && state?.status !== 'ready') return null;
 	if (!state || state.status === 'loading') return 'Reading the TikTok account’s settings…';
 	if (state.status === 'cannot_post') return `${state.reason}. Try again later.`;
 	if (state.status === 'error') return state.message;

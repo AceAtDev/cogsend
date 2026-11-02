@@ -154,22 +154,28 @@ const tiktokChoice = {
 		.max(40)
 		.optional()
 		.describe(
-			`Required. Who can see the post: one of ${TIKTOK_PRIVACY_LEVELS.join(', ')} that the account offers (get_platform_requirements with the channel lists them). Never assume one.`
+			`Required unless draft. Who can see the post: one of ${TIKTOK_PRIVACY_LEVELS.join(', ')} that the account offers (get_platform_requirements with the channel lists them). Never assume one.`
 		),
-	allowComment: z.boolean().optional().describe('Required. Allow comments.'),
-	allowDuet: z.boolean().optional().describe('Required. Allow Duets.'),
-	allowStitch: z.boolean().optional().describe('Required. Allow Stitches.'),
+	allowComment: z.boolean().optional().describe('Required unless draft. Allow comments.'),
+	allowDuet: z.boolean().optional().describe('Required unless draft. Allow Duets.'),
+	allowStitch: z.boolean().optional().describe('Required unless draft. Allow Stitches.'),
 	disclose: z
 		.boolean()
 		.optional()
 		.describe(
-			'Required. The post promotes a brand, product or service; with true, set yourBrand and/or brandedContent.'
+			'Required unless draft. The post promotes a brand, product or service; with true, set yourBrand and/or brandedContent.'
 		),
 	yourBrand: z.boolean().optional().describe('Promotes the operator’s own business.'),
 	brandedContent: z
 		.boolean()
 		.optional()
-		.describe('Paid partnership promoting a third party. Cannot be combined with SELF_ONLY.')
+		.describe('Paid partnership promoting a third party. Cannot be combined with SELF_ONLY.'),
+	draft: z
+		.boolean()
+		.optional()
+		.describe(
+			'Send the video to the TikTok inbox as a draft instead of posting it. With true, leave out every other choice: the creator adds the caption, picks who can see it and posts it in the TikTok app. Use it to get a public post while the app is unaudited (Direct Post is Only me until then). Only when the operator asks for a draft.'
+		)
 };
 const tiktokEntry = z
 	.object({

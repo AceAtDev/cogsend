@@ -2,12 +2,14 @@ import { resolveChannelRef, type BrandRef, type Channel } from '#lib/domain/chan
 import {
 	parseTiktokChoice,
 	readTiktokChoices,
+	tiktokChoiceMade,
 	tiktokChoiceProblem,
 	tiktokDisclosureNotice,
 	tiktokNeedsBrandedConsent,
 	tiktokPrivacyLabel,
 	tiktokPrivacyOptions,
 	TIKTOK_BRANDED_CONTENT_URL,
+	TIKTOK_DRAFT_NOTE,
 	TIKTOK_MUSIC_USAGE_URL,
 	TIKTOK_PRIVACY_LEVELS,
 	TIKTOK_PRIVACY_MISSING_MESSAGE,
@@ -33,6 +35,7 @@ export interface TiktokOptionInput {
 	disclose?: boolean;
 	yourBrand?: boolean;
 	brandedContent?: boolean;
+	draft?: boolean;
 }
 
 export type TiktokOptionsInput = TiktokOptionInput | TiktokOptionInput[];
@@ -93,7 +96,7 @@ function levelsFor(rules: TiktokCreatorRules): string[] {
 
 function exampleFor(levels: string[]): string {
 	const privacy = levels.length ? levels.join(' | ') : TIKTOK_PRIVACY_LEVELS.join(' | ');
-	return `{"privacy": "${privacy}", "allowComment": true|false, "allowDuet": true|false, "allowStitch": true|false, "disclose": false}`;
+	return `{"privacy": "${privacy}", "allowComment": true|false, "allowDuet": true|false, "allowStitch": true|false, "disclose": false}, or {"draft": true} to send it to the TikTok inbox instead`;
 }
 
 /**
@@ -145,7 +148,8 @@ export function planTiktokChoices(opts: {
 			targets = [hit];
 			bucket = specific;
 		}
-		const unsaid = EXPLICIT.filter((key) => typeof raw[key] !== 'boolean');
+		const unsaid =
+			raw.draft === true ? [] : EXPLICIT.filter((key) => typeof raw[key] !== 'boolean');
 		if (unsaid.length) {
 			out.problems.push(
 				`${where}: say ${unsaid.map((k) => `"${k}"`).join(', ')} explicitly as true or false; TikTok allows no default. Ask the operator, then send ${exampleFor(levelsFor(rulesOf(targets[0].connectionId)))}.`
@@ -174,7 +178,7 @@ export function planTiktokChoices(opts: {
 			specific.get(channel.connectionId) ??
 			general.get(channel.connectionId) ??
 			stored[channel.connectionId];
-		if (!choice?.privacy) {
+		if (!choice || !tiktokChoiceMade(choice)) {
 			out.missing.push({ channel: channel.key, privacyOptions: levels });
 			if (!requireAll) continue;
 			out.problems.push(
@@ -185,7 +189,7 @@ export function planTiktokChoices(opts: {
 		const problem = tiktokChoiceProblem(choice, rules, durationMs);
 		if (problem) {
 			out.problems.push(
-				`${field} for ${channel.key}: ${problem}${levels.length && rules.privacyOptions?.length && !rules.privacyOptions.includes(choice.privacy) ? ` (this account offers ${levels.join(', ')})` : ''}.`
+				`${field} for ${channel.key}: ${problem}${choice.privacy && levels.length && rules.privacyOptions?.length && !rules.privacyOptions.includes(choice.privacy) ? ` (this account offers ${levels.join(', ')})` : ''}.`
 			);
 			continue;
 		}
@@ -196,6 +200,7 @@ export function planTiktokChoices(opts: {
 
 /** One line per choice for a preview, in the words TikTok's own app uses. */
 export function describeTiktokChoice(choice: TiktokPostChoice): string {
+	if (choice.draft) return TIKTOK_DRAFT_NOTE;
 	const on = (v: boolean) => (v ? 'on' : 'off');
 	const parts = [
 		`who can see it: ${choice.privacy ? tiktokPrivacyLabel(choice.privacy) : 'not chosen'}`,
@@ -206,7 +211,9 @@ export function describeTiktokChoice(choice: TiktokPostChoice): string {
 }
 
 /** What the operator agrees to by posting, which the guidelines want shown before it. */
-export function tiktokConsentLine(choices: TiktokPostChoice[]): string | null {
+export function tiktokConsentLine(all: TiktokPostChoice[]): string | null {
+	// A draft is posted, and agreed to, in the TikTok app.
+	const choices = all.filter((c) => !c.draft);
 	if (!choices.length) return null;
 	const branded = choices.some(tiktokNeedsBrandedConsent);
 	return branded

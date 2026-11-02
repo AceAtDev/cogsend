@@ -1,5 +1,6 @@
 import { tiktokMediaProblems } from '#lib/domain/media-limits.js';
 import {
+	tiktokChoiceMade,
 	tiktokChoiceProblem,
 	tiktokPostInfo,
 	TIKTOK_PRIVACY_MISSING_MESSAGE,
@@ -44,11 +45,14 @@ const TOKEN_URL = `${API}/oauth/token/`;
 const REVOKE_URL = `${API}/oauth/revoke/`;
 // video.publish covers creator_info, Direct Post and the status fetch;
 // creator_info also names the account, so user.info.profile is not needed.
+// video.upload sends a video to the creator's inbox as a draft; TikTok bundles
+// it with the Content Posting API, so every app that can post has it.
 // video.list reads the counts of the account's own videos (metrics). A
 // connection made before it was asked for keeps working for posting and is
 // shown "reconnect to enable metrics".
 export const TIKTOK_METRICS_SCOPE = 'video.list';
-export const TIKTOK_POSTING_SCOPES = ['user.info.basic', 'video.publish'];
+export const TIKTOK_DRAFT_SCOPE = 'video.upload';
+export const TIKTOK_POSTING_SCOPES = ['user.info.basic', 'video.publish', TIKTOK_DRAFT_SCOPE];
 export const TIKTOK_SCOPES = [...TIKTOK_POSTING_SCOPES, TIKTOK_METRICS_SCOPE];
 
 /** What to ask TikTok for: video.list only when the app has it (TIKTOK_METRICS). */
@@ -97,6 +101,9 @@ const RETRIED_FAIL_REASONS = new Set(['internal', 'spam_risk_too_many_posts']);
 
 export const UNAUDITED_MESSAGE =
 	'TikTok only lets an app it has not audited post to a private account, visible to the creator alone. Make the TikTok account private, or have the app audited by TikTok (docs: OAuth apps → TikTok)';
+
+const DRAFT_SCOPE_MESSAGE =
+	'This TikTok account was connected before CogSend could send drafts — reconnect it on the Accounts page, or post it directly instead';
 
 const URL_UNVERIFIED_MESSAGE =
 	"TikTok has not verified this instance's address for the app — verify the URL prefix under URL properties (docs: OAuth apps → TikTok)";
@@ -154,6 +161,11 @@ export function tiktokApiError(prefix: string, status: number, body: string): Pr
 		case 'spam_risk_too_many_posts':
 			return new ProviderError(
 				"TikTok's daily post limit for this account is reached — it is tried again in an hour",
+				{ status, code: 'rate_limited', detail, retryAfterMs: DAILY_CAP_RETRY_MS }
+			);
+		case 'spam_risk_too_many_pending_share':
+			return new ProviderError(
+				'TikTok holds at most 5 drafts from apps waiting in the inbox a day — post or delete the ones there; it is tried again in an hour',
 				{ status, code: 'rate_limited', detail, retryAfterMs: DAILY_CAP_RETRY_MS }
 			);
 		case 'reached_active_user_cap':
@@ -462,7 +474,8 @@ export const tiktokProvider: PlatformProvider = {
 		notes: [
 			'Exactly one video per post; photo posts need a verified domain and are not supported',
 			'Who can see it, comments, Duet, Stitch and the commercial-content disclosure are chosen for each post, from what TikTok offers the account, with no default',
-			'Until TikTok audits the app, every post is Only me and only private accounts can post'
+			'Until TikTok audits the app, every post is Only me and only private accounts can post',
+			'Or send it as a draft (draft: true): the video lands in the TikTok inbox without the caption, and the creator chooses the rest and posts it in the TikTok app'
 		]
 	},
 
@@ -495,7 +508,14 @@ export const tiktokProvider: PlatformProvider = {
 				code: 'forbidden'
 			});
 		}
-		if (!content.options?.tiktok?.privacy) {
+		const draft = content.options?.tiktok?.draft === true;
+		if (draft && creds.scopes && !creds.scopes.includes(TIKTOK_DRAFT_SCOPE)) {
+			throw new ProviderError(DRAFT_SCOPE_MESSAGE, { code: 'forbidden' });
+		}
+		// Inbox uploads take no post_info: the caption and every choice are the
+		// creator's to make in the TikTok app.
+		const initPath = draft ? '/post/publish/inbox/video/init/' : '/post/publish/video/init/';
+		if (!tiktokChoiceMade(content.options?.tiktok)) {
 			throw new ProviderError(
 				`${TIKTOK_PRIVACY_MISSING_MESSAGE}: open the post in the composer and pick who can see it`,
 				{ code: 'forbidden' }
@@ -521,13 +541,16 @@ export const tiktokProvider: PlatformProvider = {
 		 * wait for. Null when TikTok has not verified the address: the same
 		 * video then goes up from storage instead.
 		 */
-		async function beginPull(info: Record<string, unknown>): Promise<UploadState | null> {
+		async function beginPull(info: Record<string, unknown> | null): Promise<UploadState | null> {
 			let res: Response;
 			try {
 				res = await apiPost(
-					'/post/publish/video/init/',
+					initPath,
 					token!,
-					{ post_info: info, source_info: { source: 'PULL_FROM_URL', video_url: pullUrl } },
+					{
+						...(info ? { post_info: info } : {}),
+						source_info: { source: 'PULL_FROM_URL', video_url: pullUrl }
+					},
 					fetchImpl
 				);
 			} catch {
@@ -563,8 +586,9 @@ export const tiktokProvider: PlatformProvider = {
 
 		/** A new upload. Starting one publishes nothing, so a lost answer here is safe to redo. */
 		async function begin(): Promise<UploadState> {
-			const creator = await tiktokCreatorInfo(token!, fetchImpl);
-			const info = postInfo(text, content, creator, video!);
+			const info = draft
+				? null
+				: postInfo(text, content, await tiktokCreatorInfo(token!, fetchImpl), video!);
 			if (pullUrl) {
 				const pulled = await beginPull(info);
 				if (pulled) return pulled;
@@ -574,10 +598,10 @@ export const tiktokProvider: PlatformProvider = {
 			const plan = tiktokChunkPlan(size);
 			const data = await tiktokData<{ publish_id?: unknown; upload_url?: unknown }>(
 				await apiPost(
-					'/post/publish/video/init/',
+					initPath,
 					token!,
 					{
-						post_info: info,
+						...(info ? { post_info: info } : {}),
 						source_info: {
 							source: 'FILE_UPLOAD',
 							video_size: size,

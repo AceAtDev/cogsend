@@ -683,6 +683,9 @@
 		}
 		return null;
 	});
+	/** Whether any of these accounts posts directly, which is what TikTok's consent covers. */
+	const tiktokDirect = (ids: string[]) =>
+		ids.some((id) => platformOf(id) === 'tiktok' && !tiktokChoices[id]?.draft);
 	const tiktokBranded = (ids: string[]) =>
 		ids.some((id) => {
 			const choice = tiktokChoices[id];
@@ -4128,7 +4131,7 @@
 								{/each}
 							</div>
 
-							{#if pendingAccounts.some((a) => a.platform === 'tiktok')}
+							{#if tiktokDirect(pendingPublish.connectionIds)}
 								<TiktokConsent
 									branded={tiktokBranded(pendingPublish.connectionIds)}
 									class="mb-3 px-2 text-center"
@@ -4295,7 +4298,7 @@
 								</p>
 							{/if}
 
-							{#if tiktokAccounts.length}
+							{#if tiktokDirect(tiktokAccounts.map((a) => a.id))}
 								<TiktokConsent
 									branded={tiktokBranded(tiktokAccounts.map((a) => a.id))}
 									class="mb-3 px-2 text-center"

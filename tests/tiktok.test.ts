@@ -57,6 +57,7 @@ function tiktokNetwork(
 	const record = {
 		creatorCalls: 0,
 		inits: [] as Array<Record<string, unknown>>,
+		initUrls: [] as string[],
 		parts: [] as Array<{
 			url: string;
 			range: string | null;
@@ -78,7 +79,11 @@ function tiktokNetwork(
 			record.creatorCalls += 1;
 			return opts.creator ? answer(opts.creator) : Response.json({ data: CREATOR, error: OK });
 		}
-		if (url === 'https://open.tiktokapis.com/v2/post/publish/video/init/') {
+		if (
+			url === 'https://open.tiktokapis.com/v2/post/publish/video/init/' ||
+			url === 'https://open.tiktokapis.com/v2/post/publish/inbox/video/init/'
+		) {
+			record.initUrls.push(url);
 			record.inits.push((await req.json()) as Record<string, unknown>);
 			const n = record.inits.length;
 			return opts.init
@@ -193,7 +198,7 @@ describe('TikTok OAuth', () => {
 		expect(url.origin + url.pathname).toBe('https://www.tiktok.com/v2/auth/authorize/');
 		expect(Object.fromEntries(url.searchParams)).toEqual({
 			client_key: 'tt-key',
-			scope: 'user.info.basic,video.publish,video.list',
+			scope: 'user.info.basic,video.publish,video.upload,video.list',
 			response_type: 'code',
 			redirect_uri: 'https://social.example/api/connections/tiktok/callback',
 			state: 'st4te',
@@ -529,6 +534,70 @@ describe('TikTok publish', () => {
 		expect(result).toEqual({ remotePostId: 'v_pub_file~v2.1', remoteUrl: undefined });
 	});
 
+	it('sends a draft to the inbox with no post_info and no creator_info read', async () => {
+		const { store, video } = await storedVideo(5000);
+		const n = tiktokNetwork({ statuses: [{ status: 'SEND_TO_USER_INBOX' }] });
+		const result = await publish(video, store, n, { choice: { privacy: null, draft: true } });
+		expect(n.record.initUrls).toEqual([
+			'https://open.tiktokapis.com/v2/post/publish/inbox/video/init/'
+		]);
+		expect(n.record.inits).toEqual([
+			{
+				source_info: {
+					source: 'FILE_UPLOAD',
+					video_size: 5000,
+					chunk_size: 5000,
+					total_chunk_count: 1
+				}
+			}
+		]);
+		expect(n.record.creatorCalls).toBe(0);
+		expect(n.record.parts).toHaveLength(1);
+		expect(result).toEqual({ remotePostId: 'v_pub_file~v2.1', remoteUrl: undefined });
+	});
+
+	it('has TikTok pull a draft from a verified address', async () => {
+		const { store, video } = await storedVideo(5000);
+		const n = tiktokNetwork({
+			init: Response.json({ data: { publish_id: 'v_inbox_url~v2.1' }, error: OK }),
+			statuses: [{ status: 'SEND_TO_USER_INBOX' }]
+		});
+		const result = await publish(video, store, n, {
+			choice: { privacy: null, draft: true },
+			verifiedMediaUrlFor: () => 'https://cogsend.example.com/v.mp4'
+		});
+		expect(n.record.initUrls).toEqual([
+			'https://open.tiktokapis.com/v2/post/publish/inbox/video/init/'
+		]);
+		expect(n.record.inits).toEqual([
+			{ source_info: { source: 'PULL_FROM_URL', video_url: 'https://cogsend.example.com/v.mp4' } }
+		]);
+		expect(n.record.parts).toHaveLength(0);
+		expect(result.remotePostId).toBe('v_inbox_url~v2.1');
+	});
+
+	it('asks for a reconnect before a draft from a connection without video.upload', async () => {
+		const { store, video } = await storedVideo(100);
+		const n = tiktokNetwork();
+		const err = await tiktokProvider
+			.publish(
+				{
+					text: 'x',
+					media: [video],
+					options: { tiktok: { ...EMPTY_TIKTOK_CHOICE, draft: true } }
+				},
+				{ ...creds, scopes: ['user.info.basic', 'video.publish'] },
+				undefined,
+				n.fetchImpl,
+				{ mediaReader: store as never }
+			)
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(ProviderError);
+		expect((err as ProviderError).code).toBe('forbidden');
+		expect((err as ProviderError).message).toMatch(/reconnect/);
+		expect(n.record.inits).toHaveLength(0);
+	});
+
 	it('sends a large video in parts, each read from storage as it goes', async () => {
 		const size = 3 * TIKTOK_CHUNK_BYTES + 12_345;
 		const { store, bytes, video } = await storedVideo(size);
@@ -781,6 +850,9 @@ describe('TikTok error codes', () => {
 		expect(tiktokApiError('x', 400, body('scope_permission_missed')).code).toBe('auth');
 		expect(tiktokApiError('x', 429, body('rate_limit_exceeded')).code).toBe('rate_limited');
 		expect(tiktokApiError('x', 403, body('reached_active_user_cap')).code).toBe('rate_limited');
+		expect(tiktokApiError('x', 403, body('spam_risk_too_many_pending_share')).code).toBe(
+			'rate_limited'
+		);
 		expect(tiktokApiError('x', 403, body('spam_risk_user_banned_from_posting')).code).toBe(
 			'forbidden'
 		);
