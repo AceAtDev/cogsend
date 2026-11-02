@@ -286,7 +286,9 @@ describe('connect routes', () => {
 		const res = await call(tiktokPOST, undefined, { env: { ...env, TIKTOK_METRICS: 'true' } });
 		expect(res.status).toBe(200);
 		const url = new URL(((await res.json()) as { authorizeUrl: string }).authorizeUrl);
-		expect(url.searchParams.get('scope')).toBe('user.info.basic,video.publish,video.upload,video.list');
+		expect(url.searchParams.get('scope')).toBe(
+			'user.info.basic,video.publish,video.upload,video.list'
+		);
 	});
 
 	it('returns a TikTok authorize URL with client_key, comma scopes and a bound state', async () => {

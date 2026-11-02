@@ -174,7 +174,7 @@ const tiktokChoice = {
 		.boolean()
 		.optional()
 		.describe(
-			'Send the video to the TikTok inbox as a draft instead of posting it. With true, leave out every other choice: the creator adds the caption, picks who can see it and posts it in the TikTok app. Use it to get a public post while the app is unaudited (Direct Post is Only me until then). Only when the operator asks for a draft.'
+			'Send the video to the TikTok inbox as a draft instead of posting it. With true, leave out every other choice: the creator adds the caption, picks who can see it and posts it in the TikTok app. Until TikTok audits the app, Direct Post is Only me, so this is the way to a public post: offer it whenever the operator wants the video seen. The delivery then reports status published with tiktokInbox, meaning it reached the inbox, not that it is live.'
 		)
 };
 const tiktokEntry = z
@@ -192,7 +192,7 @@ const tiktokOptions = z
 	.union([tiktokEntry, z.array(tiktokEntry).min(1).max(10)])
 	.optional()
 	.describe(
-		'Required whenever a TikTok channel is targeted (unless save_draft already stored them): TikTok’s per-post choices, one object for every TikTok channel or a list with `for` per channel. There is no default; ask the operator.'
+		'Required whenever a TikTok channel is targeted (unless save_draft already stored them): TikTok’s per-post choices, one object for every TikTok channel or a list with `for` per channel: either Direct Post (privacy, allowComment, allowDuet, allowStitch, disclose) or {draft: true}. There is no default; ask the operator. Until TikTok audits the app, Direct Post can only be Only me (SELF_ONLY), and a public post needs draft: true, which the operator finishes in the TikTok app.'
 	);
 const responseFormat = z
 	.enum(['concise', 'detailed'])
@@ -788,7 +788,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create and schedule posts',
 			annotation: annotations.schedule,
-			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt (a time, or "next_slot" for each channel’s next open posting slot, which respects the channel’s max posts a day and minimum gap; a time that breaks those limits is refused with the next allowed one). Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok (privacy from what the account offers, comments, Duet, Stitch and disclosure), which TikTok allows no default for: ask the operator. Review: on a brand that requires it (list_channels says which), committed deliveries come back as status awaiting_review: they keep their time (a next_slot time too, which stays reserved) but nothing goes out until the operator approves them in the Review inbox, so never resend them. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
+			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt (a time, or "next_slot" for each channel’s next open posting slot, which respects the channel’s max posts a day and minimum gap; a time that breaks those limits is refused with the next allowed one). Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok, which TikTok allows no default for (ask the operator): either Direct Post (privacy from what the account offers, comments, Duet, Stitch and disclosure; only Only me until TikTok audits the app) or {draft: true}, which sends the video to the TikTok inbox for the operator to post publicly from the app. Review: on a brand that requires it (list_channels says which), committed deliveries come back as status awaiting_review: they keep their time (a next_slot time too, which stays reserved) but nothing goes out until the operator approves them in the Review inbox, so never resend them. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				now: instant,
@@ -1034,7 +1034,7 @@ function createServer(event: RequestEvent) {
 			title: 'Publish a post now',
 			annotation: annotations.publish,
 			description:
-				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure) unless save_draft stored them; there is no default. On a brand that requires review nothing is sent: the deliveries come back awaiting_review and go out on the next tick once the operator approves them. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
+				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure, or {draft: true} to send it to the TikTok inbox, the way to a public post until TikTok audits the app) unless save_draft stored them; there is no default. On a brand that requires review nothing is sent: the deliveries come back awaiting_review and go out on the next tick once the operator approves them. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				postId: z.string(),

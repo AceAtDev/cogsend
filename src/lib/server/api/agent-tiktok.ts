@@ -182,7 +182,7 @@ export function planTiktokChoices(opts: {
 			out.missing.push({ channel: channel.key, privacyOptions: levels });
 			if (!requireAll) continue;
 			out.problems.push(
-				`${field} for ${channel.key}: ${TIKTOK_PRIVACY_MISSING_MESSAGE}; TikTok allows no default. Send privacy (${levels.length ? `this account offers ${levels.join(', ')}` : 'get_platform_requirements with this channel lists what the account offers'}) and whether comments, Duet and Stitch are allowed and whether the post promotes a brand. Ask the operator, then send ${field}: ${exampleFor(levels)}.`
+				`${field} for ${channel.key}: ${TIKTOK_PRIVACY_MISSING_MESSAGE}; TikTok allows no default. ${TIKTOK_AUDIT_NOTE} Ask the operator which they want. For Direct Post send privacy (${levels.length ? `this account offers ${levels.join(', ')}` : 'get_platform_requirements with this channel lists what the account offers'}) and whether comments, Duet and Stitch are allowed and whether the post promotes a brand. Ask the operator, then send ${field}: ${exampleFor(levels)}.`
 			);
 			continue;
 		}
@@ -196,6 +196,19 @@ export function planTiktokChoices(opts: {
 		out.choices[channel.connectionId] = choice;
 	}
 	return out;
+}
+
+export const TIKTOK_AUDIT_NOTE =
+	'Until TikTok audits the app, Direct Post can only post as Only me (SELF_ONLY). For a post anyone can see, send {"draft": true}: the video lands in the account\'s TikTok inbox and the operator posts it publicly from the TikTok app.';
+
+/**
+ * What a delivered TikTok draft still needs, or null. TikTok's publish id for
+ * an inbox upload starts with v_inbox, and "published" only means it reached
+ * the inbox.
+ */
+export function tiktokInboxNote(remotePostId: string | null | undefined): string | null {
+	if (!remotePostId?.startsWith('v_inbox')) return null;
+	return 'In the TikTok inbox as a draft, not posted yet: the operator opens the notification in the TikTok app, pastes the caption (it does not travel with a draft), chooses who can see it and posts it.';
 }
 
 /** One line per choice for a preview, in the words TikTok's own app uses. */

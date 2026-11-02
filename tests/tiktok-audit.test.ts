@@ -35,7 +35,8 @@ import { verifiedMediaUrlFor } from '#lib/server/publish.js';
 import {
 	describeTiktokChoice,
 	planTiktokChoices,
-	tiktokConsentLine
+	tiktokConsentLine,
+	tiktokInboxNote
 } from '#lib/server/api/agent-tiktok.js';
 import type { Channel } from '#lib/domain/channel-keys.js';
 import { handle, isPublicPath, tiktokVerificationResponse } from '../src/hooks.server';
@@ -196,6 +197,27 @@ describe('TikTok post choices', () => {
 		expect(tiktokConsentLine([plan.choices.c1, choice({ privacy: 'SELF_ONLY' })])).toMatch(
 			/Music Usage/
 		);
+	});
+
+	it('tells an agent missing a choice that a draft is the way to a public post', () => {
+		const channel = {
+			key: 'acme.tiktok',
+			platform: 'tiktok',
+			connectionId: 'c1'
+		} as unknown as Channel;
+		const plan = planTiktokChoices({
+			field: 'tiktok',
+			input: undefined,
+			channels: [channel],
+			dir: { brands: [], channels: [channel] },
+			stored: {},
+			rulesOf: () => ({ privacyOptions: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'] })
+		});
+		expect(plan.problems[0]).toMatch(/Only me/);
+		expect(plan.problems[0]).toMatch(/"draft": true/);
+		expect(tiktokInboxNote('v_inbox_file~v2.7703616327763642388')).toMatch(/not posted yet/);
+		expect(tiktokInboxNote('v_pub_file~v2.1')).toBeNull();
+		expect(tiktokInboxNote(null)).toBeNull();
 	});
 
 	it('maps the choice to post_info, keeping off what the creator turned off', () => {

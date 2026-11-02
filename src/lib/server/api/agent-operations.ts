@@ -62,6 +62,7 @@ import {
 	planTiktokChoices,
 	storedTiktokChoices,
 	tiktokConsentLine,
+	tiktokInboxNote,
 	videoDurationMs,
 	type TiktokOptionsInput,
 	type TiktokPlan
@@ -919,6 +920,8 @@ interface DeliveryOut {
 	/** waiting/overdue while held, rejected, or reviewed once approved with a note. */
 	review?: { state: string; note: string | null; reviewedAt: InstantView | null };
 	slot?: boolean;
+	/** A TikTok draft that reached the inbox and still has to be posted in the app. */
+	tiktokInbox?: string;
 }
 
 async function commitSchedule(agent: AgentContext, plans: PostPlan[], warnings: string[]) {
@@ -1132,8 +1135,14 @@ function deliveryOut(row: TargetRow, channel: ChannelView, timeZone: string): De
 		runAt: view(row.scheduledFor, timeZone),
 		permalink: row.remoteUrl,
 		error: row.errorMessage,
+		...inboxOut(row.remotePostId),
 		...reviewOut(row, timeZone)
 	};
+}
+
+function inboxOut(remotePostId: string | null): { tiktokInbox?: string } {
+	const note = tiktokInboxNote(remotePostId);
+	return note ? { tiktokInbox: note } : {};
 }
 
 /** What review says about a delivery, once it has been near review at all. */
@@ -2035,6 +2044,7 @@ export async function listPostsOp(agent: AgentContext, input: ListInput) {
 				scheduled: r.t.scheduledFor !== null
 			},
 			excerpt: draftExcerpt(body, 80),
+			...inboxOut(r.t.remotePostId),
 			...reviewOut(r.t, timeZone)
 		};
 		if (!detailed) return base;
