@@ -182,7 +182,12 @@
 			if (sessionExpiredIfUnauthorized(res)) return;
 			if (res.ok) {
 				const body = (await res.json()) as { sentTo: string[] };
-				testMessage = { ok: true, text: `Sent to ${body.sentTo.join(', ')}` };
+				testMessage = {
+					ok: true,
+					text: recipients.length
+						? `Sent to ${body.sentTo.join(', ')}`
+						: `Sent to ${body.sentTo.join(', ')}. No alerts or digests go out until you add a recipient below.`
+				};
 			} else {
 				testMessage = { ok: false, text: await errorOf(res) };
 			}
@@ -405,7 +410,7 @@
 			<h3 class={labelClass}>Recipients</h3>
 			{#if !recipients.length}
 				<p class="mb-4 text-[13px] font-medium text-stone-500">
-					Nobody yet. Add the addresses that should hear about this account.
+					Nobody yet, so no alerts or digests are sent. Add the addresses that should hear about this account.
 				</p>
 			{/if}
 			<ul class="space-y-4">
