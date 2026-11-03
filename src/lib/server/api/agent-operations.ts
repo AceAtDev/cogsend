@@ -2272,7 +2272,10 @@ export async function getPostOp(
 	const check = detailed && live.length ? await checkDraft(ctx, userId, input.postId, live) : null;
 	const variants = draft.variants.map((v) => ({
 		platform: v.platform,
-		text: detailed ? v.body : draftExcerpt(v.body, 120)
+		// A variant kept only for its options (TikTok's choices) has no text of
+		// its own and publishes the post's text: say so, not "Empty draft".
+		text: v.body ? (detailed ? v.body : draftExcerpt(v.body, 120)) : null,
+		...(v.body ? {} : { usesPostText: true })
 	}));
 	const media = draft.media.map((m) => ({
 		mediaId: m.id,

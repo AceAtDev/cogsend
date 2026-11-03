@@ -223,7 +223,7 @@ export function tiktokChoiceMade(choice: TiktokPostChoice | null | undefined): b
 }
 
 export const TIKTOK_DRAFT_NOTE =
-	'Goes to the TikTok inbox as a draft: open the notification in the TikTok app to add the caption, choose who can see it and post it.';
+	'Goes to the TikTok inbox as a draft: open the notification in the TikTok app, choose who can see it and post it. A photo post arrives with its caption and title filled in; a video arrives without its caption, so add it there.';
 
 export function formatSeconds(totalSec: number): string {
 	const whole = Math.max(0, Math.round(totalSec));
