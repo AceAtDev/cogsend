@@ -1294,7 +1294,7 @@ function createServer(event: RequestEvent) {
 							example: `curl -fsS -T slide-1.jpg "${firstUrl}"`,
 							response: '201 { "postId", "mediaId", "mime", "position" }'
 						},
-						next: `PUT file n to links[n-1].url (e.g. curl -fsS -T file "<url>"), all before ${result.expiresAt}. Then add the caption with save_draft (postId "${draftId}") or schedule with schedule_posts (posts[].draftId "${draftId}"); get_post shows the attached files in order.`,
+						next: `PUT file n to links[n-1].url (e.g. curl -fsS -T file "<url>"), all before ${result.expiresAt}. Then add the caption with save_draft (draftId "${draftId}") or schedule with schedule_posts (posts[].draftId "${draftId}"); get_post shows the attached files in order.`,
 						summary: `${result.links.length} upload link(s) for draft ${draftId}${created ? ' (new draft)' : ''}, segment ${result.segmentIndex}, valid until ${result.expiresAt}.`
 					};
 				} catch (err) {
