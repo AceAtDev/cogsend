@@ -7,6 +7,7 @@
 export const NOTIFICATION_KINDS = [
 	'digest',
 	'failures',
+	'published',
 	'review',
 	'connections',
 	'paused'
@@ -15,12 +16,16 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** The kinds sent as they happen (debounced). The digest is daily, and a
  *  paused brand only ever appears in it as a reminder. */
-export const ALERT_KINDS = ['failures', 'review', 'connections'] as const;
+export const ALERT_KINDS = ['failures', 'published', 'review', 'connections'] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
 export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, { label: string; hint: string }> = {
 	digest: { label: 'Daily digest', hint: "Today's plan, yesterday's results, what needs you" },
 	failures: { label: 'Failed posts', hint: 'As soon as a post fails to publish' },
+	published: {
+		label: 'Published / sent to inbox',
+		hint: 'Posts that went live or reached the TikTok inbox, grouped every 15 minutes'
+	},
 	review: { label: 'Review waiting / overdue', hint: 'Agent posts whose time passed unapproved' },
 	connections: { label: 'Account needs reconnecting', hint: 'An account expired or lost access' },
 	paused: { label: 'Paused brand reminder', hint: 'In the digest, while a brand is paused' }

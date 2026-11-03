@@ -104,6 +104,7 @@ async function delivery(
 		scheduledFor?: Date | null;
 		error?: string;
 		remoteUrl?: string;
+		remotePostId?: string;
 	}
 ) {
 	const draftId = newId();
@@ -123,7 +124,7 @@ async function delivery(
 		status: opts.status,
 		scheduledFor: opts.scheduledFor ?? null,
 		errorMessage: opts.error ?? null,
-		remotePostId: opts.status === 'published' ? 'remote-1' : null,
+		remotePostId: opts.remotePostId ?? (opts.status === 'published' ? 'remote-1' : null),
 		remoteUrl: opts.remoteUrl ?? null,
 		createdAt: opts.updatedAt,
 		updatedAt: opts.updatedAt
@@ -238,6 +239,53 @@ describe('alerts', () => {
 			await db.select().from(notificationSettings).where(eq(notificationSettings.userId, alice.id))
 		)[0];
 		expect(cleared.lastError).toBeNull();
+	});
+
+	it('groups published posts and TikTok inbox drafts into one email for their subscribers', async () => {
+		const alice = await account({
+			email: 'alice@localhost',
+			recipients: [
+				{ email: 'ops@example.com', subscriptions: ['published'] },
+				{ email: 'boss@example.com', subscriptions: ['failures'] }
+			]
+		});
+		const at = new Date(EVENING.getTime() - 60_000);
+		await delivery(alice, {
+			status: 'published',
+			body: 'Live post',
+			remoteUrl: 'https://mastodon.example/@acme/1',
+			updatedAt: at
+		});
+		await delivery(alice, {
+			status: 'published',
+			body: 'Video draft',
+			remotePostId: 'v_inbox_file~v2.123',
+			updatedAt: new Date(at.getTime() + 1000)
+		});
+		await delivery(alice, {
+			status: 'published',
+			body: 'Photo draft',
+			remotePostId: 'p_inbox_url~v2.456',
+			updatedAt: new Date(at.getTime() + 2000)
+		});
+		const fake = fakeSmtp();
+		const result = await runNotifications(db, env, { now: EVENING, connect: fake.connect });
+		expect(result).toMatchObject({ alerts: 1, failed: 0 });
+		expect(fake.delivered).toHaveLength(1);
+		const mail = fake.delivered[0];
+		expect(mail.recipients).toEqual(['ops@example.com']);
+		expect(subjectOf(mail.data)).toBe('CogSend: 3 posts went out');
+		const text = textPart(mail.data);
+		expect(text).toContain('Published · Mastodon acme@mastodon.example: “Live post”');
+		expect(text).toContain('https://mastodon.example/@acme/1');
+		expect(text).toContain('In the TikTok inbox · Mastodon acme@mastodon.example: “Video draft”');
+		expect(text).toContain('paste the caption');
+		expect(text).toContain('“Photo draft”');
+		expect(text).toContain('add a sound');
+
+		// Reported once: the next window has nothing new to say.
+		const later = new Date(EVENING.getTime() + ALERT_WINDOW_MS);
+		expect((await runNotifications(db, env, { now: later, connect: fake.connect })).alerts).toBe(0);
 	});
 
 	it('alerts on an account that needs reconnecting', async () => {

@@ -121,6 +121,75 @@ export const failureAlerts: AlertSource = {
 	}
 };
 
+/** A TikTok inbox upload is "published" once it reaches the inbox: its publish id says which. */
+function inboxDraft(remotePostId: string | null): 'photo' | 'video' | null {
+	if (remotePostId?.startsWith('p_inbox')) return 'photo';
+	if (remotePostId?.startsWith('v_inbox')) return 'video';
+	return null;
+}
+
+export const publishedAlerts: AlertSource = {
+	kind: 'published',
+	heading: 'Published and sent to the inbox',
+	subject: (n) => `${plural(n, 'post')} went out`,
+	async collect(db, { users, appUrl, limit }) {
+		if (!users.length) return [];
+		const rows = await db
+			.select({
+				at: publishTargets.updatedAt,
+				userId: drafts.userId,
+				remotePostId: publishTargets.remotePostId,
+				remoteUrl: publishTargets.remoteUrl,
+				platform: connections.platform,
+				handle: connections.handle,
+				brand: brands.name,
+				baseBody: drafts.baseBody,
+				title: drafts.title
+			})
+			.from(publishTargets)
+			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
+			.leftJoin(connections, eq(publishTargets.connectionId, connections.id))
+			.leftJoin(brands, eq(connections.brandId, brands.id))
+			.where(
+				and(
+					eq(publishTargets.status, 'published'),
+					inArray(
+						drafts.userId,
+						users.map((u) => u.userId)
+					),
+					gt(publishTargets.updatedAt, earliest(users))
+				)
+			)
+			.orderBy(asc(publishTargets.updatedAt))
+			.limit(limit);
+		return afterCursor(
+			rows.map((r) => {
+				const inbox = inboxDraft(r.remotePostId);
+				const text = `${account(r.platform, r.handle)}: “${postText(r.baseBody, r.title)}”`;
+				return {
+					userId: r.userId,
+					at: r.at,
+					group: r.brand ?? NO_BRAND,
+					line: inbox
+						? {
+								text: `In the TikTok inbox · ${text}`,
+								detail:
+									inbox === 'photo'
+										? 'Draft, not posted yet: open the notification in TikTok, add a sound and post it.'
+										: 'Draft, not posted yet: open the notification in TikTok, paste the caption and post it.',
+								href: link(appUrl, '/posts?tab=published')
+							}
+						: {
+								text: `Published · ${text}`,
+								href: r.remoteUrl ?? link(appUrl, '/posts?tab=published')
+							}
+				};
+			}),
+			users
+		);
+	}
+};
+
 export const connectionAlerts: AlertSource = {
 	kind: 'connections',
 	heading: 'Accounts that need reconnecting',
@@ -520,7 +589,7 @@ export const pausedBrands: DigestSection = {
 
 /** What the tick sends unless a caller passes its own hooks. Order is email order. */
 export const defaultHooks: NotificationHooks = {
-	alertSources: [failureAlerts, connectionAlerts, reviewAlerts],
+	alertSources: [failureAlerts, publishedAlerts, connectionAlerts, reviewAlerts],
 	digestSections: [needsAction, plannedToday, yesterdayResults, topPosts, pausedBrands]
 };
 

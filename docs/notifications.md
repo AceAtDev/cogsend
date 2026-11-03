@@ -10,6 +10,7 @@ Everything here is per account: on an instance with [several users](multi-user.m
 | -------------------------- | --------------------------------------------------------------------------------------- |
 | Daily digest               | Once a day at the time you choose, in your time zone                                    |
 | Failed posts               | Soon after a post fails to publish                                                      |
+| Published / sent to inbox  | Soon after a post goes live or a TikTok draft reaches the inbox, grouped per email      |
 | Review waiting / overdue   | Soon after a post an agent wrote passes its time without being approved                 |
 | Account needs reconnecting | Soon after an account expires or loses access                                           |
 | Paused brand reminder      | With the digest, while a brand is paused; a reminder-only recipient gets just that line |
