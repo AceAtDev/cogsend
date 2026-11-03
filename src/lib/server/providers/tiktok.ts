@@ -1,4 +1,8 @@
-import { tiktokMediaProblems } from '#lib/domain/media-limits.js';
+import {
+	MAX_IMAGE_BYTES,
+	TIKTOK_MAX_PHOTOS,
+	tiktokMediaProblems
+} from '#lib/domain/media-limits.js';
 import {
 	tiktokChoiceMade,
 	tiktokChoiceProblem,
@@ -458,21 +462,181 @@ function postInfo(
 	);
 }
 
+/** TikTok's photo post page, once a public post has an id. */
+export function tiktokPhotoUrl(username: string | undefined, postId: string | undefined) {
+	if (!username || !postId) return undefined;
+	return `https://www.tiktok.com/@${encodeURIComponent(username)}/photo/${postId}`;
+}
+
+const PHOTO_URL_MESSAGE =
+	'TikTok photo posts are pulled from a URL TikTok has verified for this app: set TIKTOK_SITE_VERIFICATION and verify the CogSend address in the TikTok developer portal';
+
+interface PhotoPublishInput {
+	token: string;
+	text: string;
+	content: NormalizedPost;
+	photos: MediaAttachment[];
+	creds: ConnectionCredentials;
+	fetchImpl: FetchLike;
+	opts: Parameters<PlatformProvider['publish']>[4];
+}
+
+/**
+ * A photo post: TikTok pulls every image from a signed URL on the verified
+ * address, so nothing is uploaded from here and one init call starts it. Like
+ * a pulled video, an init that got no answer may still post, so it is never
+ * sent twice; the publish id rides in the parked state until TikTok settles.
+ */
+async function publishTiktokPhotos(input: PhotoPublishInput): Promise<PublishResult> {
+	const { token, text, content, photos, creds, fetchImpl, opts } = input;
+	const firstKey = photos[0].storageKey!;
+	const callsLeft = opts?.callsLeft ?? (() => Infinity);
+	const timeLeft = opts?.timeLeft ?? (() => Infinity);
+	const startedAt = opts?.resume?.pending?.startedAt;
+	const draft = content.options?.tiktok?.draft === true;
+	const park = (publishId: string, retryAfterMs: number): never => {
+		throw processingError(
+			'TikTok',
+			{ segment: 0, storageKey: firstKey, state: { publishId, photo: true } },
+			retryAfterMs
+		);
+	};
+
+	const resumed = resumedVideoState(opts?.resume, 0, firstKey);
+	let publishId = typeof resumed?.publishId === 'string' ? resumed.publishId : '';
+	let sentThisRun = false;
+	if (!publishId) {
+		if (draft && creds.scopes && !creds.scopes.includes(TIKTOK_DRAFT_SCOPE)) {
+			throw new ProviderError(DRAFT_SCOPE_MESSAGE, { code: 'forbidden' });
+		}
+		if (!tiktokChoiceMade(content.options?.tiktok)) {
+			throw new ProviderError(
+				`${TIKTOK_PRIVACY_MISSING_MESSAGE}: open the post in the composer and pick who can see it`,
+				{ code: 'forbidden' }
+			);
+		}
+		if (!opts?.verifiedMediaUrlFor) {
+			throw new ProviderError(PHOTO_URL_MESSAGE, { code: 'forbidden' });
+		}
+		const urls: string[] = [];
+		for (const photo of photos) {
+			const mime = (photo.mime || '').toLowerCase();
+			const asJpeg = mime === 'image/png' && photo.hasJpegCopy;
+			const url = await opts.verifiedMediaUrlFor(photo.storageKey!, asJpeg ? 'jpeg' : undefined);
+			if (!url) throw new ProviderError(PHOTO_URL_MESSAGE, { code: 'forbidden' });
+			urls.push(url);
+		}
+		let postInfo: Record<string, unknown>;
+		if (draft) {
+			postInfo = text ? { description: text } : {};
+		} else {
+			const creator = await tiktokCreatorInfo(token, fetchImpl);
+			const choice = content.options?.tiktok;
+			const problem = tiktokChoiceProblem(choice, creator);
+			if (problem) {
+				throw new ProviderError(problem, {
+					code: 'forbidden',
+					metaPatch: creatorMeta(creator),
+					detail: creator.privacyOptions.join(',')
+				});
+			}
+			const made = choice as NonNullable<typeof choice> & { privacy: TiktokPrivacy };
+			postInfo = {
+				privacy_level: made.privacy,
+				disable_comment: !made.allowComment || creator.commentDisabled === true,
+				// TikTok adds a recommended sound, as a photo post in its own app does.
+				auto_add_music: true,
+				brand_content_toggle: made.disclose && made.brandedContent,
+				brand_organic_toggle: made.disclose && made.yourBrand,
+				...(text ? { description: text } : {})
+			};
+		}
+		let res: Response;
+		try {
+			res = await apiPost(
+				'/post/publish/content/init/',
+				token,
+				{
+					post_info: postInfo,
+					source_info: {
+						source: 'PULL_FROM_URL',
+						photo_cover_index: 0,
+						photo_images: urls
+					},
+					post_mode: draft ? 'MEDIA_UPLOAD' : 'DIRECT_POST',
+					media_type: 'PHOTO'
+				},
+				fetchImpl
+			);
+		} catch {
+			throw unconfirmedPostError('TikTok', new Error('no answer to the photo post request'));
+		}
+		let data: { publish_id?: unknown };
+		try {
+			data = await tiktokData<{ publish_id?: unknown }>(res, 'TikTok photo post');
+		} catch (err) {
+			if (err instanceof ProviderError && err.message === URL_UNVERIFIED_MESSAGE) {
+				throw new ProviderError(PHOTO_URL_MESSAGE, { code: 'forbidden' });
+			}
+			if (err instanceof ProviderError && err.code === 'upstream') {
+				throw unconfirmedPostError('TikTok', err);
+			}
+			throw err;
+		}
+		if (typeof data.publish_id !== 'string' || !data.publish_id) {
+			throw new ProviderError('TikTok returned no publish id', { code: 'upstream' });
+		}
+		publishId = data.publish_id;
+		sentThisRun = true;
+	}
+
+	const outcome = await pollVideo(
+		{ polls: STATUS_POLLS, delayMs: STATUS_POLL_MS, reserve: STATUS_RESERVE, callsLeft, timeLeft },
+		async (): Promise<{ postId?: string } | null> => {
+			const status = await postStatus(token, publishId, fetchImpl);
+			if (!status) return null;
+			if (status.status === 'PUBLISH_COMPLETE' || status.status === 'SEND_TO_USER_INBOX') {
+				return { postId: status.postId };
+			}
+			if (status.status === 'FAILED') {
+				// A photo pull that failed published nothing; a retry is a fresh post.
+				if (failedPost(status.failReason) === 'restart') {
+					throw new ProviderError('TikTok did not take the photos — it is tried again', {
+						code: 'upstream'
+					});
+				}
+			}
+			return null;
+		}
+	);
+	if (outcome) {
+		const remotePostId = outcome.postId ?? publishId;
+		await opts?.checkpoint?.({ segmentIds: [remotePostId] });
+		return { remotePostId, remoteUrl: tiktokPhotoUrl(creds.tiktokUsername, outcome.postId) };
+	}
+	if (!sentThisRun && startedAt && Date.now() - startedAt > CONFIRM_WINDOW_MS) {
+		throw unconfirmedPostError('TikTok', new Error(`still processing publish ${publishId}`));
+	}
+	return park(publishId, STATUS_RETRY_MS);
+}
+
 export const tiktokProvider: PlatformProvider = {
 	id: 'tiktok',
 	capabilities: {
-		maxImages: 0,
-		maxImageBytes: 0,
+		maxImages: TIKTOK_MAX_PHOTOS,
+		maxImageBytes: MAX_IMAGE_BYTES,
 		supportsCW: false,
 		supportsVisibility: false,
 		supportsThreads: false
 	},
 	requirements: {
-		imageMimes: [],
+		imageMimes: ['image/jpeg', 'image/webp'],
+		jpegCopyMimes: ['image/png'],
 		requiresMedia: true,
 		altText: { images: false, videos: false },
 		notes: [
-			'Exactly one video per post; photo posts need a verified domain and are not supported',
+			'One video on its own, or a photo post (carousel) of 1 to 20 JPEG or WebP images in order, the first one the cover; TikTok wants photos at most 1080p',
+			'Photo posts are pulled from the CogSend address TikTok verified for the app; TikTok adds a recommended sound to a direct photo post',
 			'Who can see it, comments, Duet, Stitch and the commercial-content disclosure are chosen for each post, from what TikTok offers the account, with no default',
 			'Until TikTok audits the app, Direct Post can only post as Only me',
 			'For a public post before then, send it as a draft (draft: true): the video lands in the TikTok inbox without the caption, and the creator chooses who can see it and posts it in the TikTok app'
@@ -487,7 +651,7 @@ export const tiktokProvider: PlatformProvider = {
 		const problems = tiktokMediaProblems(media);
 		for (const message of problems) issues.push({ field: 'media', message, code: 'tiktok_media' });
 		if (problems.length) return issues;
-		issues.push(...videoValidation('tiktok', media, meta, 'media'));
+		if (segmentVideo(media)) issues.push(...videoValidation('tiktok', media, meta, 'media'));
 		return issues;
 	},
 
@@ -503,6 +667,12 @@ export const tiktokProvider: PlatformProvider = {
 		if (done) return { remotePostId: done, remoteUrl: opts?.resume?.remoteUrl ?? undefined };
 		const { text, media } = singlePost(content);
 		const video = segmentVideo(media);
+		const photos = media.filter(
+			(m) => m.storageKey && (m.mime || '').toLowerCase().startsWith('image/')
+		);
+		if (!video && photos.length && !tiktokMediaProblems(media).length) {
+			return publishTiktokPhotos({ token, text, content, photos, creds, fetchImpl, opts });
+		}
 		if (!video?.storageKey) {
 			throw new ProviderError(tiktokMediaProblems(media)[0] ?? 'TikTok needs a video', {
 				code: 'forbidden'

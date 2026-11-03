@@ -11,6 +11,8 @@ import { rotateApiKey, verifyApiKey } from '#lib/server/api-keys.js';
 import type { MediaStore } from '#lib/server/providers/types.js';
 import { POST } from '../src/routes/api/mcp/+server';
 import { PUT as partPUT } from '../src/routes/api/drafts/[id]/media/uploads/part/+server';
+import { PUT as linkPUT } from '../src/routes/api/media/upload-link/[token]/+server';
+import { revokeApiKeys } from '#lib/server/api-keys.js';
 import { buildMp4 } from './mp4-fixture';
 
 let db: Awaited<ReturnType<typeof createTestDb>>['db'];
@@ -61,6 +63,7 @@ async function connect(scopes: Array<'read' | 'write'>): Promise<Client> {
 					apiKeyScopes: verified.scopes,
 					authMethod: 'bearer',
 					authCredential: 'personal_api_key',
+					apiKey: { id: verified.keyId, prefix: verified.prefix },
 					db,
 					env: TEST_ENV,
 					media,
@@ -442,10 +445,10 @@ describe('attach_media inline', () => {
 		expect(String(data(pastEnd).error)).toMatch(/past the last segment/);
 	});
 
-	it('holds a segment to four images and keeps a video on its own', async () => {
+	it('holds a segment to twenty images and keeps a video on its own', async () => {
 		const client = await connect(['read', 'write']);
 		const draftId = await seedDraft();
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < 20; i++) {
 			const r = await client.callTool({
 				name: 'attach_media',
 				arguments: { draftId, base64: base64(pngBytes()) }
@@ -456,10 +459,131 @@ describe('attach_media inline', () => {
 			name: 'attach_media',
 			arguments: { draftId, base64: base64(pngBytes()) }
 		});
-		expect(data(fifth)).toMatchObject({ error: 'Max 4 images per post' });
+		expect(data(fifth)).toMatchObject({ error: 'Max 20 images per post' });
 		const post = data(await client.callTool({ name: 'get_post', arguments: { postId: draftId } }))
 			.post as { media: unknown[] };
-		expect(post.media).toHaveLength(4);
+		expect(post.media).toHaveLength(20);
+	});
+});
+
+describe('upload links', () => {
+	async function put(url: string, body: Uint8Array | null, headers: Record<string, string> = {}) {
+		const target = new URL(url);
+		const token = decodeURIComponent(target.pathname.split('/').pop()!);
+		const request = new Request(target, {
+			method: 'PUT',
+			headers: body ? { 'content-length': String(body.length), ...headers } : headers,
+			body: body as BodyInit | null
+		});
+		return linkPUT({
+			params: { token },
+			request,
+			url: target,
+			locals: { db, env: TEST_ENV, media }
+		} as never);
+	}
+
+	type Links = {
+		postId: string;
+		links: Array<{ position: number; url: string }>;
+		request: { example: string };
+	};
+
+	it('hands out one link per file and keeps the carousel order however the uploads finish', async () => {
+		const client = await connect(['read', 'write']);
+		const result = await client.callTool({
+			name: 'media_upload',
+			arguments: { action: 'links', count: 3 }
+		});
+		expect(result.isError).toBeFalsy();
+		const out = data(result) as unknown as Links;
+		expect(out.links.map((l) => l.position)).toEqual([1, 2, 3]);
+		expect(out.links[0].url.startsWith(`${TEST_ENV.APP_URL}/api/media/upload-link/`)).toBe(true);
+		expect(out.request.example).toContain('curl -fsS -T');
+		// Sent last first.
+		const ids: string[] = [];
+		for (const i of [2, 0, 1]) {
+			const res = await put(out.links[i].url, pngBytes(1001 + i, 1350));
+			expect(res.status).toBe(201);
+			const body = (await res.json()) as { mediaId: string };
+			expect(body).toMatchObject({ postId: out.postId, position: i + 1 });
+			ids[i] = body.mediaId;
+		}
+		const post = data(
+			await client.callTool({ name: 'get_post', arguments: { postId: out.postId } })
+		).post as { media: Array<{ mediaId: string }> };
+		expect(post.media.map((m) => m.mediaId)).toEqual(ids);
+		const rows = await db.select().from(draftMedia).where(eq(draftMedia.draftId, out.postId));
+		expect(rows).toHaveLength(3);
+	});
+
+	it('takes each link once, and refuses a forged, empty or revoked one', async () => {
+		const client = await connect(['read', 'write']);
+		const draftId = await seedDraft();
+		const out = data(
+			await client.callTool({
+				name: 'media_upload',
+				arguments: { action: 'links', draftId, count: 2 }
+			})
+		) as unknown as Links;
+		expect((await put(out.links[0].url, pngBytes())).status).toBe(201);
+		const again = await put(out.links[0].url, pngBytes());
+		expect(again.status).toBe(409);
+		const forged = out.links[1].url.replace(/.$/, (c) => (c === 'a' ? 'b' : 'a'));
+		expect((await put(forged, pngBytes())).status).toBe(403);
+		expect((await put(out.links[1].url, null)).status).toBe(411);
+		expect((await put(out.links[1].url, new Uint8Array([1, 2, 3, 4]))).status).toBe(400);
+		await revokeApiKeys(db, user.id);
+		expect((await put(out.links[1].url, pngBytes())).status).toBe(403);
+		const rows = await db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
+		expect(rows).toHaveLength(1);
+	});
+
+	it('stops working after an hour', async () => {
+		const client = await connect(['read', 'write']);
+		const draftId = await seedDraft();
+		const out = data(
+			await client.callTool({
+				name: 'media_upload',
+				arguments: { action: 'links', draftId, count: 1 }
+			})
+		) as unknown as Links;
+		vi.useFakeTimers({ now: Date.now() + 61 * 60_000, toFake: ['Date'] });
+		try {
+			const res = await put(out.links[0].url, pngBytes());
+			expect(res.status).toBe(403);
+			expect((await res.json()).error).toMatch(/expired/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('refuses more links than the post has room for, and another person’s draft', async () => {
+		const client = await connect(['read', 'write']);
+		const draftId = await seedDraft();
+		const tooMany = await client.callTool({
+			name: 'media_upload',
+			arguments: { action: 'links', draftId, count: 21 }
+		});
+		expect(tooMany.isError).toBe(true);
+		const other = await createTestAdmin(db, { email: 'other@localhost', totpEnabled: true });
+		const theirs = newId();
+		const now = new Date();
+		await db.insert(drafts).values({
+			id: theirs,
+			userId: other.id,
+			title: 'Theirs',
+			baseBody: 'x',
+			status: 'draft',
+			createdAt: now,
+			updatedAt: now
+		});
+		const refused = await client.callTool({
+			name: 'media_upload',
+			arguments: { action: 'links', draftId: theirs, count: 1 }
+		});
+		expect(refused.isError).toBe(true);
+		expect(data(refused)).toMatchObject({ error: 'Not found' });
 	});
 });
 

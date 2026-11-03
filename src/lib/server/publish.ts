@@ -317,10 +317,14 @@ export function publicMediaUrlFor(
  * media origin is a different host, so the signed Worker route is used even
  * when one is configured.
  */
-export function verifiedMediaUrlFor(env: AppEnv, storageKey: string): Promise<string> | null {
+export function verifiedMediaUrlFor(
+	env: AppEnv,
+	storageKey: string,
+	variant?: PublicMediaVariant
+): Promise<string> | null {
 	if (!env.TIKTOK_SITE_VERIFICATION?.trim() || !env.APP_URL.startsWith('https://')) return null;
 	if (isLocalAppUrl(env.APP_URL)) return null;
-	return signPublicMediaUrl(env.APP_ENCRYPTION_KEY, env.APP_URL, storageKey, Date.now());
+	return signPublicMediaUrl(env.APP_ENCRYPTION_KEY, env.APP_URL, storageKey, Date.now(), variant);
 }
 
 /** Normalized https origin, or null when unset/malformed (fall back). */
@@ -746,7 +750,8 @@ export async function publishTarget(
 					allowLocalHosts: isLocalAppUrl(env.APP_URL),
 					mediaUrlFor: (storageKey: string, variant?: PublicMediaVariant) =>
 						publicMediaUrlFor(env, storageKey, variant),
-					verifiedMediaUrlFor: (storageKey: string) => verifiedMediaUrlFor(env, storageKey),
+					verifiedMediaUrlFor: (storageKey: string, variant?: PublicMediaVariant) =>
+						verifiedMediaUrlFor(env, storageKey, variant),
 					mediaReader: mediaReaderFor(store),
 					callsLeft: () => options.budget?.remaining ?? Infinity,
 					callsLimit: options.budget?.limit ?? Infinity,

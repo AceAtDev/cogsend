@@ -31,6 +31,8 @@ import {
 	completeVideoUpload,
 	coverBytes,
 	createMediaUpload,
+	createUploadLinks,
+	MAX_UPLOAD_LINKS,
 	removeMedia,
 	removeVideoCover,
 	setVideoCover,
@@ -1176,7 +1178,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Attach an image or video',
 			annotation: annotations.attach,
-			description: `Attaches one file to a draft: a public http(s) URL (image up to 16 MB or MP4 video, type read from the file) or a small image inline as base64 (at most ${BASE64_MAX_BYTES / 1_000_000} MB). Without draftId it creates a new empty draft and returns its postId, so you can add text with save_draft and schedule it with schedule_posts (posts[].draftId). A video too large for one request is refused with useUploadSession: send it with media_upload. Simple URL media can also go straight into schedule_posts (posts[].media).`,
+			description: `Attaches one file to a draft: a public http(s) URL (image up to 16 MB or MP4 video, type read from the file) or a small image inline as base64 (at most ${BASE64_MAX_BYTES / 1_000_000} MB). Without draftId it creates a new empty draft and returns its postId, so you can add text with save_draft and schedule it with schedule_posts (posts[].draftId). A video too large for one request is refused with useUploadSession: send it with media_upload. Files on your disk (a carousel’s slides, a rendered video) go with media_upload action "links", not base64. Simple URL media can also go straight into schedule_posts (posts[].media).`,
 			outputSchema: writeOut({ postId: z.string(), media: loose({ mediaId: z.string() }) }),
 			example: { url: 'https://example.com/clip.mp4', altText: 'Product demo' }
 		},
@@ -1227,17 +1229,29 @@ function createServer(event: RequestEvent) {
 		'media_upload',
 		{
 			scope: 'write',
-			title: 'Upload a large video',
+			title: 'Upload files from disk (carousels, videos)',
 			annotation: annotations.mediaUpload,
 			description:
-				'Uploads an MP4 of up to 300 MB that you send yourself over HTTP with your API key, in three actions. Action "start" (size, optional draftId; creates a draft when omitted) returns the URL, byte range and headers of every part; PUT each part and keep each answer’s etag. Action "complete" (draftId, upload, and parts with every etag in order) checks the video and attaches it. Action "abort" (draftId, upload) gives an upload up. Use attach_media for anything one request can fetch.',
+				'The way to get local files into a draft. Action "links" (count 1-20, optional draftId and segmentIndex; creates a draft when draftId is omitted) returns one upload link per file, in order: send each file with a plain HTTP PUT and no other credential, e.g. `curl -fsS -T slide-1.jpg "<url>"`. Link n puts its file n-th in the post (a carousel keeps its order however the uploads finish); each link takes one image up to 16 MB or MP4 up to 95 MB, works once and expires after an hour. Use it for carousels and any file on disk instead of base64. For an MP4 over 95 MB (up to 300 MB): action "start" (size) returns part URLs to PUT with your API key, then "complete" (draftId, upload, parts with every etag) attaches it, or "abort" gives it up. For a file already at a public URL, use attach_media.',
 			outputSchema: writeOut({ postId: z.string() }),
-			example: { action: 'start', size: 52_428_800 }
+			example: { action: 'links', count: 6 },
+			examples: [
+				{ action: 'links', count: 6 },
+				{ action: 'links', draftId: 'POST_ID', count: 3 },
+				{ action: 'start', size: 152_428_800 }
+			]
 		},
 		z
 			.object({
-				action: z.enum(['start', 'complete', 'abort']),
+				action: z.enum(['links', 'start', 'complete', 'abort']),
 				draftId: id.optional(),
+				count: z
+					.number()
+					.int()
+					.min(1)
+					.max(MAX_UPLOAD_LINKS)
+					.optional()
+					.describe('links: how many files, one link each, in post order.'),
 				size: z.number().int().min(1).optional(),
 				segmentIndex: segmentIndex.optional(),
 				upload: uploadClaimInput.optional(),
@@ -1255,6 +1269,39 @@ function createServer(event: RequestEvent) {
 			.strict(),
 		async (input, agent) => {
 			const { ctx, userId } = agent;
+			if (input.action === 'links') {
+				if (!input.count)
+					throw new ApiOperationError('links needs count (how many files, 1-20).', 400);
+				const created = !input.draftId;
+				const draftId = input.draftId ?? String((await createDraft(ctx, userId, {})).draft.id);
+				try {
+					const result = await createUploadLinks(
+						ctx,
+						userId,
+						draftId,
+						{ count: input.count, segmentIndex: input.segmentIndex },
+						ctx.env.APP_URL
+					);
+					const firstUrl = result.links[0]?.url ?? '<url>';
+					return {
+						status: 'links_ready',
+						postId: draftId,
+						createdDraft: created,
+						...result,
+						request: {
+							method: 'PUT',
+							body: 'the file’s bytes, nothing else (no API key, no form fields)',
+							example: `curl -fsS -T slide-1.jpg "${firstUrl}"`,
+							response: '201 { "postId", "mediaId", "mime", "position" }'
+						},
+						next: `PUT file n to links[n-1].url (e.g. curl -fsS -T file "<url>"), all before ${result.expiresAt}. Then add the caption with save_draft (postId "${draftId}") or schedule with schedule_posts (posts[].draftId "${draftId}"); get_post shows the attached files in order.`,
+						summary: `${result.links.length} upload link(s) for draft ${draftId}${created ? ' (new draft)' : ''}, segment ${result.segmentIndex}, valid until ${result.expiresAt}.`
+					};
+				} catch (err) {
+					if (created) await deleteDraft(ctx, userId, draftId).catch(() => {});
+					throw err;
+				}
+			}
 			if (input.action === 'start') {
 				if (!input.size) throw new ApiOperationError('start needs size (bytes).', 400);
 				const created = !input.draftId;

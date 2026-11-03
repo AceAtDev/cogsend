@@ -248,7 +248,7 @@ type PostConnection = {
 
 /**
  * Instagram refuses a post without a photo or video, and a few other shapes
- * the rest take; TikTok takes nothing but one video, and only with the
+ * the rest take; TikTok takes one video or a photo post, and only with the
  * choices its guidelines leave to the creator made for that account. Every
  * other platform's problems surface when it is sent, but these are certain, so
  * the request is refused before anything is written: an API client learns
@@ -258,9 +258,17 @@ async function refuseUnfitPosts(ctx: OperationContext, draftId: string, conns: P
 	await refuseUnfitForInstagram(ctx, draftId, conns);
 	const tiktoks = conns.filter((c) => c.platform === 'tiktok');
 	if (!tiktoks.length) return;
+	// A PNG photo goes to TikTok as its JPEG copy, made here as for Instagram.
+	const deferred = await makeMissingJpegCopies(ctx, draftId);
 	const content = await buildNormalizedPost(ctx.db, draftId, 'tiktok');
 	const issues = getProvider('tiktok').validate(content);
 	if (issues.length) {
+		if (deferred && issues.some((issue) => issue.message.includes('JPEG'))) {
+			invalid('TikTok: still making JPEG copies of the photos — try again', 503, {
+				platform: 'tiktok',
+				retryable: true
+			});
+		}
 		invalid(`TikTok: ${issues[0].message}`, 400, {
 			platform: 'tiktok',
 			issues: issues.map((issue) => issue.message)

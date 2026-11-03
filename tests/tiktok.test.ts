@@ -96,6 +96,16 @@ function tiktokNetwork(
 						error: OK
 					});
 		}
+		if (url === 'https://open.tiktokapis.com/v2/post/publish/content/init/') {
+			record.initUrls.push(url);
+			record.inits.push((await req.json()) as Record<string, unknown>);
+			return opts.init
+				? answer(opts.init)
+				: Response.json({
+						data: { publish_id: `p_pub_url~v2.${record.inits.length}` },
+						error: OK
+					});
+		}
 		if (url.startsWith(UPLOAD_HOST)) {
 			const bytes = new Uint8Array(await req.arrayBuffer());
 			const range = req.headers.get('content-range');
@@ -403,13 +413,24 @@ describe('TikTok validation', () => {
 		expect(messages({ text: 'hello', media: [video] })).toEqual([]);
 	});
 
-	it('needs a video, and takes no photos', () => {
-		expect(messages({ text: 'just text' })).toEqual(['TikTok needs a video']);
-		expect(messages({ text: 'x', media: [{ mime: 'image/jpeg' }] })).toEqual([
-			'TikTok takes a video, not photos'
-		]);
+	it('needs a video or a photo post, never both', () => {
+		expect(messages({ text: 'just text' })).toEqual(['TikTok needs a video or photos']);
+		expect(
+			messages({ text: 'x', media: [{ mime: 'image/jpeg' }, { mime: 'image/webp' }] })
+		).toEqual([]);
 		expect(messages({ text: 'x', media: [video, { mime: 'image/jpeg' }] })).toEqual([
 			'TikTok posts one video on its own'
+		]);
+	});
+
+	it('takes photos as JPEG or WebP, a PNG only with its JPEG copy, and no GIF', () => {
+		const unfit = 'TikTok photos must be JPEG or WebP (a PNG needs its JPEG copy)';
+		expect(messages({ text: 'x', media: [{ mime: 'image/png' }] })).toEqual([unfit]);
+		expect(messages({ text: 'x', media: [{ mime: 'image/png', hasJpegCopy: true }] })).toEqual([]);
+		expect(messages({ text: 'x', media: [{ mime: 'image/gif' }] })).toEqual([unfit]);
+		const many = Array.from({ length: 21 }, () => ({ mime: 'image/jpeg' }));
+		expect(messages({ text: 'x', media: many })).toEqual([
+			'TikTok photo posts here take at most 20 photos'
 		]);
 	});
 
@@ -839,6 +860,122 @@ describe('TikTok publish', () => {
 		const result = await publish(video, store, n, { resume: { segmentIds: ['v_pub_done'] } });
 		expect(result.remotePostId).toBe('v_pub_done');
 		expect(n.record.creatorCalls).toBe(0);
+	});
+});
+
+describe('TikTok photo posts', () => {
+	const photos: MediaAttachment[] = [
+		{ storageKey: 'a.jpg', mime: 'image/jpeg', width: 1080, height: 1350 },
+		{ storageKey: 'b.webp', mime: 'image/webp', width: 1080, height: 1350 },
+		{ storageKey: 'c.png', mime: 'image/png', width: 1080, height: 1350, hasJpegCopy: true }
+	];
+	const signed = (key: string, variant?: string) =>
+		`https://cogsend.example.com/m/${key}${variant ? `?v=${variant}` : ''}`;
+	const photoPublish = (
+		n: ReturnType<typeof tiktokNetwork>,
+		choice: Partial<TiktokPostChoice>,
+		extra: Partial<Opts> = {},
+		connection: ConnectionCredentials = creds
+	) =>
+		tiktokProvider.publish(
+			{
+				text: '30g of protein from snacks',
+				media: photos,
+				options: { tiktok: { ...EMPTY_TIKTOK_CHOICE, ...choice } }
+			},
+			connection,
+			undefined,
+			n.fetchImpl,
+			{ callsLeft: n.callsLeft, verifiedMediaUrlFor: signed, ...extra }
+		);
+
+	it('has TikTok pull every photo, in order, as a Direct Post with the creator’s choices', async () => {
+		const n = tiktokNetwork({
+			statuses: [
+				'{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[7301234567890123999]},"error":{"code":"ok","message":"","log_id":"l"}}'
+			]
+		});
+		const result = await photoPublish(n, { privacy: 'PUBLIC_TO_EVERYONE', allowComment: true });
+		expect(n.record.creatorCalls).toBe(1);
+		expect(n.record.initUrls).toEqual([
+			'https://open.tiktokapis.com/v2/post/publish/content/init/'
+		]);
+		expect(n.record.inits).toEqual([
+			{
+				post_info: {
+					privacy_level: 'PUBLIC_TO_EVERYONE',
+					disable_comment: false,
+					auto_add_music: true,
+					brand_content_toggle: false,
+					brand_organic_toggle: false,
+					description: '30g of protein from snacks'
+				},
+				source_info: {
+					source: 'PULL_FROM_URL',
+					photo_cover_index: 0,
+					// The PNG goes as its JPEG copy.
+					photo_images: [signed('a.jpg'), signed('b.webp'), signed('c.png', 'jpeg')]
+				},
+				post_mode: 'DIRECT_POST',
+				media_type: 'PHOTO'
+			}
+		]);
+		expect(n.record.statusIds).toEqual(['p_pub_url~v2.1']);
+		expect(result).toEqual({
+			remotePostId: '7301234567890123999',
+			remoteUrl: 'https://www.tiktok.com/@acme/photo/7301234567890123999'
+		});
+	});
+
+	it('sends a photo draft to the inbox with only the caption', async () => {
+		const n = tiktokNetwork({ statuses: [{ status: 'SEND_TO_USER_INBOX' }] });
+		const result = await photoPublish(n, { privacy: null, draft: true });
+		expect(n.record.creatorCalls).toBe(0);
+		expect(n.record.inits[0]).toMatchObject({
+			post_info: { description: '30g of protein from snacks' },
+			post_mode: 'MEDIA_UPLOAD',
+			media_type: 'PHOTO'
+		});
+		expect(n.record.inits[0].post_info).not.toHaveProperty('privacy_level');
+		expect(result.remotePostId).toBe('p_pub_url~v2.1');
+	});
+
+	it('refuses a photo post when this instance has no address verified with TikTok', async () => {
+		const n = tiktokNetwork();
+		const err = await failure(
+			photoPublish(n, { privacy: 'SELF_ONLY' }, { verifiedMediaUrlFor: () => null })
+		);
+		expect(err.code).toBe('forbidden');
+		expect(err.message).toMatch(/TIKTOK_SITE_VERIFICATION/);
+		expect(n.record.inits).toHaveLength(0);
+	});
+
+	it('refuses before posting when no privacy was chosen', async () => {
+		const n = tiktokNetwork();
+		const err = await failure(photoPublish(n, { privacy: null }));
+		expect(err.code).toBe('forbidden');
+		expect(n.record.inits).toHaveLength(0);
+	});
+
+	it('parks a photo post TikTok is still pulling, and resumes by asking, never posting again', async () => {
+		const n = tiktokNetwork({ statuses: [{ status: 'PROCESSING_DOWNLOAD' }] });
+		const err = await parked(photoPublish(n, { privacy: 'SELF_ONLY' }, { timeLeft: () => 0 }));
+		expect(n.record.inits).toHaveLength(1);
+		const again = tiktokNetwork({ statuses: [{ status: 'PUBLISH_COMPLETE' }] });
+		const result = await photoPublish(again, { privacy: 'SELF_ONLY' }, { resume: resumeFrom(err) });
+		expect(again.record.inits).toHaveLength(0);
+		expect(again.record.statusIds).toEqual(['p_pub_url~v2.1']);
+		expect(result.remotePostId).toBe('p_pub_url~v2.1');
+	});
+
+	it('takes a lost answer to the photo post as possibly posted, never sending it twice', async () => {
+		const n = tiktokNetwork({
+			init: () => {
+				throw new Error('socket hang up');
+			}
+		});
+		const err = await failure(photoPublish(n, { privacy: 'SELF_ONLY' }));
+		expect(err.message).toContain(UNCONFIRMED_POST_MARK);
 	});
 });
 

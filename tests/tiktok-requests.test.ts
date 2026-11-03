@@ -175,15 +175,20 @@ describe('TikTok requests', () => {
 		const textOnly = await draft();
 		const res = await schedule(textOnly, [tiktok]);
 		expect(res.status).toBe(400);
-		expect(res.body.error).toBe('TikTok: TikTok needs a video');
+		expect(res.body.error).toBe('TikTok: TikTok needs a video or photos');
 		expect(res.body.platform).toBe('tiktok');
 		expect(
 			await db.select().from(publishTargets).where(eq(publishTargets.draftId, textOnly))
 		).toHaveLength(0);
 
+		const gif = await draft({ mime: 'image/gif' });
+		expect((await schedule(gif, [tiktok])).body.error).toBe(
+			'TikTok: TikTok photos must be JPEG or WebP (a PNG needs its JPEG copy)'
+		);
+
 		const photo = await draft({ mime: 'image/jpeg' });
-		expect((await schedule(photo, [tiktok])).body.error).toBe(
-			'TikTok: TikTok takes a video, not photos'
+		expect((await schedule(photo, [tiktok], { tiktok: { privacy: 'SELF_ONLY' } })).status).toBe(
+			200
 		);
 
 		const video = await draft({ mime: 'video/mp4' });

@@ -530,7 +530,10 @@ export interface PlatformProvider {
 			/** A URL for the stored object on an address the operator verified
 			 *  with the platform (TikTok's URL properties), or null when there
 			 *  is none and the bytes have to be sent instead. */
-			verifiedMediaUrlFor?: (storageKey: string) => Promise<string | null> | string | null;
+			verifiedMediaUrlFor?: (
+				storageKey: string,
+				variant?: PublicMediaVariant
+			) => Promise<string | null> | string | null;
 			checkpoint?: (state: PublishCheckpoint) => Promise<void> | void;
 			/** Videos are read through this; they are never in `media[].bytes`. */
 			mediaReader?: MediaReader;

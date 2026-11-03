@@ -42,8 +42,11 @@ import {
 	partCount,
 	readClaim,
 	signUploadClaim,
+	signUploadLink,
+	UPLOAD_LINK_TTL_MS,
 	UPLOAD_PART_BYTES,
-	verifyUploadClaim
+	verifyUploadClaim,
+	type UploadLinkClaim
 } from '#lib/server/media-uploads.js';
 import { countingFetch } from '#lib/server/budget.js';
 import { readCappedBody } from '#lib/server/opengraph.js';
@@ -120,6 +123,8 @@ export interface AttachRequest {
 	segmentIndex: number;
 	altText: string | null;
 	files: IncomingMedia[];
+	/** Where the first file goes in the post's order; after the last one when absent. */
+	sortOrder?: number;
 }
 
 /**
@@ -135,7 +140,7 @@ export async function attachFiles(
 	load: () => Promise<AttachRequest>
 ) {
 	const draft = await editableDraft(ctx, userId, draftId);
-	const { segmentIndex, altText, files } = await load();
+	const { segmentIndex, altText, files, sortOrder } = await load();
 	const problem = await segmentProblem(ctx, draft, segmentIndex);
 	if (problem) invalid(problem);
 	const existing = await ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
@@ -211,7 +216,7 @@ export async function attachFiles(
 							? JSON.stringify(imageMeta)
 							: null,
 					altText: i === 0 ? altText : null,
-					sortOrder: existingOnSegment + i,
+					sortOrder: (sortOrder ?? existingOnSegment) + i,
 					segmentIndex,
 					createdAt: new Date()
 				})
@@ -885,4 +890,112 @@ export async function createMediaUpload(
 		},
 		abort: { method: 'DELETE', url: base, body: { ...upload } }
 	};
+}
+
+/** The most links one call hands out: a whole carousel. */
+export const MAX_UPLOAD_LINKS = MAX_IMAGES_PER_SEGMENT;
+
+/**
+ * Upload links for the files of one post, in order. Each is a URL that takes
+ * one file by a plain HTTP PUT with no other credential (`curl -T slide.jpg
+ * <url>`), so an agent with files on disk sends them without an API key,
+ * without base64 inside a tool call and without a finishing step. The n-th
+ * link puts its file n-th in the post, however the uploads interleave.
+ */
+export async function createUploadLinks(
+	ctx: OperationContext,
+	userId: string,
+	draftId: string,
+	input: { count: number; segmentIndex?: number },
+	appUrl: string,
+	nowMs = Date.now()
+) {
+	const draft = await ownDraft(ctx, draftId, userId);
+	if (!draft) invalid('Not found', 404);
+	const blocked = await draftMediaEditBlock(ctx.db, draftId);
+	if (blocked) invalid(blocked, 409);
+	const segmentIndex = parseSegmentIndex(input.segmentIndex ?? 0);
+	const problem = await segmentProblem(ctx, draft, segmentIndex);
+	if (problem) invalid(problem);
+	const count = Math.floor(input.count);
+	if (!Number.isInteger(count) || count < 1 || count > MAX_UPLOAD_LINKS) {
+		invalid(`count must be 1 to ${MAX_UPLOAD_LINKS}`);
+	}
+	const existing = await ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
+	const onSegment = existing.filter((m) => (m.segmentIndex ?? 0) === segmentIndex);
+	if (onSegment.length + count > MAX_IMAGES_PER_SEGMENT) {
+		invalid(
+			`This post has ${onSegment.length} file(s); at most ${MAX_IMAGES_PER_SEGMENT - onSegment.length} more fit (max ${MAX_IMAGES_PER_SEGMENT})`
+		);
+	}
+	if (existing.length + count > MAX_FILES_PER_DRAFT) {
+		invalid(`Max ${MAX_FILES_PER_DRAFT} files per draft`, 413);
+	}
+	const base = onSegment.reduce((max, m) => Math.max(max, (m.sortOrder ?? 0) + 1), 0);
+	const exp = nowMs + UPLOAD_LINK_TTL_MS;
+	const credential = ctx.authCredential ?? 'session';
+	const root = `${appUrl.replace(/\/+$/, '')}/api/media/upload-link/`;
+	const links = [];
+	for (let n = 0; n < count; n++) {
+		const claim: UploadLinkClaim = {
+			userId,
+			draftId,
+			segmentIndex,
+			sortOrder: base + n,
+			exp,
+			credential,
+			...(ctx.apiKey ? { apiKeyId: ctx.apiKey.id, apiKeyPrefix: ctx.apiKey.prefix } : {})
+		};
+		links.push({
+			position: n + 1,
+			url: root + (await signUploadLink(ctx.env.APP_ENCRYPTION_KEY, claim))
+		});
+	}
+	return { segmentIndex, expiresAt: new Date(exp).toISOString(), links };
+}
+
+/** The type of a file sent to an upload link, read from its first bytes. */
+function droppedMime(bytes: Uint8Array): string | null {
+	return detectImageMime(bytes) ?? (isMp4(bytes) ? 'video/mp4' : null);
+}
+
+/** The largest file one upload link takes: an image's cap, or a video one request can carry. */
+export function uploadLinkMaxBytes(): number {
+	return SINGLE_REQUEST_VIDEO_BYTES;
+}
+
+/**
+ * Store the file sent to an upload link, in the place the link names. A link
+ * whose place is already taken was used before, and is refused rather than
+ * adding the same slide twice.
+ */
+export async function attachFromUploadLink(
+	ctx: OperationContext,
+	claim: UploadLinkClaim,
+	bytes: Uint8Array
+) {
+	const mime = droppedMime(bytes.subarray(0, 64));
+	if (!mime) invalid('The file is not a PNG, JPEG, WebP or GIF image or an MP4 video');
+	if (!isVideoType(mime) && bytes.length > MAX_IMAGE_BYTES)
+		invalid('Image must be 16MB or smaller', 413);
+	const taken = await first(
+		ctx.db
+			.select({ id: draftMedia.id })
+			.from(draftMedia)
+			.where(
+				and(
+					eq(draftMedia.draftId, claim.draftId),
+					eq(draftMedia.segmentIndex, claim.segmentIndex),
+					eq(draftMedia.sortOrder, claim.sortOrder)
+				)
+			)
+	);
+	if (taken) invalid('This upload link was already used; ask media_upload for new links', 409);
+	const items = await attachFiles(ctx, claim.userId, claim.draftId, async () => ({
+		segmentIndex: claim.segmentIndex,
+		altText: null,
+		sortOrder: claim.sortOrder,
+		files: [{ file: new Blob([bytes as BlobPart], { type: mime }) }]
+	}));
+	return { media: items[0] };
 }

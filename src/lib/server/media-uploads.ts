@@ -77,3 +77,72 @@ export function readClaim(draftId: string, source: Record<string, unknown>): Upl
 	if (!Number.isInteger(segmentIndex) || segmentIndex < 0) return null;
 	return { draftId, key, uploadId, size, segmentIndex };
 }
+
+/** How long an upload link works. Long enough for a batch, short enough that a leaked one dies soon. */
+export const UPLOAD_LINK_TTL_MS = 60 * 60_000;
+
+/**
+ * One upload link: one file into one place on one draft, for the person who
+ * asked for it, written as the credential that asked (so an agent's file is
+ * held for review like any other agent write). `sortOrder` fixes where the
+ * file lands in the carousel whatever order the uploads finish in, and makes
+ * the link single-use.
+ */
+export interface UploadLinkClaim {
+	userId: string;
+	draftId: string;
+	segmentIndex: number;
+	sortOrder: number;
+	exp: number;
+	credential: 'session' | 'personal_api_key' | 'api_token';
+	apiKeyId?: string;
+	apiKeyPrefix?: string;
+}
+
+function base64url(text: string): string {
+	return btoa(String.fromCharCode(...utf8Bytes(text)))
+		.replace(/\+/g, '-')
+		.replace(/\//g, '_')
+		.replace(/=+$/, '');
+}
+
+function fromBase64url(text: string): string {
+	const binary = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+	return new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+}
+
+async function linkKey(secret: string): Promise<string> {
+	return hmacHex(secret, 'subkey:media-upload-link:v1');
+}
+
+export async function signUploadLink(secret: string, claim: UploadLinkClaim): Promise<string> {
+	const body = base64url(JSON.stringify(claim));
+	return `${body}.${await hmacHex(await linkKey(secret), body)}`;
+}
+
+/** The claim a link carries, or why it cannot be used. */
+export async function verifyUploadLink(
+	secret: string,
+	token: string,
+	nowMs = Date.now()
+): Promise<{ ok: true; claim: UploadLinkClaim } | { ok: false; error: string }> {
+	const [body, sig, extra] = String(token).split('.');
+	if (!body || !sig || extra !== undefined) return { ok: false, error: 'Bad upload link' };
+	const expected = utf8Bytes(await hmacHex(await linkKey(secret), body));
+	const given = utf8Bytes(sig);
+	if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+		return { ok: false, error: 'Bad upload link' };
+	}
+	let claim: UploadLinkClaim;
+	try {
+		claim = JSON.parse(fromBase64url(body)) as UploadLinkClaim;
+	} catch {
+		return { ok: false, error: 'Bad upload link' };
+	}
+	if (!Number.isInteger(claim.exp) || claim.exp <= nowMs) {
+		return { ok: false, error: 'This upload link has expired; ask for new ones' };
+	}
+	if (claim.exp - nowMs > UPLOAD_LINK_TTL_MS + 60_000)
+		return { ok: false, error: 'Bad upload link' };
+	return { ok: true, claim };
+}

@@ -60,7 +60,7 @@ One photo goes out as a photo post, two to ten as a carousel, and a video on its
 
 ## TikTok
 
-TikTok takes one video and nothing else, so with a TikTok account selected a post without a video shows **TikTok needs a video**, and one with photos **TikTok takes a video, not photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two.
+TikTok takes one video on its own, or a photo post (carousel) of up to 20 JPEG or WebP photos in order, the first one the cover; a PNG goes as its JPEG copy and a GIF not at all. With a TikTok account selected a post with no media shows **TikTok needs a video or photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. Photo posts need the instance's address verified with TikTok (see [OAuth apps](oauth-apps.md)). The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two.
 
 Selecting a TikTok account opens a **Post to TikTok** panel under the post, laid out as TikTok's [Content Sharing Guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines) require. It reads the account from TikTok each time the composer opens it, and shows:
 

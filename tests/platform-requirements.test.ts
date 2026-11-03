@@ -20,7 +20,7 @@ describe('platformRequirements', () => {
 			expect(r.altText.maxLength).toBeLessThanOrEqual(1500);
 			if (platform === 'tiktok') continue;
 			expect(r.images.maxPerPost).toBeGreaterThan(0);
-			expect(r.images.maxPerSegment).toBe(4);
+			expect(r.images.maxPerSegment).toBe(20);
 			expect(r.images.mimes.length).toBeGreaterThan(0);
 			for (const mime of r.images.mimes) expect(r.images.maxBytesByMime[mime]).toBeGreaterThan(0);
 			expect(r.media.mixImagesAndVideo).toBe(false);
@@ -30,17 +30,17 @@ describe('platformRequirements', () => {
 		}
 	});
 
-	it('gives TikTok one required video and no images', () => {
+	it('gives TikTok one required video or a photo post', () => {
 		const r = platformRequirements('tiktok');
 		expect(r).toMatchObject({
 			threads: { supported: false },
 			media: { required: true },
-			images: { maxPerPost: 0, mimes: [] },
+			images: { maxPerPost: 20, mimes: ['image/jpeg', 'image/webp'] },
 			video: { supported: true, mimes: ['video/mp4'], perPost: 1 },
 			altText: { images: false, videos: false }
 		});
 		expect(r.summary).toMatch(
-			/^TikTok: .*needs exactly one video \(MP4.*\), no images; no threads/
+			/^TikTok: .*up to 20 images across the whole post \(JPEG\/WEBP.*\) or one video \(MP4.*\), never both; no threads/
 		);
 	});
 
@@ -102,9 +102,9 @@ describe('platformRequirements', () => {
 			video: { minDurationMs: 3_000, minBytes: 75_000, cover: true },
 			altText: { images: true, videos: false }
 		});
-		// Threads takes 10 in a carousel, but one composer card holds 4.
+		// Threads takes 10 in a carousel.
 		expect(platformRequirements('threads')).toMatchObject({
-			images: { maxPerPost: 4, mimes: ['image/jpeg', 'image/png'], maxBytes: 8_000_000 },
+			images: { maxPerPost: 10, mimes: ['image/jpeg', 'image/png'], maxBytes: 8_000_000 },
 			video: { maxWidth: 1920, faststart: true },
 			altText: { images: false, videos: true }
 		});

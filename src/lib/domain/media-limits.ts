@@ -17,7 +17,12 @@ export const INSTAGRAM_MAX_IMAGE_BYTES = 8_000_000;
 // flattened thread is one post there, as on LinkedIn, so this counts the
 // whole thread's media.
 export const INSTAGRAM_MAX_ITEMS = 10;
-export const MAX_IMAGES_PER_SEGMENT = 4;
+// TikTok photo posts take 35; this is the most any one card stores. Each
+// provider still refuses more than its own platform takes (Bluesky 4,
+// Instagram 10), so a carousel can be built once and sent where it fits.
+export const MAX_IMAGES_PER_SEGMENT = 20;
+// TikTok takes 35 photos; a draft stores at most MAX_IMAGES_PER_SEGMENT.
+export const TIKTOK_MAX_PHOTOS = MAX_IMAGES_PER_SEGMENT;
 
 // The largest video any route stores. Bluesky's 300 MB is the smallest cap
 // among the platforms that take long videos; larger files go up in parts
@@ -247,17 +252,29 @@ export function instagramMediaProblems(media: InstagramMediaFacts[]): string[] {
 
 /**
  * What stops a post from going to TikTok, given the whole flattened post's
- * media. Only a video goes: TikTok's photo posts are pulled from a URL on a
- * domain the app has verified with TikTok, which an instance on workers.dev
- * cannot do, while a video is uploaded straight from storage.
+ * media: one video on its own, or a photo post of JPEG or WebP images. TikTok
+ * pulls photos from a URL on a domain the app verified with it (the provider
+ * refuses a photo post when this instance has none); a PNG goes as its JPEG
+ * copy, and a GIF not at all.
  */
-export function tiktokMediaProblems(media: { mime: string }[]): string[] {
+export function tiktokMediaProblems(media: { mime: string; hasJpegCopy?: boolean }[]): string[] {
+	if (!media.length) return ['TikTok needs a video or photos'];
 	const videos = media.filter((m) => (m.mime || '').toLowerCase().startsWith('video/')).length;
-	if (videos === 0) {
-		return [media.length ? 'TikTok takes a video, not photos' : 'TikTok needs a video'];
+	if (videos > 0) {
+		if (videos > 1 || media.length > videos) return ['TikTok posts one video on its own'];
+		return [];
 	}
-	if (videos > 1 || media.length > videos) return ['TikTok posts one video on its own'];
-	return [];
+	const problems: string[] = [];
+	if (media.length > TIKTOK_MAX_PHOTOS) {
+		problems.push(`TikTok photo posts here take at most ${TIKTOK_MAX_PHOTOS} photos`);
+	}
+	const unfit = media.some((m) => {
+		const mime = (m.mime || '').toLowerCase();
+		if (mime === 'image/jpeg' || mime === 'image/webp') return false;
+		return !(mime === 'image/png' && m.hasJpegCopy);
+	});
+	if (unfit) problems.push('TikTok photos must be JPEG or WebP (a PNG needs its JPEG copy)');
+	return problems;
 }
 
 /**

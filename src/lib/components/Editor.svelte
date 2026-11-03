@@ -651,10 +651,17 @@
 		);
 		return problems[0] ?? null;
 	});
-	// TikTok flattens the thread too, and takes nothing but one video.
+	// TikTok flattens the thread too, and takes one video or a photo post.
 	const tiktokMediaProblem = $derived.by(() => {
 		if (!selectedPlatforms.has('tiktok')) return null;
-		return tiktokMediaProblems(media)[0] ?? null;
+		return (
+			tiktokMediaProblems(
+				media.map((m) => ({
+					mime: m.mime,
+					hasJpegCopy: jpegCopyExpected(m.meta, canMakeJpegCopies)
+				}))
+			)[0] ?? null
+		);
 	});
 	const tiktokAccounts = $derived(
 		connections.filter((c) => selected.has(c.id) && c.platform === 'tiktok')
