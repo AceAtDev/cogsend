@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { Client } from '@modelcontextprotocol/client';
-import { mcpConfirmations, mcpIdempotency, publishTargets } from '#lib/server/db/schema.js';
+import {
+	activityLog,
+	mcpConfirmations,
+	mcpIdempotency,
+	publishTargets
+} from '#lib/server/db/schema.js';
 import * as publish from '#lib/server/publish.js';
 import { overallOutcome } from '#lib/server/api/agent-operations.js';
 import { createMcpHarness, data, inHours, text } from './mcp-harness';
@@ -522,17 +527,27 @@ describe('changing what is planned', () => {
 		});
 	});
 
-	it('cancels by delivery and by channel, leaves cancelled ones alone, and refuses published ones', async () => {
+	it('takes a delivery down for good, deletes a post left with nothing, logs it, and refuses published ones', async () => {
 		const a = await scheduleOne('jobjob.linkedin', 30);
 		const out = data(
 			await call('cancel_posts', { items: [{ postId: a.postId, channels: ['jobjob.linkedin'] }] })
 		);
 		expect(out.deliveries[0]).toMatchObject({
-			status: 'cancelled',
+			status: 'removed',
 			channel: { key: 'jobjob.linkedin' }
 		});
-		const again = data(await call('cancel_posts', { items: [{ deliveryId: a.deliveryId }] }));
-		expect(again.deliveries[0].status).toBe('cancelled');
+		expect(out.deletedPosts).toEqual([a.postId]);
+		expect((await h.deliveries()).find((r) => r.id === a.deliveryId)).toBeUndefined();
+		const history = await h.db
+			.select()
+			.from(activityLog)
+			.where(eq(activityLog.action, 'post.removed'));
+		expect(history).toHaveLength(1);
+		expect(history[0]).toMatchObject({ targetId: a.postId, actorType: 'api_key' });
+		expect(history[0].summary).toMatch(/jobjob\.linkedin.*deleted the post/);
+		expect(history[0].beforeSummary).toMatch(/jobjob\.linkedin scheduled for/);
+		const gone = await call('cancel_posts', { items: [{ deliveryId: a.deliveryId }] });
+		expect(gone.isError).toBe(true);
 		const b = await scheduleOne('unbranded.bluesky', 31);
 		await h.db
 			.update(publishTargets)

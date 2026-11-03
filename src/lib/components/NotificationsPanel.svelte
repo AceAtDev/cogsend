@@ -79,31 +79,60 @@
 		timezone = body.timezone;
 	}
 
-	async function patch(body: Record<string, unknown>): Promise<string | null> {
-		const res = await fetch('/api/notifications', {
-			method: 'PATCH',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(body)
-		});
-		if (sessionExpiredIfUnauthorized(res)) return 'Signed out';
-		if (!res.ok) return errorOf(res);
-		apply(((await res.json()) as { settings: Settings }).settings);
-		return null;
+	/** A request that never answered or answered with something unreadable, in words. */
+	function networkProblem(err: unknown): string {
+		return err instanceof Error && err.name === 'AbortError'
+			? 'No answer from CogSend in time. Try again.'
+			: 'Could not reach CogSend. Check the connection and try again.';
 	}
 
-	async function saveSender(e: Event) {
-		e.preventDefault();
-		senderBusy = true;
-		senderMessage = null;
+	async function patch(body: Record<string, unknown>): Promise<string | null> {
+		try {
+			const res = await fetch('/api/notifications', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			if (sessionExpiredIfUnauthorized(res)) return 'Signed out';
+			if (!res.ok) return await errorOf(res);
+			apply(((await res.json()) as { settings: Settings }).settings);
+			return null;
+		} catch (err) {
+			return networkProblem(err);
+		}
+	}
+
+	/** True when the sender fields hold something the server has not saved yet. */
+	function senderUnsaved(): boolean {
+		if (provider !== (settings?.provider ?? 'gmail')) return true;
+		if (provider !== 'gmail') return false;
+		return (
+			Boolean(appPassword.trim()) ||
+			senderEmail.trim() !== (settings?.senderEmail ?? '') ||
+			smtpPort !== settings?.smtpPort
+		);
+	}
+
+	function senderBody(): Record<string, unknown> {
 		const body: Record<string, unknown> = { provider };
 		if (provider === 'gmail') {
 			body.senderEmail = senderEmail.trim();
 			body.smtpPort = smtpPort;
 			if (appPassword.trim()) body.appPassword = appPassword;
 		}
-		const problem = await patch(body);
-		senderMessage = problem ? { ok: false, text: problem } : { ok: true, text: 'Saved' };
-		senderBusy = false;
+		return body;
+	}
+
+	async function saveSender(e: Event) {
+		e.preventDefault();
+		senderBusy = true;
+		senderMessage = null;
+		try {
+			const problem = await patch(senderBody());
+			senderMessage = problem ? { ok: false, text: problem } : { ok: true, text: 'Saved' };
+		} finally {
+			senderBusy = false;
+		}
 	}
 
 	async function forgetSender() {
@@ -129,22 +158,40 @@
 		if (problem) senderMessage = { ok: false, text: problem };
 	}
 
+	// The server gives Gmail about 45 s in all; past this the request is lost.
+	const TEST_TIMEOUT_MS = 60_000;
+
 	async function sendTest() {
 		testBusy = true;
 		testMessage = null;
-		const res = await fetch('/api/notifications/test', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: '{}'
-		});
-		if (res.ok) {
-			const body = (await res.json()) as { sentTo: string[] };
-			testMessage = { ok: true, text: `Sent to ${body.sentTo.join(', ')}` };
-		} else {
-			testMessage = { ok: false, text: await errorOf(res) };
+		try {
+			// What is typed is what gets tested: save it first, as Save sender would.
+			if (senderUnsaved()) {
+				const problem = await patch(senderBody());
+				if (problem) {
+					testMessage = { ok: false, text: problem };
+					return;
+				}
+			}
+			const res = await fetch('/api/notifications/test', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: '{}',
+				signal: AbortSignal.timeout(TEST_TIMEOUT_MS)
+			});
+			if (sessionExpiredIfUnauthorized(res)) return;
+			if (res.ok) {
+				const body = (await res.json()) as { sentTo: string[] };
+				testMessage = { ok: true, text: `Sent to ${body.sentTo.join(', ')}` };
+			} else {
+				testMessage = { ok: false, text: await errorOf(res) };
+			}
+		} catch (err) {
+			testMessage = { ok: false, text: networkProblem(err) };
+		} finally {
+			testBusy = false;
+			void load().catch(() => {});
 		}
-		testBusy = false;
-		void load();
 	}
 
 	async function addRecipient(e: Event) {

@@ -151,6 +151,36 @@ describe('SMTP client against a Gmail-like server', () => {
 		expect(err.kind).toBe('timeout');
 	});
 
+	it('ends the whole send on time even when each step is allowed longer', async () => {
+		const started = Date.now();
+		const { err } = await failure({ timeoutMs: 10_000, totalTimeoutMs: 300 }, { silent: true });
+		expect(err).toBeInstanceOf(SmtpError);
+		expect(err.kind).toBe('timeout');
+		expect(err.message).toMatch(/whole send/);
+		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	it('answers even when the socket will not close', async () => {
+		const fake = fakeSmtp({ password: 'other-password-xx' });
+		const stuck: SmtpSendOptions['connect'] = async (address, opts) => {
+			const socket = await fake.connect(address, opts);
+			return Object.assign(Object.create(socket), {
+				readable: socket.readable,
+				writable: socket.writable,
+				opened: socket.opened,
+				startTls: () => socket.startTls(),
+				close: () => new Promise<void>(() => {})
+			});
+		};
+		const started = Date.now();
+		const err = await sendSmtp(options(fake, { connect: stuck })).then(
+			() => null,
+			(e: unknown) => e as SmtpError
+		);
+		expect(err?.kind).toBe('auth');
+		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
 	it('reports a server that hangs up mid-conversation', async () => {
 		const { err } = await failure({}, { hangUpAfterGreeting: true });
 		expect(err.kind).toBe('connect');

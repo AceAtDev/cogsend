@@ -64,7 +64,7 @@ An agent's first call is `list_channels`. Everything after it names channels by 
 | `schedule_posts`            | Read + write | Creates and schedules up to 10 posts in one call, with a preview and confirmation; `runAt: "next_slot"` takes the next open slot                                                  |
 | `reschedule_posts`          | Read + write | Changes the time of deliveries or whole posts, to a time or the next open slot                                                                                                    |
 | `move_post`                 | Read + write | Changes a post's channels, with confirmation                                                                                                                                      |
-| `cancel_posts`              | Read + write | Cancels deliveries, or deletes whole posts                                                                                                                                        |
+| `cancel_posts`              | Read + write | Takes deliveries down for good (a post left with nothing to send is deleted with its media, and the Activity log keeps a `post.removed` record), or deletes whole posts           |
 | `resubmit_for_review`       | Read + write | Sends deliveries the operator rejected back to review after the agent revised the post                                                                                            |
 | `publish_now`               | Read + write | Publishes an existing post now, or retries a failed delivery, with confirmation                                                                                                   |
 | `save_draft`                | Read + write | Creates or edits a draft: text, per-platform variants and options, intended channels                                                                                              |
@@ -209,7 +209,7 @@ CogSend does not use MCP elicitation for confirmation: an answer to an elicitati
 
 ## Idempotency keys
 
-`schedule_posts`, `move_post`, `publish_now` and `save_draft` take an optional `idempotencyKey` (8 to 128 letters, digits, `_`, `.`, `:` or `-`). The first call with a key runs and its answer is kept for 24 hours; repeating the identical call with the same key answers the same result with `idempotentReplay: true` instead of writing again, even with a fresh `confirmToken`. The same key with different arguments is refused, and a call still running with that key answers 409. A call that fails before writing anything forgets its key, so a corrected retry can reuse it. `reschedule_posts` and `cancel_posts` are safe to repeat as they are.
+`schedule_posts`, `move_post`, `publish_now` and `save_draft` take an optional `idempotencyKey` (8 to 128 letters, digits, `_`, `.`, `:` or `-`). The first call with a key runs and its answer is kept for 24 hours; repeating the identical call with the same key answers the same result with `idempotentReplay: true` instead of writing again, even with a fresh `confirmToken`. The same key with different arguments is refused, and a call still running with that key answers 409. A call that fails before writing anything forgets its key, so a corrected retry can reuse it. `reschedule_posts` is safe to repeat as it is; a repeated `cancel_posts` answers not found, since the delivery is gone.
 
 ## Platform requirements
 

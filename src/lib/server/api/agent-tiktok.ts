@@ -36,6 +36,7 @@ export interface TiktokOptionInput {
 	yourBrand?: boolean;
 	brandedContent?: boolean;
 	draft?: boolean;
+	title?: string;
 }
 
 export type TiktokOptionsInput = TiktokOptionInput | TiktokOptionInput[];
@@ -203,12 +204,15 @@ export const TIKTOK_AUDIT_NOTE =
 
 /**
  * What a delivered TikTok draft still needs, or null. TikTok's publish id for
- * an inbox upload starts with v_inbox, and "published" only means it reached
+ * an inbox upload starts with v_inbox (p_inbox for photos), and "published" only means it reached
  * the inbox.
  */
 export function tiktokInboxNote(remotePostId: string | null | undefined): string | null {
+	if (remotePostId?.startsWith('p_inbox')) {
+		return 'In the TikTok inbox as a photo draft, not posted yet: the operator opens the notification in the TikTok app, where the caption and title are already filled in, adds a sound, chooses who can see it and posts it.';
+	}
 	if (!remotePostId?.startsWith('v_inbox')) return null;
-	return 'In the TikTok inbox as a draft, not posted yet: the operator opens the notification in the TikTok app, pastes the caption (it does not travel with a draft), chooses who can see it and posts it.';
+	return 'In the TikTok inbox as a draft, not posted yet: the operator opens the notification in the TikTok app, pastes the caption (it does not travel with a video draft), chooses who can see it and posts it.';
 }
 
 /** One line per choice for a preview, in the words TikTok's own app uses. */

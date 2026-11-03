@@ -927,12 +927,12 @@ describe('TikTok photo posts', () => {
 		});
 	});
 
-	it('sends a photo draft to the inbox with only the caption', async () => {
+	it('sends a photo draft to the inbox with its title and caption', async () => {
 		const n = tiktokNetwork({ statuses: [{ status: 'SEND_TO_USER_INBOX' }] });
-		const result = await photoPublish(n, { privacy: null, draft: true });
+		const result = await photoPublish(n, { privacy: null, draft: true, title: 'Protein snacks' });
 		expect(n.record.creatorCalls).toBe(0);
 		expect(n.record.inits[0]).toMatchObject({
-			post_info: { description: '30g of protein from snacks' },
+			post_info: { title: 'Protein snacks', description: '30g of protein from snacks' },
 			post_mode: 'MEDIA_UPLOAD',
 			media_type: 'PHOTO'
 		});
@@ -976,6 +976,18 @@ describe('TikTok photo posts', () => {
 		});
 		const err = await failure(photoPublish(n, { privacy: 'SELF_ONLY' }));
 		expect(err.message).toContain(UNCONFIRMED_POST_MARK);
+	});
+});
+
+describe('TikTok photo title choice', () => {
+	it('keeps a title, also on a draft, and refuses one over 90 characters', async () => {
+		const { parseTiktokChoice } = await import('#lib/domain/tiktok.js');
+		expect(parseTiktokChoice({ draft: true, title: '  Snacks  ' })).toEqual({
+			ok: true,
+			choice: { ...EMPTY_TIKTOK_CHOICE, draft: true, title: 'Snacks' }
+		});
+		expect(parseTiktokChoice({ title: 'x'.repeat(91) }).ok).toBe(false);
+		expect(parseTiktokChoice({ title: 5 }).ok).toBe(false);
 	});
 });
 

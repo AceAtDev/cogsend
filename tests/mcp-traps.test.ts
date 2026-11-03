@@ -299,7 +299,8 @@ describe('agent traps: no write ever lands on a channel the request did not name
 		expect(text(notOnPost)).toContain('does not go to 465cal.instagram');
 		await call('cancel_posts', { items: [{ postId, channels: ['jobjob.linkedin'] }] });
 		const rows = await h.deliveries();
-		expect(rows.find((r) => r.connectionId === ch.jobjobLinkedin)!.status).toBe('cancelled');
+		// Taken down for good; the post stays for its other channel.
+		expect(rows.find((r) => r.connectionId === ch.jobjobLinkedin)).toBeUndefined();
 		// Unbranded, so held for review rather than scheduled; untouched either way.
 		expect(rows.find((r) => r.connectionId === ch.patDot)!.status).toBe('awaiting_review');
 		await expectOnlyOn([ch.patDot]);

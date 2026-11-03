@@ -69,7 +69,7 @@ import {
 } from '#lib/server/api/agent-tiktok.js';
 import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
 import { heldForReviewLine, reviewTiming } from '#lib/domain/review.js';
-import { actorOf } from '#lib/server/activity.js';
+import { actorOf, recordActivity } from '#lib/server/activity.js';
 import { resubmitDeliveries } from '#lib/server/review.js';
 import {
 	channelExtras,
@@ -1634,6 +1634,7 @@ export async function cancelPostsOp(
 		});
 		if (problems.length) fail(problems[0], { code: 'invalid_selection', problems });
 		const deleted = [];
+		const dirLabels = await channelLabels(agent);
 		for (const item of input.items) {
 			const draft = await loadOwnedDraft(ctx.db, item.postId!, userId);
 			if (!draft) fail(`No post "${item.postId}".`, { code: 'not_found' }, 404);
@@ -1646,7 +1647,9 @@ export async function cancelPostsOp(
 				);
 		}
 		for (const item of input.items) {
+			const before = await postSnapshot(agent, item.postId!, dirLabels);
 			await deleteDraft(ctx, userId, item.postId!);
+			await recordRemoval(agent, item.postId!, before, 'Deleted the post and its media');
 			deleted.push(item.postId!);
 		}
 		return {
@@ -1676,30 +1679,124 @@ export async function cancelPostsOp(
 				);
 		}
 	if (blocked.length) fail(blocked[0], { code: 'not_cancellable', problems: blocked }, 409);
+	// What each touched post looked like before anything goes, for the log.
+	const labels = Object.fromEntries(
+		picked.flatMap((p) => p.rows).map((row) => [row.connectionId, viewOf(row.connectionId).key])
+	);
+	const postIds = [...new Set(picked.flatMap((p) => p.rows.map((row) => row.draftId)))];
+	const snapshots = new Map<string, string>();
+	for (const postId of postIds) snapshots.set(postId, await postSnapshot(agent, postId, labels));
+
 	const out = [];
+	const removedIds: string[] = [];
 	for (const { rows } of picked)
 		for (const row of rows) {
 			const result =
 				row.status === 'cancelled' ? { target: row } : await cancelDelivery(ctx, userId, row.id);
 			out.push({
 				...deliveryOut(result.target, viewOf(row.connectionId), timeZone),
+				status: 'removed',
 				wasScheduledFor: view(row.scheduledFor, timeZone)
 			});
+			removedIds.push(row.id);
 		}
+	// An agent's cancel takes the delivery down for good: no cancelled row is
+	// left to be rescheduled by mistake, and a post with nothing left to send
+	// goes too, media and all. The activity log keeps what was removed.
+	for (const ids of chunkIds(removedIds)) {
+		await ctx.db.delete(publishTargets).where(inArray(publishTargets.id, ids));
+	}
+	const deletedPosts: string[] = [];
+	for (const postId of postIds) {
+		const left = await ctx.db
+			.select({ id: publishTargets.id })
+			.from(publishTargets)
+			.where(eq(publishTargets.draftId, postId))
+			.limit(1);
+		const goes = left.length === 0;
+		if (goes) {
+			await deleteDraft(ctx, userId, postId);
+			deletedPosts.push(postId);
+		}
+		const removedHere = out
+			.filter((d) => d.postId === postId)
+			.map((d) => `${d.channel.key} (was ${d.wasScheduledFor?.display ?? 'unscheduled'})`);
+		await recordRemoval(
+			agent,
+			postId,
+			snapshots.get(postId) ?? '',
+			goes
+				? `Took down ${removedHere.join(', ')} and deleted the post and its media (nothing left to send)`
+				: `Took down ${removedHere.join(', ')}; the post stays for its other channels`
+		);
+	}
 	return {
-		status: 'cancelled',
+		status: 'removed',
 		committed: true,
 		now: nowView(agent),
 		deliveries: out,
-		next: 'Cancelled deliveries stay listed with status cancelled. To post one again, schedule it with schedule_posts (draftId) or move_post.',
+		deletedPosts,
+		next: deletedPosts.length
+			? 'Removed for good: the deliveries, and the posts that had nothing else to send, with their media. The Activity log keeps a record of what was removed. To post it again, create it anew.'
+			: 'Removed for good; the posts stay for their other channels. The Activity log keeps a record of what was removed.',
 		summary: [
-			`Cancelled ${out.length} deliver${out.length === 1 ? 'y' : 'ies'}:`,
+			`Removed ${out.length} deliver${out.length === 1 ? 'y' : 'ies'}:`,
 			...out.map(
 				(d) =>
 					`${d.channel.key} ${d.channel.handle ?? ''} (was ${d.wasScheduledFor?.display ?? 'unscheduled'}) — delivery ${d.deliveryId}`
-			)
+			),
+			...(deletedPosts.length
+				? [`Deleted post(s) with nothing left to send: ${deletedPosts.join(', ')}`]
+				: [])
 		].join('\n')
 	};
+}
+
+async function channelLabels(agent: AgentContext): Promise<Record<string, string>> {
+	const { channels } = await loadChannels(agent.ctx.db, agent.userId);
+	return Object.fromEntries(channels.map((c) => [c.connectionId, c.key]));
+}
+
+/** One line of what a post was: its text, media and every delivery with its time. */
+async function postSnapshot(
+	agent: AgentContext,
+	postId: string,
+	labels: Record<string, string>
+): Promise<string> {
+	const { ctx, timeZone } = agent;
+	const draft = await first(ctx.db.select().from(drafts).where(eq(drafts.id, postId)));
+	if (!draft) return '';
+	const media = await ctx.db
+		.select({ mime: draftMedia.mime })
+		.from(draftMedia)
+		.where(eq(draftMedia.draftId, postId));
+	const targets = await ctx.db
+		.select()
+		.from(publishTargets)
+		.where(eq(publishTargets.draftId, postId));
+	const images = media.filter((m) => m.mime.startsWith('image/')).length;
+	const videos = media.length - images;
+	const mediaText = media.length
+		? [images ? `${images} image(s)` : '', videos ? `${videos} video(s)` : '']
+				.filter(Boolean)
+				.join(', ')
+		: 'no media';
+	const deliveries = targets.map(
+		(t) =>
+			`${labels[t.connectionId] || t.connectionId} ${t.status}${t.scheduledFor ? ` for ${view(t.scheduledFor, timeZone)?.display}` : ''}`
+	);
+	return `"${draftExcerpt(draft.baseBody, 160)}" · ${mediaText} · ${deliveries.join('; ') || 'no deliveries'}`;
+}
+
+async function recordRemoval(agent: AgentContext, postId: string, before: string, what: string) {
+	await recordActivity(agent.ctx.db, agent.userId, actorOf(agent.ctx), {
+		action: 'post.removed',
+		targetType: 'post',
+		targetId: postId,
+		summary: what,
+		before: before || null,
+		after: null
+	});
 }
 
 export async function publishNowOp(

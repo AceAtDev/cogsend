@@ -64,9 +64,14 @@ export interface SmtpSendOptions {
 	message: string;
 	/** The name given in EHLO. */
 	clientName?: string;
-	/** Per step, not overall: a slow DATA on a big message must still finish. */
+	/** Per step: a slow DATA on a big message must still finish. */
 	timeoutMs?: number;
+	/** The whole conversation, so a server that answers just slowly enough still ends. */
+	totalTimeoutMs?: number;
 }
+
+/** Closing never holds up the answer: a socket that will not close is left to the runtime. */
+const CLOSE_TIMEOUT_MS = 2_000;
 
 const MAX_LINE = 64 * 1024;
 
@@ -237,6 +242,26 @@ async function authenticate(
 }
 
 export async function sendSmtp(opts: SmtpSendOptions): Promise<void> {
+	const total = opts.totalTimeoutMs ?? 45_000;
+	let closeSocket: () => Promise<void> = async () => {};
+	try {
+		await withTimeout(
+			converse(opts, (close) => {
+				closeSocket = close;
+			}),
+			total,
+			'the whole send'
+		);
+	} catch (err) {
+		await closeSocket();
+		throw err;
+	}
+}
+
+async function converse(
+	opts: SmtpSendOptions,
+	onSocket: (close: () => Promise<void>) => void
+): Promise<void> {
 	const timeoutMs = opts.timeoutMs ?? 15_000;
 	const clientName = opts.clientName ?? 'localhost';
 	let socket: SmtpSocket;
@@ -249,6 +274,14 @@ export async function sendSmtp(opts: SmtpSendOptions): Promise<void> {
 		throw classifyOpenError(err, opts.security);
 	}
 	let current = socket;
+	const close = async () => {
+		try {
+			await withTimeout(Promise.resolve(current.close()), CLOSE_TIMEOUT_MS, 'close');
+		} catch {
+			// already closed by the server, or will not close: either way, done
+		}
+	};
+	onSocket(close);
 	try {
 		try {
 			if (socket.opened) await withTimeout(socket.opened, timeoutMs, 'connect');
@@ -295,10 +328,6 @@ export async function sendSmtp(opts: SmtpSendOptions): Promise<void> {
 		// The message is accepted; a QUIT that goes wrong changes nothing.
 		await session.command('QUIT', [221]).catch(() => undefined);
 	} finally {
-		try {
-			await current.close();
-		} catch {
-			// already closed by the server
-		}
+		await close();
 	}
 }

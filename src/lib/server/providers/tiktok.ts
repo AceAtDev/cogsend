@@ -527,8 +527,12 @@ async function publishTiktokPhotos(input: PhotoPublishInput): Promise<PublishRes
 			urls.push(url);
 		}
 		let postInfo: Record<string, unknown>;
+		const title = content.options?.tiktok?.title;
 		if (draft) {
-			postInfo = text ? { description: text } : {};
+			postInfo = {
+				...(title ? { title } : {}),
+				...(text ? { description: text } : {})
+			};
 		} else {
 			const creator = await tiktokCreatorInfo(token, fetchImpl);
 			const choice = content.options?.tiktok;
@@ -548,6 +552,7 @@ async function publishTiktokPhotos(input: PhotoPublishInput): Promise<PublishRes
 				auto_add_music: true,
 				brand_content_toggle: made.disclose && made.brandedContent,
 				brand_organic_toggle: made.disclose && made.yourBrand,
+				...(title ? { title } : {}),
 				...(text ? { description: text } : {})
 			};
 		}

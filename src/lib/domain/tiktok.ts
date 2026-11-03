@@ -58,7 +58,16 @@ export interface TiktokPostChoice {
 	 * TikTok app, so none of the choices above apply.
 	 */
 	draft: boolean;
+	/**
+	 * A photo post's title, shown above its caption (TikTok's `title`, at most
+	 * 90 UTF-16 units). It goes with a draft too: TikTok fills it into the
+	 * edit screen. A video takes its caption as the title, so this is unused.
+	 */
+	title?: string;
 }
+
+/** TikTok's cap on a photo post's title, in UTF-16 units. */
+export const TIKTOK_PHOTO_TITLE_MAX = 90;
 
 export const EMPTY_TIKTOK_CHOICE: Readonly<TiktokPostChoice> = Object.freeze({
 	privacy: null,
@@ -88,7 +97,8 @@ const CHOICE_KEYS = [
 	'disclose',
 	'yourBrand',
 	'brandedContent',
-	'draft'
+	'draft',
+	'title'
 ] as const;
 
 /**
@@ -113,17 +123,35 @@ export function parseTiktokChoice(
 			error: `TikTok privacy must be one of ${TIKTOK_PRIVACY_LEVELS.join(', ')}`
 		};
 	}
+	let title: string | undefined;
+	if (input.title !== undefined && input.title !== null) {
+		if (typeof input.title !== 'string') return { ok: false, error: 'TikTok title must be text' };
+		const trimmed = input.title.trim();
+		if (trimmed.length > TIKTOK_PHOTO_TITLE_MAX) {
+			return {
+				ok: false,
+				error: `TikTok title is ${trimmed.length} characters; TikTok takes at most ${TIKTOK_PHOTO_TITLE_MAX}`
+			};
+		}
+		if (trimmed) title = trimmed;
+	}
 	const choice: TiktokPostChoice = { ...EMPTY_TIKTOK_CHOICE };
 	if (isTiktokPrivacy(input.privacy)) choice.privacy = input.privacy;
 	for (const key of CHOICE_KEYS) {
-		if (key === 'privacy' || input[key] === undefined) continue;
+		if (key === 'privacy' || key === 'title' || input[key] === undefined) continue;
 		if (typeof input[key] !== 'boolean') {
 			return { ok: false, error: `TikTok option "${key}" must be true or false` };
 		}
 		choice[key] = input[key];
 	}
+	if (title) choice.title = title;
 	// The creator makes every other choice in the TikTok app.
-	if (choice.draft) return { ok: true, choice: { ...EMPTY_TIKTOK_CHOICE, draft: true } };
+	if (choice.draft) {
+		return {
+			ok: true,
+			choice: { ...EMPTY_TIKTOK_CHOICE, draft: true, ...(title ? { title } : {}) }
+		};
+	}
 	// Brand choices mean nothing with disclosure off, and keeping them would
 	// label a post the creator said promotes nothing.
 	if (!choice.disclose) {

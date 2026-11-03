@@ -172,11 +172,18 @@ const tiktokChoice = {
 		.boolean()
 		.optional()
 		.describe('Paid partnership promoting a third party. Cannot be combined with SELF_ONLY.'),
+	title: z
+		.string()
+		.max(90)
+		.optional()
+		.describe(
+			'Photo posts only: the title TikTok shows above the caption (at most 90 characters); the post text is the caption. Works with draft too, where TikTok fills both into the edit screen. Videos ignore it.'
+		),
 	draft: z
 		.boolean()
 		.optional()
 		.describe(
-			'Send the video to the TikTok inbox as a draft instead of posting it. With true, leave out every other choice: the creator adds the caption, picks who can see it and posts it in the TikTok app. Until TikTok audits the app, Direct Post is Only me, so this is the way to a public post: offer it whenever the operator wants the video seen. The delivery then reports status published with tiktokInbox, meaning it reached the inbox, not that it is live.'
+			'Send the video to the TikTok inbox as a draft instead of posting it. With true, leave out every other choice except title: a video arrives without its caption (the creator adds it), a photo post arrives with its caption and title; picks who can see it and posts it in the TikTok app. Until TikTok audits the app, Direct Post is Only me, so this is the way to a public post: offer it whenever the operator wants the video seen. The delivery then reports status published with tiktokInbox, meaning it reached the inbox, not that it is live.'
 		)
 };
 const tiktokEntry = z
@@ -990,7 +997,7 @@ function createServer(event: RequestEvent) {
 			title: 'Cancel deliveries',
 			annotation: annotations.cancel,
 			description:
-				'Cancels deliveries that have not gone out yet, by deliveryId or by postId (optionally narrowed to some channels); up to 20 items, all checked first, and already-cancelled ones are left as they are. Published or publishing deliveries cannot be cancelled. With deletePost: true and only postIds, it deletes the posts and their media instead, which cannot be undone and is refused once anything was published. Use reschedule_posts to postpone rather than cancel.',
+				'Takes down deliveries that have not gone out yet, for good, by deliveryId or by postId (optionally narrowed to some channels); up to 20 items, all checked first. Each delivery is removed rather than left as cancelled, and a post with nothing left to send is deleted with its media; the Activity log keeps a record of what was removed (text, media, channels and times) for the operator. Published or publishing deliveries cannot be taken down. With deletePost: true and only postIds, it deletes the posts and their media instead, which cannot be undone and is refused once anything was published. Use reschedule_posts to postpone rather than cancel.',
 			outputSchema: writeOut({
 				committed: z.boolean(),
 				deliveries: z.array(loose({ deliveryId: z.string() }))
