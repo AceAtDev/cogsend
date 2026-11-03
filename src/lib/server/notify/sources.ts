@@ -61,7 +61,10 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 /** Each user's events after their own cursor, from rows fetched after the earliest one. */
-function afterCursor(events: AlertEvent[], users: { userId: string; since: Date }[]) {
+function afterCursor<T extends { userId: string; at: Date }>(
+	events: T[],
+	users: { userId: string; since: Date }[]
+): T[] {
 	const since = new Map(users.map((u) => [u.userId, u.since.getTime()]));
 	return events.filter((e) => e.at.getTime() > (since.get(e.userId) ?? Infinity));
 }
@@ -128,23 +131,56 @@ function inboxDraft(remotePostId: string | null): 'photo' | 'video' | null {
 	return null;
 }
 
+const LIVE_BADGE = { text: 'Live', tone: 'success' as const };
+const DRAFT_BADGE = { text: 'TikTok draft', tone: 'warn' as const };
+
+function wentOut(events: AlertEvent[]): { live: number; drafts: number } {
+	const drafts = events.filter((e) => e.line.badge === DRAFT_BADGE).length;
+	return { live: events.length - drafts, drafts };
+}
+
+/** The post's first picture (or video cover) for the email card, in the same statement. */
+const firstMedia = sql<string | null>`(
+	select json_object('key', dm.storage_key, 'mime', dm.mime)
+	from draft_media dm
+	where dm.draft_id = ${drafts.id}
+	order by dm.segment_index, dm.sort_order
+	limit 1
+)`;
+
 export const publishedAlerts: AlertSource = {
 	kind: 'published',
-	heading: 'Published and sent to the inbox',
+	heading: 'Went out',
 	subject: (n) => `${plural(n, 'post')} went out`,
-	async collect(db, { users, appUrl, limit }) {
+	subjectFor(events) {
+		const { live, drafts } = wentOut(events);
+		return [
+			live ? `${plural(live, 'post')} live` : '',
+			drafts ? `${plural(drafts, 'TikTok draft')} ready to post` : ''
+		]
+			.filter(Boolean)
+			.join(', ');
+	},
+	summarize(events) {
+		const { live, drafts } = wentOut(events);
+		if (!drafts) return undefined;
+		return `${drafts === 1 ? 'The TikTok draft waits' : `The ${drafts} TikTok drafts wait`} in the account's TikTok inbox until you post ${drafts === 1 ? 'it' : 'them'} from the app${live ? '; the rest are live.' : '.'}`;
+	},
+	async collect(db, { users, appUrl, limit, mediaUrl }) {
 		if (!users.length) return [];
 		const rows = await db
 			.select({
 				at: publishTargets.updatedAt,
 				userId: drafts.userId,
+				draftId: drafts.id,
 				remotePostId: publishTargets.remotePostId,
 				remoteUrl: publishTargets.remoteUrl,
 				platform: connections.platform,
 				handle: connections.handle,
 				brand: brands.name,
 				baseBody: drafts.baseBody,
-				title: drafts.title
+				title: drafts.title,
+				media: firstMedia
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
@@ -162,33 +198,53 @@ export const publishedAlerts: AlertSource = {
 			)
 			.orderBy(asc(publishTargets.updatedAt))
 			.limit(limit);
-		return afterCursor(
-			rows.map((r) => {
+		const fresh = afterCursor(
+			rows.map((r) => ({ userId: r.userId, at: r.at, row: r })),
+			users
+		);
+		return Promise.all(
+			fresh.map(async ({ row: r }) => {
 				const inbox = inboxDraft(r.remotePostId);
-				const text = `${account(r.platform, r.handle)}: “${postText(r.baseBody, r.title)}”`;
+				const image = await thumbnailFor(r.media, mediaUrl);
+				const live = !inbox && r.remoteUrl;
 				return {
 					userId: r.userId,
 					at: r.at,
-					group: r.brand ?? NO_BRAND,
-					line: inbox
-						? {
-								text: `In the TikTok inbox · ${text}`,
-								detail:
-									inbox === 'photo'
-										? 'Draft, not posted yet: open the notification in TikTok, add a sound and post it.'
-										: 'Draft, not posted yet: open the notification in TikTok, paste the caption and post it.',
-								href: link(appUrl, '/posts?tab=published')
-							}
-						: {
-								text: `Published · ${text}`,
-								href: r.remoteUrl ?? link(appUrl, '/posts?tab=published')
-							}
+					group: r.brand ?? undefined,
+					line: {
+						title: account(r.platform, r.handle),
+						text: `“${draftExcerpt(r.baseBody || r.title || '(no text)', 100)}”`,
+						badge: inbox ? DRAFT_BADGE : LIVE_BADGE,
+						image: image ?? undefined,
+						detail: inbox
+							? inbox === 'photo'
+								? 'In the TikTok inbox: open the notification, add a sound and post it.'
+								: 'In the TikTok inbox: open the notification, paste the caption and post it.'
+							: undefined,
+						href: live
+							? r.remoteUrl!
+							: link(appUrl, `/compose?id=${encodeURIComponent(r.draftId)}`),
+						action: live ? 'View post' : 'Open in CogSend'
+					}
 				};
-			}),
-			users
+			})
 		);
 	}
 };
+
+async function thumbnailFor(
+	media: string | null,
+	sign: ((key: string) => Promise<string | null>) | undefined
+): Promise<string | null> {
+	if (!media || !sign) return null;
+	try {
+		const { key, mime } = JSON.parse(media) as { key?: string; mime?: string };
+		if (!key || !mime || !(mime.startsWith('image/') || mime.startsWith('video/'))) return null;
+		return await sign(key);
+	} catch {
+		return null;
+	}
+}
 
 export const connectionAlerts: AlertSource = {
 	kind: 'connections',

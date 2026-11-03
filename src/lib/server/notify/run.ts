@@ -26,6 +26,7 @@ import {
 	type SenderDeps
 } from './store';
 import { workersConnect } from './socket';
+import { signEmailMediaUrl } from '../public-media';
 import { dayWindow, localMinute } from './time';
 import { SendError, type MailTransport } from './transport';
 import type { MailAddress } from './mime';
@@ -256,7 +257,11 @@ async function runAlerts(
 				users: asked.map((a) => ({ userId: a.userId, since: a.alerts.get(kind)!.cursorAt })),
 				now,
 				appUrl: appUrlOf(env),
-				limit: ALERT_COLLECT_LIMIT
+				limit: ALERT_COLLECT_LIMIT,
+				mediaUrl: async (key) =>
+					appUrlOf(env) && env.APP_ENCRYPTION_KEY
+						? signEmailMediaUrl(env.APP_ENCRYPTION_KEY, appUrlOf(env), key, now.getTime())
+						: null
 			});
 		} catch (err) {
 			// A source whose table or column is not there yet (a feature still
@@ -292,15 +297,18 @@ async function runAlerts(
 			const sent = await runner.deliver(
 				account,
 				subscribers(account, kind),
-				source.subject(mine.length),
+				source.subjectFor?.(mine) ?? source.subject(mine.length),
 				[
 					{
 						id: kind,
 						heading: source.heading,
 						summary:
-							more > 0
-								? `The first ${shown.length}; the rest follow in the next email.`
-								: undefined,
+							[
+								source.summarize?.(mine),
+								more > 0 ? `The first ${shown.length}; the rest follow in the next email.` : ''
+							]
+								.filter(Boolean)
+								.join(' ') || undefined,
 						groups: groupEvents(shown)
 					}
 				],

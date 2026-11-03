@@ -1,4 +1,4 @@
-import type { MailBlock } from './events';
+import type { MailBlock, MailLine } from './events';
 
 /** Plain text and a simple inline-styled HTML version of the same blocks. */
 
@@ -19,6 +19,54 @@ function safeHref(href: string | undefined): string | null {
 	} catch {
 		return null;
 	}
+}
+
+const BADGE_COLORS: Record<NonNullable<MailLine['badge']>['tone'], [string, string]> = {
+	success: ['#dcfce7', '#166534'],
+	warn: ['#fef3c7', '#92400e'],
+	error: ['#fee2e2', '#991b1b']
+};
+
+/**
+ * One line as a card: thumbnail on the left; badge, heading, text, note and
+ * link stacked on the right. Tables, because mail apps ignore most CSS layout.
+ */
+function cardHtml(line: MailLine): string {
+	const href = safeHref(line.href);
+	const image = safeHref(line.image);
+	const thumb = image
+		? `<img src="${escapeHtml(image)}" width="64" height="64" alt="" style="display:block;width:64px;height:64px;object-fit:cover;border-radius:8px;background:#f5f5f4">`
+		: '<div style="width:64px;height:64px;border-radius:8px;background:#f5f5f4;color:#a8a29e;font-size:11px;line-height:64px;text-align:center">Text</div>';
+	const [bg, fg] = line.badge ? BADGE_COLORS[line.badge.tone] : ['', ''];
+	const badge = line.badge
+		? `<span style="display:inline-block;background:${bg};color:${fg};font-size:11px;font-weight:700;letter-spacing:0.02em;padding:2px 8px;border-radius:999px">${escapeHtml(line.badge.text)}</span>`
+		: '';
+	const detailColor = line.tone === 'error' ? '#b91c1c' : '#78716c';
+	const parts = [
+		badge,
+		`<div style="font-weight:700;font-size:14px;margin-top:${badge ? 4 : 0}px">${escapeHtml(line.title ?? '')}</div>`,
+		`<div style="color:#44403c;font-size:13px">${escapeHtml(line.text)}</div>`,
+		line.detail
+			? `<div style="color:${detailColor};font-size:12px;margin-top:2px">${escapeHtml(line.detail)}</div>`
+			: '',
+		href
+			? `<div style="margin-top:6px"><a href="${escapeHtml(href)}" style="color:#2563eb;font-size:13px;font-weight:700;text-decoration:none">${escapeHtml(line.action ?? 'Open')} &rarr;</a></div>`
+			: ''
+	];
+	return (
+		'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e7e5e4;border-radius:12px;margin:8px 0;border-collapse:separate">' +
+		`<tr><td width="64" valign="top" style="padding:12px">${thumb}</td>` +
+		`<td valign="top" style="padding:12px 12px 12px 0">${parts.join('')}</td></tr></table>`
+	);
+}
+
+function cardText(line: MailLine): string[] {
+	const href = safeHref(line.href);
+	const out = [`  ${line.badge ? `[${line.badge.text.toUpperCase()}] ` : ''}${line.title ?? ''}`];
+	out.push(`    ${line.text}`);
+	if (line.detail) out.push(`    ${line.detail}`);
+	if (href) out.push(`    ${line.action ?? 'Open'}: ${href}`);
+	return out;
 }
 
 export interface RenderedMail {
@@ -56,6 +104,13 @@ export function renderBlocks(opts: {
 			if (group.label) {
 				text.push('', `  ${group.label}`);
 				html.push(`<p style="margin:12px 0 2px;font-weight:700">${escapeHtml(group.label)}</p>`);
+			}
+			if (group.lines.some((l) => l.title)) {
+				for (const line of group.lines) {
+					text.push(...cardText(line), '');
+					html.push(cardHtml(line));
+				}
+				continue;
 			}
 			html.push('<ul style="margin:0;padding-left:20px">');
 			for (const line of group.lines) {

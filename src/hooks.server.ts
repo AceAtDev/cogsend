@@ -68,6 +68,7 @@ export function isPublicPath(path: string): boolean {
 	if (
 		path === '/api/health' ||
 		path.startsWith('/api/media/public/') ||
+		path.startsWith('/api/media/email/') ||
 		path.startsWith('/api/media/upload-link/') ||
 		path.startsWith('/p/') ||
 		path.startsWith('/api/connections/mastodon/callback') ||

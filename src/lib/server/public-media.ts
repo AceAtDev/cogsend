@@ -60,3 +60,43 @@ export async function verifyPublicMediaSig(
 	}
 	return { ok: true };
 }
+
+/**
+ * A notification email's thumbnail. Mail apps fetch images when the email is
+ * opened, often days later, so these live far longer than a publish URL; they
+ * only ever serve a small preview (a cover, a resized copy), never a video.
+ */
+export const EMAIL_MEDIA_TTL_MS = 30 * 24 * 60 * 60_000;
+
+function emailMessage(key: string, exp: number): string {
+	return `media-email:${key}:${exp}`;
+}
+
+export async function signEmailMediaUrl(
+	secret: string,
+	appUrl: string,
+	storageKey: string,
+	nowMs = Date.now()
+): Promise<string> {
+	const exp = nowMs + EMAIL_MEDIA_TTL_MS;
+	const sig = await hmacHex(await signingKey(secret), emailMessage(storageKey, exp));
+	return `${appUrl.replace(/\/$/, '')}/api/media/email/${encodeURIComponent(storageKey)}?exp=${exp}&sig=${sig}`;
+}
+
+export async function verifyEmailMediaSig(
+	secret: string,
+	storageKey: string,
+	exp: number,
+	sig: string,
+	nowMs = Date.now()
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	if (!Number.isInteger(exp) || exp <= nowMs) return { ok: false, error: 'URL expired' };
+	if (exp - nowMs > EMAIL_MEDIA_TTL_MS) return { ok: false, error: 'URL lifetime too long' };
+	const expected = await hmacHex(await signingKey(secret), emailMessage(storageKey, exp));
+	const a = utf8Bytes(sig);
+	const b = utf8Bytes(expected);
+	if (a.length !== b.length || !timingSafeEqual(a, b)) {
+		return { ok: false, error: 'Bad signature' };
+	}
+	return { ok: true };
+}

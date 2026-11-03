@@ -26,6 +26,15 @@ export interface MailLine {
 	detail?: string;
 	href?: string;
 	tone?: 'error' | 'muted';
+	/**
+	 * Set to show the line as a card: this bold heading (an account), with
+	 * `text` under it. Cards also take a thumbnail, a badge and a link label.
+	 */
+	title?: string;
+	image?: string;
+	badge?: { text: string; tone: 'success' | 'warn' | 'error' };
+	/** The link's label in a card ("View post"); a line without one links its text. */
+	action?: string;
 }
 
 export interface MailGroup {
@@ -63,12 +72,18 @@ export interface AlertQuery {
 	appUrl: string;
 	/** Across all users; leftovers are reported in the next batch. */
 	limit: number;
+	/** A long-lived signed thumbnail URL for a stored media key, or null when it cannot be signed. */
+	mediaUrl?: (storageKey: string) => Promise<string | null>;
 }
 
 export interface AlertSource {
 	kind: AlertKind;
 	heading: string;
 	subject(count: number): string;
+	/** A subject that says more than the count, from the events of one email. */
+	subjectFor?(events: AlertEvent[]): string;
+	/** One sentence under the heading, from the events of one email. */
+	summarize?(events: AlertEvent[]): string | undefined;
 	/**
 	 * Events after each user's `since`, oldest first, for all the given users in
 	 * one statement: the tick pays one subrequest per source, not per account.

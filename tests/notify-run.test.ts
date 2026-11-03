@@ -6,6 +6,7 @@ import {
 	brands,
 	connections,
 	deliveryMetrics,
+	draftMedia,
 	drafts,
 	notificationAlerts,
 	notificationSettings,
@@ -105,6 +106,7 @@ async function delivery(
 		error?: string;
 		remoteUrl?: string;
 		remotePostId?: string;
+		media?: { key: string; mime: string };
 	}
 ) {
 	const draftId = newId();
@@ -116,6 +118,16 @@ async function delivery(
 		createdAt: opts.updatedAt,
 		updatedAt: opts.updatedAt
 	});
+	if (opts.media) {
+		await db.insert(draftMedia).values({
+			id: newId(),
+			draftId,
+			storageKey: opts.media.key,
+			mime: opts.media.mime,
+			size: 1,
+			createdAt: opts.updatedAt
+		});
+	}
 	const targetId = newId();
 	await db.insert(publishTargets).values({
 		id: targetId,
@@ -241,7 +253,7 @@ describe('alerts', () => {
 		expect(cleared.lastError).toBeNull();
 	});
 
-	it('groups published posts and TikTok inbox drafts into one email for their subscribers', async () => {
+	it('sends published posts and TikTok inbox drafts as cards for their subscribers', async () => {
 		const alice = await account({
 			email: 'alice@localhost',
 			recipients: [
@@ -254,13 +266,15 @@ describe('alerts', () => {
 			status: 'published',
 			body: 'Live post',
 			remoteUrl: 'https://mastodon.example/@acme/1',
-			updatedAt: at
+			updatedAt: at,
+			media: { key: 'u/live.jpg', mime: 'image/jpeg' }
 		});
 		await delivery(alice, {
 			status: 'published',
 			body: 'Video draft',
 			remotePostId: 'v_inbox_file~v2.123',
-			updatedAt: new Date(at.getTime() + 1000)
+			updatedAt: new Date(at.getTime() + 1000),
+			media: { key: 'u/clip.mp4', mime: 'video/mp4' }
 		});
 		await delivery(alice, {
 			status: 'published',
@@ -274,14 +288,24 @@ describe('alerts', () => {
 		expect(fake.delivered).toHaveLength(1);
 		const mail = fake.delivered[0];
 		expect(mail.recipients).toEqual(['ops@example.com']);
-		expect(subjectOf(mail.data)).toBe('CogSend: 3 posts went out');
+		expect(subjectOf(mail.data)).toBe('CogSend: 1 post live, 2 TikTok drafts ready to post');
 		const text = textPart(mail.data);
-		expect(text).toContain('Published · Mastodon acme@mastodon.example: “Live post”');
-		expect(text).toContain('https://mastodon.example/@acme/1');
-		expect(text).toContain('In the TikTok inbox · Mastodon acme@mastodon.example: “Video draft”');
+		expect(text).toContain('[LIVE] Mastodon acme@mastodon.example');
+		expect(text).toContain('“Live post”');
+		expect(text).toContain('View post: https://mastodon.example/@acme/1');
+		expect(text).toContain('[TIKTOK DRAFT] Mastodon acme@mastodon.example');
 		expect(text).toContain('paste the caption');
-		expect(text).toContain('“Photo draft”');
 		expect(text).toContain('add a sound');
+		expect(text).toMatch(/Open in CogSend: https:\/\/cogsend\.example\/compose\?id=/);
+		const html = htmlPart(mail.data);
+		// Thumbnails for the two posts with media, through the long-lived email route.
+		expect(html.match(/<img src="https:\/\/cogsend\.example\/api\/media\/email\//g)).toHaveLength(
+			2
+		);
+		expect(html).toContain('u%2Flive.jpg');
+		expect(html).toContain('u%2Fclip.mp4');
+		expect(html).toContain('>Live</span>');
+		expect(html).toContain('>TikTok draft</span>');
 
 		// Reported once: the next window has nothing new to say.
 		const later = new Date(EVENING.getTime() + ALERT_WINDOW_MS);
