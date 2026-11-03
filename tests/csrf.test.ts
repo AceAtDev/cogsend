@@ -77,4 +77,11 @@ describe('the cross-site request check', () => {
 		expect(carriesCredential(new Headers({ authorization: 'Basic abc' }))).toBe(false);
 		expect(isCrossSiteForgery(request('POST', { authorization: 'Bearer' }), SELF)).toBe(true);
 	});
+
+	it('lets an upload link take a bare PUT, its signed path being the credential', () => {
+		const put = (path: string) =>
+			isCrossSiteForgery(new Request(`${SELF}${path}`, { method: 'PUT', body: 'x' }), SELF);
+		expect(put('/api/media/upload-link/abc.def')).toBe(false);
+		expect(put('/api/drafts/1/media/uploads/part')).toBe(true);
+	});
 });

@@ -1,6 +1,7 @@
 import { extractBearerToken } from '#lib/domain/bearer.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const UPLOAD_LINK_PATH = '/api/media/upload-link/';
 
 /** What an HTML form, or a page's no-preflight fetch, can send. */
 const FORM_TYPES = new Set([
@@ -32,6 +33,12 @@ export function carriesCredential(headers: Headers): boolean {
  */
 export function isCrossSiteForgery(request: Request, selfOrigin: string): boolean {
 	if (!MUTATING.has(request.method)) return false;
+	// An upload link carries its own signed credential in the path and the
+	// route never reads the session cookie, so a forged request gains nothing;
+	// `curl -T` sends it with no Content-Type.
+	if (request.method === 'PUT' && new URL(request.url).pathname.startsWith(UPLOAD_LINK_PATH)) {
+		return false;
+	}
 	if (request.headers.get('origin') === selfOrigin) return false;
 	const type = (request.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
 	if (type && !FORM_TYPES.has(type)) return false;
