@@ -67,7 +67,7 @@ import {
 	type TiktokOptionsInput,
 	type TiktokPlan
 } from '#lib/server/api/agent-tiktok.js';
-import type { TiktokPostChoice } from '#lib/domain/tiktok.js';
+import { readTiktokChoices, type TiktokPostChoice } from '#lib/domain/tiktok.js';
 import { heldForReviewLine, reviewTiming } from '#lib/domain/review.js';
 import { actorOf, recordActivity } from '#lib/server/activity.js';
 import { resubmitDeliveries } from '#lib/server/review.js';
@@ -744,6 +744,24 @@ async function conflictWarnings(
 	return warnings;
 }
 
+async function savedContent(agent: AgentContext, draftId: string) {
+	const draft = await loadOwnedDraft(agent.ctx.db, draftId, agent.userId);
+	if (!draft) fail(`No post "${draftId}".`, { code: 'not_found' }, 404);
+	const variants = await agent.ctx.db
+		.select()
+		.from(draftVariants)
+		.where(eq(draftVariants.draftId, draftId));
+	const media = await agent.ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
+	return {
+		title: draft.title,
+		baseBody: draft.baseBody,
+		variants: variants
+			.sort((a, b) => a.id.localeCompare(b.id))
+			.map(({ updatedAt: _updated, createdAt: _created, ...row }) => row),
+		media: media.sort((a, b) => a.id.localeCompare(b.id))
+	};
+}
+
 function scheduleHashInput(input: ScheduleInput, plans: PostPlan[]) {
 	return {
 		tool: 'schedule_posts',
@@ -770,6 +788,14 @@ function idempotentRequest<
 
 export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput) {
 	const { ctx, userId, timeZone } = agent;
+	const sourceIds = input.posts.flatMap((post) => (post.draftId ? [post.draftId] : []));
+	if (new Set(sourceIds).size !== sourceIds.length)
+		fail(
+			'Each draftId can appear only once per batch; create separate drafts for separate posts.',
+			{
+				code: 'duplicate_draft'
+			}
+		);
 	if (input.posts.length > MAX_BATCH_POSTS)
 		fail(`One call takes at most ${MAX_BATCH_POSTS} posts; split the batch.`);
 	const request = idempotentRequest(input);
@@ -842,7 +868,11 @@ export async function schedulePostsOp(agent: AgentContext, input: ScheduleInput)
 			}))
 		)
 	}));
-	const payloadHash = await hashPayload(scheduleHashInput(input, plans));
+	const payloadHash = await hashPayload({
+		...scheduleHashInput(input, plans),
+		savedContent: await Promise.all(sourceIds.map((id) => savedContent(agent, id))),
+		tiktok: plans.map((plan) => plan.tiktok)
+	});
 	const previewLines = preview.flatMap((p) =>
 		p.deliveries.map(
 			(d) =>
@@ -1507,6 +1537,8 @@ export async function movePostOp(agent: AgentContext, input: MoveInput) {
 	const payloadHash = await hashPayload({
 		tool: 'move_post',
 		input: request,
+		savedContent: await savedContent(agent, input.postId),
+		tiktok: tiktok.choices,
 		from: fromRows.map((r) => r.id),
 		to: to.map((c) => c.connectionId),
 		runAt: runAt!.toISOString()
@@ -1840,7 +1872,13 @@ export async function publishNowOp(
 			(t) => t.connectionId === c.connectionId && (t.status === 'published' || t.remotePostId)
 		)
 	);
-	const payloadHash = await hashPayload({ tool: 'publish_now', input: request, channels: ids });
+	const payloadHash = await hashPayload({
+		tool: 'publish_now',
+		input: request,
+		channels: ids,
+		savedContent: await savedContent(agent, input.postId),
+		tiktok: tiktok.choices
+	});
 	const lines = channels.map(
 		(c) =>
 			`  ${channelLabel(c)}${already.includes(c) ? ' — already published, will be skipped' : ''}${tiktok.choices[c.connectionId] ? ` [TikTok: ${describeTiktokChoice(tiktok.choices[c.connectionId])}]` : ''}`
@@ -2275,7 +2313,10 @@ export async function getPostOp(
 		// A variant kept only for its options (TikTok's choices) has no text of
 		// its own and publishes the post's text: say so, not "Empty draft".
 		text: v.body ? (detailed ? v.body : draftExcerpt(v.body, 120)) : null,
-		...(v.body ? {} : { usesPostText: true })
+		...(v.body ? {} : { usesPostText: true }),
+		...(detailed && v.platform === 'tiktok'
+			? { tiktok: readTiktokChoices((v.optionsJson as { tiktok?: unknown } | null)?.tiktok) }
+			: {})
 	}));
 	const media = draft.media.map((m) => ({
 		mediaId: m.id,

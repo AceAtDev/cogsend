@@ -12,7 +12,9 @@ import {
 	lt,
 	lte,
 	ne,
-	sql
+	or,
+	sql,
+	type SQLWrapper
 } from 'drizzle-orm';
 import { draftExcerpt } from '#lib/domain/excerpt.js';
 import { describeInstant } from '#lib/domain/zoned-time.js';
@@ -21,6 +23,7 @@ import { displayHandle, platformName } from '#lib/domain/platforms.js';
 import { brands, connections, drafts, publishTargets } from '../db/schema';
 import type {
 	AlertEvent,
+	AlertQuery,
 	AlertSource,
 	DigestContext,
 	DigestSection,
@@ -30,7 +33,8 @@ import type {
 	NotificationHooks
 } from './events';
 import { localClock } from './time';
-import { countsLine, topPosts as topPostsReport } from '../metrics-report';
+import { topPosts as topPostsReport } from '../metrics-report';
+import { metricLabel, type MetricKey } from '#lib/domain/metrics.js';
 
 /**
  * Delivery statuses that mean "an agent wrote this and a person has to approve
@@ -61,16 +65,44 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 /** Each user's events after their own cursor, from rows fetched after the earliest one. */
-function afterCursor<T extends { userId: string; at: Date }>(
+function afterCursor<T extends { userId: string; at: Date; id?: string }>(
 	events: T[],
-	users: { userId: string; since: Date }[]
+	users: AlertQuery['users']
 ): T[] {
-	const since = new Map(users.map((u) => [u.userId, u.since.getTime()]));
-	return events.filter((e) => e.at.getTime() > (since.get(e.userId) ?? Infinity));
+	const cursors = new Map(users.map((u) => [u.userId, u]));
+	return events.filter((e) => {
+		const cursor = cursors.get(e.userId);
+		return (
+			cursor &&
+			(e.at.getTime() > cursor.since.getTime() ||
+				(e.at.getTime() === cursor.since.getTime() &&
+					cursor.sinceId !== undefined &&
+					(e.id ?? '') > cursor.sinceId))
+		);
+	});
 }
 
-function earliest(users: { since: Date }[]): Date {
-	return new Date(Math.min(...users.map((u) => u.since.getTime())));
+/** Apply each cursor before LIMIT, so already-seen tied rows cannot starve the next page. */
+function cursorWhere(
+	users: AlertQuery['users'],
+	owner: SQLWrapper,
+	at: SQLWrapper,
+	id: SQLWrapper,
+	numeric = false
+) {
+	return or(
+		...users.map((u) =>
+			and(
+				eq(owner, u.userId),
+				or(
+					gt(at, numeric ? u.since.getTime() : u.since),
+					u.sinceId !== undefined
+						? and(eq(at, numeric ? u.since.getTime() : u.since), gt(id, u.sinceId))
+						: undefined
+				)
+			)
+		)
+	);
 }
 
 export const failureAlerts: AlertSource = {
@@ -81,6 +113,7 @@ export const failureAlerts: AlertSource = {
 		if (!users.length) return [];
 		const rows = await db
 			.select({
+				id: publishTargets.id,
 				at: publishTargets.updatedAt,
 				userId: drafts.userId,
 				error: publishTargets.errorMessage,
@@ -102,13 +135,14 @@ export const failureAlerts: AlertSource = {
 						drafts.userId,
 						users.map((u) => u.userId)
 					),
-					gt(publishTargets.updatedAt, earliest(users))
+					cursorWhere(users, drafts.userId, publishTargets.updatedAt, publishTargets.id)
 				)
 			)
-			.orderBy(asc(publishTargets.updatedAt))
+			.orderBy(asc(publishTargets.updatedAt), asc(publishTargets.id))
 			.limit(limit);
 		return afterCursor(
 			rows.map((r) => ({
+				id: r.id,
 				userId: r.userId,
 				at: r.at,
 				group: r.brand ?? NO_BRAND,
@@ -148,6 +182,17 @@ const firstMedia = sql<string | null>`(
 	limit 1
 )`;
 
+/** The platform caption, preserving an intentionally empty media-only variant. */
+const digestCaption = sql<string | null>`coalesce((
+	select dv.body from draft_variants dv
+	where dv.draft_id = ${drafts.id} and dv.platform = ${connections.platform}
+	limit 1
+), ${drafts.baseBody})`;
+
+function compactCaption(body: string | null): string {
+	return body?.trim() ? draftExcerpt(body, 59) : 'Media-only post';
+}
+
 export const publishedAlerts: AlertSource = {
 	kind: 'published',
 	heading: 'Went out',
@@ -170,6 +215,7 @@ export const publishedAlerts: AlertSource = {
 		if (!users.length) return [];
 		const rows = await db
 			.select({
+				id: publishTargets.id,
 				at: publishTargets.updatedAt,
 				userId: drafts.userId,
 				draftId: drafts.id,
@@ -193,13 +239,13 @@ export const publishedAlerts: AlertSource = {
 						drafts.userId,
 						users.map((u) => u.userId)
 					),
-					gt(publishTargets.updatedAt, earliest(users))
+					cursorWhere(users, drafts.userId, publishTargets.updatedAt, publishTargets.id)
 				)
 			)
-			.orderBy(asc(publishTargets.updatedAt))
+			.orderBy(asc(publishTargets.updatedAt), asc(publishTargets.id))
 			.limit(limit);
 		const fresh = afterCursor(
-			rows.map((r) => ({ userId: r.userId, at: r.at, row: r })),
+			rows.map((r) => ({ id: r.id, userId: r.userId, at: r.at, row: r })),
 			users
 		);
 		return Promise.all(
@@ -208,6 +254,7 @@ export const publishedAlerts: AlertSource = {
 				const image = await thumbnailFor(r.media, mediaUrl);
 				const live = !inbox && r.remoteUrl;
 				return {
+					id: r.id,
 					userId: r.userId,
 					at: r.at,
 					group: r.brand ?? undefined,
@@ -254,6 +301,7 @@ export const connectionAlerts: AlertSource = {
 		if (!users.length) return [];
 		const rows = await db
 			.select({
+				id: connections.id,
 				at: connections.updatedAt,
 				userId: connections.userId,
 				platform: connections.platform,
@@ -269,12 +317,13 @@ export const connectionAlerts: AlertSource = {
 						connections.userId,
 						users.map((u) => u.userId)
 					),
-					gt(connections.updatedAt, earliest(users))
+					cursorWhere(users, connections.userId, connections.updatedAt, connections.id)
 				)
 			)
-			.orderBy(asc(connections.updatedAt))
+			.orderBy(asc(connections.updatedAt), asc(connections.id))
 			.limit(limit);
 		const lost = rows.map((r) => ({
+			id: r.id,
 			userId: r.userId,
 			at: r.at,
 			group: r.brand ?? NO_BRAND,
@@ -289,6 +338,7 @@ export const connectionAlerts: AlertSource = {
 		const warnedAt = sql<number>`json_extract(${connections.metaJson}, '$.expiryWarnedAt')`;
 		const soon = await db
 			.select({
+				id: connections.id,
 				warnedAt,
 				reconnectBy: sql<number>`json_extract(${connections.metaJson}, '$.reconnectBy')`,
 				userId: connections.userId,
@@ -305,12 +355,13 @@ export const connectionAlerts: AlertSource = {
 						connections.userId,
 						users.map((u) => u.userId)
 					),
-					gt(warnedAt, earliest(users).getTime())
+					cursorWhere(users, connections.userId, warnedAt, connections.id, true)
 				)
 			)
-			.orderBy(asc(warnedAt))
+			.orderBy(asc(warnedAt), asc(connections.id))
 			.limit(limit);
 		const expiring = soon.map((r) => ({
+			id: r.id,
 			userId: r.userId,
 			at: new Date(Number(r.warnedAt)),
 			group: r.brand ?? NO_BRAND,
@@ -322,7 +373,9 @@ export const connectionAlerts: AlertSource = {
 			}
 		}));
 		return afterCursor(
-			[...lost, ...expiring].sort((a, b) => a.at.getTime() - b.at.getTime()).slice(0, limit),
+			[...lost, ...expiring]
+				.sort((a, b) => a.at.getTime() - b.at.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+				.slice(0, limit),
 			users
 		);
 	}
@@ -337,6 +390,7 @@ export const reviewAlerts: AlertSource = {
 		if (!users.length) return [];
 		const rows = await db
 			.select({
+				id: publishTargets.id,
 				at: publishTargets.scheduledFor,
 				userId: drafts.userId,
 				platform: connections.platform,
@@ -356,16 +410,17 @@ export const reviewAlerts: AlertSource = {
 						drafts.userId,
 						users.map((u) => u.userId)
 					),
-					gt(publishTargets.scheduledFor, earliest(users)),
+					cursorWhere(users, drafts.userId, publishTargets.scheduledFor, publishTargets.id),
 					lte(publishTargets.scheduledFor, now)
 				)
 			)
-			.orderBy(asc(publishTargets.scheduledFor))
+			.orderBy(asc(publishTargets.scheduledFor), asc(publishTargets.id))
 			.limit(limit);
 		return afterCursor(
 			rows
 				.filter((r): r is typeof r & { at: Date } => r.at instanceof Date)
 				.map((r) => ({
+					id: r.id,
 					userId: r.userId,
 					at: r.at,
 					group: r.brand ?? NO_BRAND,
@@ -394,7 +449,7 @@ function groupByBrand(rows: { brand: string | null; line: MailLine }[]): MailGro
 		.map(([label, lines]) => ({ label, lines }));
 }
 
-const PLANNED_LIMIT = 60;
+const DIGEST_PREVIEW_LIMIT = 3;
 /** Cancelled and preempted deliveries are no longer part of the day. */
 const PLANNED_STATUSES = [
 	'scheduled',
@@ -405,125 +460,194 @@ const PLANNED_STATUSES = [
 	...REVIEW_STATUSES
 ];
 const STATUS_NOTE: Record<string, string> = {
-	published: 'published',
-	failed: 'failed',
-	publishing: 'publishing now',
-	awaiting_review: 'waiting for review',
-	review_overdue: 'review overdue'
+	published: 'Published',
+	failed: 'Failed',
+	publishing: 'Publishing',
+	awaiting_review: 'Needs review',
+	review_overdue: 'Needs review'
 };
 
 export const plannedToday: DigestSection = {
 	id: 'planned',
 	requires: 'digest',
-	cost: 1,
+	cost: 2,
 	async build(ctx) {
+		const where = and(
+			eq(drafts.userId, ctx.userId),
+			ne(connections.status, 'disconnected'),
+			inArray(publishTargets.status, PLANNED_STATUSES),
+			gte(publishTargets.scheduledFor, ctx.today.start),
+			lt(publishTargets.scheduledFor, ctx.today.end)
+		);
+		const [totals] = await ctx.db
+			.select({
+				n: count(),
+				scheduled: sql<number>`coalesce(sum(case when ${publishTargets.status} in ('scheduled', 'pending', 'publishing') then 1 else 0 end), 0)`
+			})
+			.from(publishTargets)
+			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
+			.innerJoin(connections, eq(publishTargets.connectionId, connections.id))
+			.where(where);
 		const rows = await ctx.db
 			.select({
+				draftId: drafts.id,
 				at: publishTargets.scheduledFor,
+				caption: digestCaption,
 				status: publishTargets.status,
+				remotePostId: publishTargets.remotePostId,
+				remoteUrl: publishTargets.remoteUrl,
 				platform: connections.platform,
 				handle: connections.handle,
 				brand: brands.name,
 				baseBody: drafts.baseBody,
-				title: drafts.title
+				title: drafts.title,
+				media: firstMedia
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
 			.innerJoin(connections, eq(publishTargets.connectionId, connections.id))
 			.leftJoin(brands, eq(connections.brandId, brands.id))
-			.where(
-				and(
-					eq(drafts.userId, ctx.userId),
-					ne(connections.status, 'disconnected'),
-					inArray(publishTargets.status, PLANNED_STATUSES),
-					gte(publishTargets.scheduledFor, ctx.today.start),
-					lt(publishTargets.scheduledFor, ctx.today.end)
-				)
-			)
+			.where(where)
 			.orderBy(asc(publishTargets.scheduledFor))
-			.limit(PLANNED_LIMIT + 1);
-		const shown = rows.slice(0, PLANNED_LIMIT);
+			.limit(DIGEST_PREVIEW_LIMIT);
 		const groups = groupByBrand(
-			shown.map((r) => ({
-				brand: r.brand,
-				line: {
-					text: `${r.at ? localClock(r.at, ctx.timeZone) : '--:--'} · ${account(r.platform, r.handle)}: “${postText(r.baseBody, r.title)}”`,
-					detail: STATUS_NOTE[r.status],
-					tone: r.status === 'failed' ? ('error' as const) : undefined
-				}
-			}))
+			await Promise.all(
+				rows.map(async (r) => ({
+					brand: r.brand,
+					line: {
+						title: account(r.platform, r.handle),
+						text: compactCaption(r.caption),
+						image: (await thumbnailFor(r.media, ctx.mediaUrl)) ?? undefined,
+						badge: {
+							text: `${r.at ? localClock(r.at, ctx.timeZone) : '--:--'} · ${inboxDraft(r.remotePostId) ? 'TikTok draft' : (STATUS_NOTE[r.status] ?? 'Scheduled')}`,
+							tone:
+								r.status === 'failed'
+									? ('error' as const)
+									: r.status === 'published' && !inboxDraft(r.remotePostId)
+										? ('success' as const)
+										: ('warn' as const)
+						},
+						href:
+							r.status === 'published' && !inboxDraft(r.remotePostId) && r.remoteUrl
+								? r.remoteUrl
+								: link(ctx.appUrl, `/compose?id=${encodeURIComponent(r.draftId)}`),
+						action:
+							r.status === 'published' && !inboxDraft(r.remotePostId) && r.remoteUrl
+								? 'View post'
+								: 'Open post'
+					}
+				}))
+			)
 		);
+		const total = Number(totals?.n ?? 0);
 		return {
 			id: 'planned',
-			heading: `Planned today, ${ctx.today.label}`,
-			summary: shown.length
-				? `${rows.length > PLANNED_LIMIT ? `More than ${PLANNED_LIMIT}` : plural(shown.length, 'post')} across ${plural(groups.length, 'brand')}.`
-				: undefined,
+			heading: 'Today',
+			summary: total ? `${plural(total, 'post')} planned.` : undefined,
+			itemCount: total,
+			scheduledCount: Number(totals?.scheduled ?? 0),
+			href: link(ctx.appUrl, '/posts'),
+			action: 'View all',
 			groups,
 			empty: 'Nothing is scheduled for today.'
 		};
 	}
 };
 
-const YESTERDAY_LIMIT = 40;
-
 export const yesterdayResults: DigestSection = {
 	id: 'yesterday',
 	requires: 'digest',
-	cost: 1,
+	cost: 2,
 	async build(ctx) {
+		const where = and(
+			eq(drafts.userId, ctx.userId),
+			inArray(publishTargets.status, ['published', 'failed']),
+			gte(publishTargets.updatedAt, ctx.yesterday.start),
+			lt(publishTargets.updatedAt, ctx.yesterday.end)
+		);
+		const [totals] = await ctx.db
+			.select({
+				n: count(),
+				failed: sql<number>`coalesce(sum(case when ${publishTargets.status} = 'failed' then 1 else 0 end), 0)`,
+				inbox: sql<number>`coalesce(sum(case when ${publishTargets.status} = 'published' and (substr(${publishTargets.remotePostId}, 1, 7) = 'p_inbox' or substr(${publishTargets.remotePostId}, 1, 7) = 'v_inbox') then 1 else 0 end), 0)`
+			})
+			.from(publishTargets)
+			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
+			.where(where);
 		const rows = await ctx.db
 			.select({
+				draftId: drafts.id,
+				caption: digestCaption,
 				status: publishTargets.status,
 				error: publishTargets.errorMessage,
 				remoteUrl: publishTargets.remoteUrl,
+				remotePostId: publishTargets.remotePostId,
 				platform: connections.platform,
 				handle: connections.handle,
 				brand: brands.name,
 				baseBody: drafts.baseBody,
-				title: drafts.title
+				title: drafts.title,
+				media: firstMedia
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(publishTargets.draftId, drafts.id))
 			.leftJoin(connections, eq(publishTargets.connectionId, connections.id))
 			.leftJoin(brands, eq(connections.brandId, brands.id))
-			.where(
-				and(
-					eq(drafts.userId, ctx.userId),
-					inArray(publishTargets.status, ['published', 'failed']),
-					gte(publishTargets.updatedAt, ctx.yesterday.start),
-					lt(publishTargets.updatedAt, ctx.yesterday.end)
-				)
-			)
+			.where(where)
 			// Failures first: they are what the reader has to do something about.
 			.orderBy(asc(publishTargets.status), desc(publishTargets.updatedAt))
-			.limit(YESTERDAY_LIMIT + 1);
-		const published = rows.filter((r) => r.status === 'published').length;
-		const failed = rows.length - published;
-		const more = rows.length > YESTERDAY_LIMIT;
+			.limit(DIGEST_PREVIEW_LIMIT);
+		const total = Number(totals?.n ?? 0);
+		const failed = Number(totals?.failed ?? 0);
+		const inbox = Number(totals?.inbox ?? 0);
+		const published = total - failed - inbox;
 		const groups = groupByBrand(
-			rows.slice(0, YESTERDAY_LIMIT).map((r) => ({
-				brand: r.brand,
-				line:
-					r.status === 'failed'
-						? {
-								text: `Failed · ${account(r.platform, r.handle)}: “${postText(r.baseBody, r.title)}”`,
-								detail: humanizeError(r.error),
-								tone: 'error' as const,
-								href: link(ctx.appUrl, '/posts?tab=failed')
-							}
-						: {
-								text: `Published · ${account(r.platform, r.handle)}: “${postText(r.baseBody, r.title)}”`,
-								href: r.remoteUrl ?? undefined
-							}
-			}))
+			await Promise.all(
+				rows.map(async (r) => ({
+					brand: r.brand,
+					line: {
+						title: account(r.platform, r.handle),
+						text: compactCaption(r.caption),
+						image: (await thumbnailFor(r.media, ctx.mediaUrl)) ?? undefined,
+						badge:
+							r.status === 'failed'
+								? { text: 'Failed', tone: 'error' as const }
+								: inboxDraft(r.remotePostId)
+									? DRAFT_BADGE
+									: { text: 'Published', tone: 'success' as const },
+						detail:
+							r.status === 'failed'
+								? draftExcerpt(humanizeError(r.error), 95)
+								: inboxDraft(r.remotePostId)
+									? 'Ready in your TikTok inbox.'
+									: undefined,
+						href:
+							r.status === 'published' && !inboxDraft(r.remotePostId) && r.remoteUrl
+								? r.remoteUrl
+								: link(ctx.appUrl, `/compose?id=${encodeURIComponent(r.draftId)}`),
+						action:
+							r.status === 'published' && !inboxDraft(r.remotePostId) && r.remoteUrl
+								? 'View post'
+								: 'Open post'
+					}
+				}))
+			)
 		);
 		return {
 			id: 'yesterday',
-			heading: `Yesterday, ${ctx.yesterday.label}`,
-			summary: rows.length
-				? `${more ? 'At least ' : ''}${published} published, ${failed} failed.`
+			heading: 'Yesterday',
+			summary: total
+				? [
+						published || !inbox ? `${published} published` : '',
+						inbox ? plural(inbox, 'TikTok draft') : '',
+						`${failed} failed`
+					]
+						.filter(Boolean)
+						.join(' · ')
 				: undefined,
+			itemCount: total,
+			href: link(ctx.appUrl, '/posts'),
+			action: 'View all',
 			groups,
 			empty: 'Nothing went out yesterday.'
 		};
@@ -548,10 +672,9 @@ export const needsAction: DigestSection = {
 					)
 				),
 			ctx.db
-				.select({ platform: connections.platform, handle: connections.handle })
+				.select({ n: count() })
 				.from(connections)
-				.where(and(eq(connections.userId, ctx.userId), eq(connections.status, 'expired')))
-				.limit(20),
+				.where(and(eq(connections.userId, ctx.userId), eq(connections.status, 'expired'))),
 			ctx.db
 				.select({ n: count() })
 				.from(publishTargets)
@@ -562,29 +685,34 @@ export const needsAction: DigestSection = {
 		const reviewCount = Number(review[0]?.n ?? 0);
 		if (reviewCount > 0) {
 			lines.push({
-				text: `${plural(reviewCount, 'post')} wait${reviewCount === 1 ? 's' : ''} for your review`,
+				text: `${plural(reviewCount, 'post')} to review`,
+				action: 'Review posts',
 				href: link(ctx.appUrl, '/review')
 			});
 		}
 		const failedCount = Number(failedRows[0]?.n ?? 0);
 		if (failedCount > 0) {
 			lines.push({
-				text: `${plural(failedCount, 'post')} failed and ${failedCount === 1 ? 'needs' : 'need'} a retry or a new time`,
+				text: `${plural(failedCount, 'failed post')} to retry`,
+				action: 'View failures',
 				tone: 'error',
 				href: link(ctx.appUrl, '/posts?tab=failed')
 			});
 		}
-		for (const c of expired) {
+		const expiredCount = Number(expired[0]?.n ?? 0);
+		if (expiredCount > 0) {
 			lines.push({
-				text: `${account(c.platform, c.handle)} needs reconnecting`,
+				text: `${plural(expiredCount, 'account')} to reconnect`,
+				action: 'Reconnect accounts',
 				href: link(ctx.appUrl, '/accounts')
 			});
 		}
+		if (!lines.length) return null;
 		return {
 			id: 'action',
-			heading: 'Needs your attention',
-			groups: lines.length ? [{ lines }] : [],
-			empty: 'Nothing needs you right now.'
+			heading: 'Needs attention',
+			itemCount: reviewCount + failedCount + expiredCount,
+			groups: [{ lines }]
 		};
 	}
 };
@@ -597,17 +725,34 @@ export const topPosts: DigestSection = {
 	cost: 4,
 	async build(ctx) {
 		const top = await topPostsReport(ctx.db, ctx.userId, { days: 7, now: ctx.now }, { limit: 3 });
-		if (!top.length) return null;
+		const best = top.find((p) => p.engagement > 0);
+		if (!best) return null;
+		const detail = Object.entries(best.counts)
+			.filter(([, n]) => typeof n === 'number' && n > 0)
+			.map(([key, n]) => {
+				const label = metricLabel(best.platform, key as MetricKey).toLowerCase();
+				const singular = label.endsWith('ies') ? `${label.slice(0, -3)}y` : label.replace(/s$/, '');
+				return `${n} ${n === 1 ? singular : label}`;
+			})
+			.join(' · ');
 		return {
 			id: 'top-posts',
-			heading: 'Best posts this week',
+			heading: 'Best post this week',
+			href: link(ctx.appUrl, '/insights'),
+			action: 'View all',
 			groups: [
 				{
-					lines: top.map((p) => ({
-						text: `${p.brand} · ${account(p.platform, p.handle)}: “${p.excerpt}”`,
-						detail: countsLine(p.platform, p.counts),
-						href: p.permalink ?? undefined
-					}))
+					lines: [
+						{
+							title: account(best.platform, best.handle),
+							text: draftExcerpt(best.excerpt, 59),
+							detail,
+							href:
+								best.permalink ??
+								link(ctx.appUrl, `/compose?id=${encodeURIComponent(best.postId)}`),
+							action: best.permalink ? 'View post' : 'Open post'
+						}
+					]
 				}
 			]
 		};

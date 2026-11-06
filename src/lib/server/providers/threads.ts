@@ -14,7 +14,9 @@ import {
 	PublishPartialError,
 	providerErrorForStatus,
 	resumedVideoState,
-	unconfirmedPostError
+	unconfirmedPostError,
+	credentialsAfterRefreshFailure,
+	requireThreadParent
 } from './types';
 import { isVideoAttachment, pollVideo, segmentVideo, videoValidation } from './video';
 import type {
@@ -494,6 +496,7 @@ export const threadsProvider: PlatformProvider = {
 		const resumeIds = opts?.resume?.segmentIds ?? [];
 		const startAt = Math.min(resumeIds.length, segments.length);
 		const segmentIds = resumeIds.slice(0, startAt);
+		requireThreadParent('Threads', segmentIds, segments.length, opts?.resume?.remoteUrl);
 		let replyTo = segmentIds.at(-1);
 		// Resolve the thread root's public link once. On resume it starts
 		// immediately (for the root, not the segment published next),
@@ -923,16 +926,8 @@ export const threadsProvider: PlatformProvider = {
 					segmentIds: [...segmentIds],
 					remoteUrl: opts?.resume?.remoteUrl ?? null
 				});
-				if (mediaId) {
-					replyTo = mediaId;
-				} else if (i < segments.length - 1) {
-					// A reply needs the parent's id: stop here with what was posted,
-					// so the retry resumes after this segment rather than reposting.
-					throw new PublishPartialError(
-						'Threads accepted the post but returned no id — the rest of the thread cannot be linked',
-						{ segmentIds: [...segmentIds], remoteUrl: (await resolvedRemoteUrl()) ?? null }
-					);
-				}
+				requireThreadParent('Threads', segmentIds, segments.length, opts?.resume?.remoteUrl);
+				if (mediaId) replyTo = mediaId;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				if (segmentIds.length) {
@@ -985,14 +980,14 @@ export const threadsProvider: PlatformProvider = {
 			const res = await fetchImpl(url, { method: 'GET' });
 			if (!res.ok) {
 				// Same contract as LinkedIn: auth rejection throws 401 so the
-				// connection is marked expired; transients keep current creds.
+				// connection is marked expired; transients defer if the token has run out.
 				if (res.status === 400 || res.status === 401 || res.status === 403) {
 					throw new ProviderError(`Threads token refresh rejected (${res.status}) — reconnect`, {
 						status: 401,
 						code: 'auth'
 					});
 				}
-				return creds;
+				return credentialsAfterRefreshFailure('Threads', creds);
 			}
 			const data = (await res.json()) as { access_token?: string; expires_in?: number };
 			if (!data.access_token) {
@@ -1009,7 +1004,7 @@ export const threadsProvider: PlatformProvider = {
 		} catch (err) {
 			// Network failures stay transient; auth rejections propagate.
 			if ((err as { status?: number } | null)?.status === 401) throw err;
-			return creds;
+			return credentialsAfterRefreshFailure('Threads', creds);
 		}
 	}
 };

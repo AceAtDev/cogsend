@@ -5,7 +5,9 @@ import {
 	activityLog,
 	brands,
 	connections,
+	draftMedia,
 	drafts,
+	draftVariants,
 	publishTargets,
 	users
 } from '#lib/server/db/schema.js';
@@ -544,6 +546,166 @@ describe('approving and rejecting', () => {
 		});
 		expect(queue.counts.waiting).toBe(2);
 	});
+
+	it('previews the public TikTok title for the selected account, not its internal label', async () => {
+		await db
+			.update(connections)
+			.set({ platform: 'tiktok', displayName: 'Photo account' })
+			.where(eq(connections.id, reviewed.conn));
+		const d = await draft('Base caption');
+		const photoId = newId();
+		await db.insert(draftMedia).values({
+			id: photoId,
+			draftId: d,
+			storageKey: 'title-photo.jpg',
+			mime: 'image/jpeg',
+			size: 10,
+			createdAt: new Date()
+		});
+		await target(d, reviewed.conn, 'awaiting_review', new Date(Date.now() + HOUR));
+		await db.insert(draftVariants).values({
+			id: newId(),
+			draftId: d,
+			platform: 'tiktok',
+			body: '',
+			optionsJson: JSON.stringify({
+				tiktok: {
+					[reviewed.conn]: { draft: true, title: 'Photo headline' },
+					another: { draft: true, title: 'Wrong account' }
+				}
+			}),
+			createdAt: new Date(),
+			updatedAt: new Date()
+		});
+		const queue = await loadReviewQueue(db, userId);
+		expect(queue.groups[0].cards[0].deliveries[0]).toMatchObject({
+			text: '',
+			previewTitle: 'Photo headline',
+			displayName: 'Photo account'
+		});
+		await db
+			.update(draftMedia)
+			.set({ mime: 'video/mp4', storageKey: 'replacement.mp4' })
+			.where(eq(draftMedia.id, photoId));
+		const replaced = await loadReviewQueue(db, userId);
+		expect(replaced.groups[0].cards[0].deliveries[0].previewTitle).toBeNull();
+	});
+
+	it('keeps two TikTok account titles distinct and loading never approves a held delivery', async () => {
+		const second = await account(reviewed.brand, 'second');
+		for (const conn of [reviewed.conn, second])
+			await db.update(connections).set({ platform: 'tiktok' }).where(eq(connections.id, conn));
+		const d = await draft('Base caption');
+		await db.insert(draftMedia).values({
+			id: newId(),
+			draftId: d,
+			storageKey: 'title-photo.jpg',
+			mime: 'image/jpeg',
+			size: 10,
+			createdAt: new Date()
+		});
+		await db.update(drafts).set({ title: 'Internal calendar label' }).where(eq(drafts.id, d));
+		const held = await Promise.all(
+			[reviewed.conn, second].map((conn) =>
+				target(d, conn, 'awaiting_review', new Date(Date.now() + HOUR))
+			)
+		);
+		await db.insert(draftVariants).values({
+			id: newId(),
+			draftId: d,
+			platform: 'tiktok',
+			body: 'Public caption',
+			optionsJson: JSON.stringify({
+				tiktok: {
+					[reviewed.conn]: { draft: true, title: 'First account title' },
+					[second]: { draft: true, title: 'Second account title' }
+				}
+			}),
+			createdAt: new Date(),
+			updatedAt: new Date()
+		});
+		const queue = await loadReviewQueue(db, userId);
+		const deliveries = queue.groups[0].cards[0].deliveries;
+		expect(deliveries.find((v) => v.connectionId === reviewed.conn)).toMatchObject({
+			text: 'Public caption',
+			previewTitle: 'First account title'
+		});
+		expect(deliveries.find((v) => v.connectionId === second)).toMatchObject({
+			text: 'Public caption',
+			previewTitle: 'Second account title'
+		});
+		expect(queue.counts.waiting).toBe(2);
+		for (const id of held)
+			expect(await row(id)).toMatchObject({
+				status: 'awaiting_review',
+				reviewedAt: null,
+				jobId: null,
+				remotePostId: null
+			});
+		expect(sent).toEqual([]);
+	});
+
+	it.each([false, true])(
+		'preserves per-delivery thread segments and ordered media (explicit=%s)',
+		async (explicit) => {
+			const d = await draft('Base caption');
+			const held = await target(d, reviewed.conn, 'awaiting_review', new Date(Date.now() + HOUR));
+			await db.insert(draftVariants).values({
+				id: newId(),
+				draftId: d,
+				platform: 'mastodon',
+				body: 'First post\n---\nSecond post',
+				optionsJson: JSON.stringify(
+					explicit ? { threadSegments: ['First post', 'Second post'] } : {}
+				),
+				createdAt: new Date(),
+				updatedAt: new Date()
+			});
+			await db.insert(draftMedia).values([
+				{
+					id: newId(),
+					draftId: d,
+					storageKey: 'u/second.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 1,
+					sortOrder: 0,
+					createdAt: new Date()
+				},
+				{
+					id: newId(),
+					draftId: d,
+					storageKey: 'u/first-b.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 0,
+					sortOrder: 2,
+					createdAt: new Date()
+				},
+				{
+					id: newId(),
+					draftId: d,
+					storageKey: 'u/first-a.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 0,
+					sortOrder: 1,
+					createdAt: new Date()
+				}
+			]);
+			const queue = await loadReviewQueue(db, userId);
+			const card = queue.groups[0].cards[0];
+			expect(card.deliveries[0].previewSegments).toEqual(['First post', 'Second post']);
+			expect(card.deliveries[0].previewSegmentIndices).toEqual([0, 1]);
+			expect(card.media.map((m) => [m.storageKey, m.segmentIndex])).toEqual([
+				['u/first-a.jpg', 0],
+				['u/first-b.jpg', 0],
+				['u/second.jpg', 1]
+			]);
+			expect((await row(held)).status).toBe('awaiting_review');
+			expect(sent).toEqual([]);
+		}
+	);
 });
 
 describe('agent changes after approval', () => {

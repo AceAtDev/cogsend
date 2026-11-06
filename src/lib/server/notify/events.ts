@@ -49,6 +49,13 @@ export interface MailBlock {
 	heading: string;
 	/** One sentence under the heading ("3 published, 1 failed"). */
 	summary?: string;
+	/** Full section count, not just the preview rows. */
+	itemCount?: number;
+	/** Today's deliveries still scheduled, pending or publishing. */
+	scheduledCount?: number;
+	/** Section-level destination for the rest of a compact preview. */
+	href?: string;
+	action?: string;
 	groups: MailGroup[];
 	/** Shown when there is nothing else, so an empty section still says so. */
 	empty?: string;
@@ -57,6 +64,8 @@ export interface MailBlock {
 /** Something that happened to one account, to be emailed promptly. */
 export interface AlertEvent {
 	userId: string;
+	/** Stable source-row ID breaks timestamp ties. */
+	id: string;
 	/** Orders events and moves the account's cursor past them once sent. */
 	at: Date;
 	line: MailLine;
@@ -66,7 +75,7 @@ export interface AlertEvent {
 
 export interface AlertQuery {
 	/** Accounts due an alert of this kind, each with the instant it was last told up to. */
-	users: { userId: string; since: Date }[];
+	users: { userId: string; since: Date; sinceId?: string }[];
 	now: Date;
 	/** `APP_URL` without a trailing slash, or '' when not known yet. */
 	appUrl: string;
@@ -85,7 +94,7 @@ export interface AlertSource {
 	/** One sentence under the heading, from the events of one email. */
 	summarize?(events: AlertEvent[]): string | undefined;
 	/**
-	 * Events after each user's `since`, oldest first, for all the given users in
+	 * Events after each user's (`since`, `sinceId`) cursor, oldest first, for all the given users in
 	 * one statement: the tick pays one subrequest per source, not per account.
 	 */
 	collect(db: AppDb, query: AlertQuery): Promise<AlertEvent[]>;
@@ -108,6 +117,8 @@ export interface DigestContext {
 	appUrl: string;
 	today: DayWindow;
 	yesterday: DayWindow;
+	/** A long-lived signed thumbnail URL, or null when unavailable. */
+	mediaUrl?: (storageKey: string) => Promise<string | null>;
 }
 
 export interface DigestSection {

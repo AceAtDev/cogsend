@@ -199,6 +199,19 @@ describe('MCP TikTok per-post choices', () => {
 		expect(await h.deliveries()).toHaveLength(1);
 	});
 
+	it('never turns an internal label into a public TikTok title', async () => {
+		const draftId = await videoDraft({
+			title: 'Internal label: do not publish',
+			channels: ['465cal.tiktok'],
+			tiktok: { draft: true }
+		});
+		const scheduled = await call('schedule_posts', {
+			posts: [{ channels: ['465cal.tiktok'], draftId, runAt: inHours(30) }]
+		});
+		expect(scheduled.isError, text(scheduled)).toBeFalsy();
+		expect((await storedChoices(draftId))[tiktok]).not.toHaveProperty('title');
+	});
+
 	it('save_draft refuses a bad choice before writing anything', async () => {
 		const result = await call('save_draft', {
 			text: 'Clip',
@@ -208,6 +221,59 @@ describe('MCP TikTok per-post choices', () => {
 		expect(result.isError).toBe(true);
 		expect(text(result)).toContain('Branded content visibility cannot be set to private');
 		expect(await h.db.select().from(draftVariants)).toEqual([]);
+	});
+
+	it('keeps the separate photo title through save, caption edit and schedule', async () => {
+		const saved = await call('save_draft', {
+			title: 'Internal calendar label',
+			text: 'Photo caption',
+			channels: ['465cal.tiktok'],
+			tiktok: { draft: true, title: 'Public photo title' }
+		});
+		expect(saved.isError, text(saved)).toBeFalsy();
+		const draftId = data(saved).postId as string;
+		await h.db.insert(draftMedia).values({
+			id: newId(),
+			draftId,
+			storageKey: `${newId()}.jpg`,
+			mime: 'image/jpeg',
+			size: 1000,
+			width: 1080,
+			height: 1350,
+			sortOrder: 0,
+			segmentIndex: 0,
+			createdAt: new Date()
+		});
+		const edited = await call('save_draft', { draftId, text: 'Edited photo caption' });
+		expect(edited.isError, text(edited)).toBeFalsy();
+		expect((await storedChoices(draftId))[tiktok]).toMatchObject({
+			draft: true,
+			title: 'Public photo title'
+		});
+		const retitled = await call('save_draft', {
+			draftId,
+			tiktok: { draft: true, title: 'Edited public title' }
+		});
+		expect(retitled.isError, text(retitled)).toBeFalsy();
+		const detail = await call('get_post', { postId: draftId, response_format: 'detailed' });
+		expect(detail.isError, text(detail)).toBeFalsy();
+		expect(data(detail).post.title).toBe('Internal calendar label');
+		expect(
+			data(detail).post.variants.find((v: { platform: string }) => v.platform === 'tiktok').tiktok[
+				tiktok
+			]
+		).toMatchObject({ draft: true, title: 'Edited public title' });
+		const concise = await call('get_post', { postId: draftId });
+		expect(data(concise).post.variants[0]).not.toHaveProperty('tiktok');
+		const scheduled = await call('schedule_posts', {
+			posts: [{ channels: ['465cal.tiktok'], draftId, runAt: inHours(30) }]
+		});
+		expect(scheduled.isError, text(scheduled)).toBeFalsy();
+		expect((await storedChoices(draftId))[tiktok]).toMatchObject({
+			draft: true,
+			title: 'Edited public title'
+		});
+		expect(await h.deliveries()).toHaveLength(1);
 	});
 
 	it('publish_now and move_post refuse a TikTok channel without choices', async () => {

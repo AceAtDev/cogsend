@@ -25,7 +25,8 @@ import {
 	drafts,
 	draftVariants,
 	publishAttempts,
-	publishTargets
+	publishTargets,
+	users
 } from './db/schema';
 import type { AppEnv } from './env';
 import {
@@ -560,6 +561,15 @@ export async function publishTarget(
 				// retry or a publish that raced the pause. Part of the claim, so
 				// it costs no statement of its own.
 				notInArray(publishTargets.connectionId, pausedConnectionIds(db)),
+				// Recheck ownership atomically: queued work may outlive account suspension.
+				inArray(
+					publishTargets.connectionId,
+					db
+						.select({ id: connections.id })
+						.from(connections)
+						.innerJoin(users, eq(connections.userId, users.id))
+						.where(eq(users.status, 'active'))
+				),
 				or(
 					inArray(publishTargets.status, ['pending', 'failed']),
 					and(eq(publishTargets.status, 'scheduled'), lte(publishTargets.scheduledFor, now)),

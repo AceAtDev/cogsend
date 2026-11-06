@@ -13,7 +13,8 @@ import {
 	processingError,
 	ProviderError,
 	resumedVideoState,
-	unconfirmedPostError
+	unconfirmedPostError,
+	credentialsAfterRefreshFailure
 } from './types';
 import type {
 	ConnectionCredentials,
@@ -409,11 +410,11 @@ export const instagramProvider: PlatformProvider = {
 				`https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(creds.accessToken)}`
 			);
 			if (!res.ok) {
-				// A rejected token expires the account; anything else, a rate limit
-				// included, keeps the current one for the next try.
+				// A rejected token expires the account; a temporary failure must
+				// defer rather than send a token that is already past its expiry.
 				const err = tokenAwareError('Instagram token refresh', res.status, await res.text());
 				if (err.code === 'auth') throw err;
-				return creds;
+				return credentialsAfterRefreshFailure('Instagram', creds);
 			}
 			const data = (await res.json()) as { access_token?: string; expires_in?: number };
 			if (!data.access_token) {
@@ -429,7 +430,7 @@ export const instagramProvider: PlatformProvider = {
 			};
 		} catch (err) {
 			if ((err as { status?: number } | null)?.status === 401) throw err;
-			return creds;
+			return credentialsAfterRefreshFailure('Instagram', creds);
 		}
 	}
 };

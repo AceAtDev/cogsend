@@ -326,6 +326,34 @@ export function unconfirmedPostError(platformLabel: string, cause: unknown): Pro
 	);
 }
 
+/** A temporary refresh failure must not turn an expired access token into an auth failure. */
+export function credentialsAfterRefreshFailure(
+	platform: string,
+	creds: ConnectionCredentials
+): ConnectionCredentials {
+	if (creds.expiresAt && creds.expiresAt <= Date.now()) {
+		throw new ProviderError(`${platform} token refresh temporarily unavailable — try again later`, {
+			code: 'upstream'
+		});
+	}
+	return creds;
+}
+
+/** A counted, accepted segment without an id cannot safely parent another segment. */
+export function requireThreadParent(
+	platform: string,
+	segmentIds: string[],
+	total: number,
+	remoteUrl?: string | null
+): void {
+	if (segmentIds.length && segmentIds.length < total && !segmentIds.at(-1)) {
+		throw new PublishPartialError(
+			`${platform} accepted the post but returned no id — the rest of the thread cannot be linked; it ${UNCONFIRMED_POST_MARK}. Check ${platform} before you retry.`,
+			{ segmentIds: [...segmentIds], remoteUrl }
+		);
+	}
+}
+
 /**
  * Classify an upstream HTTP failure. 401 means the credential was rejected
  * (auth). 403 means the credential was accepted but the action refused

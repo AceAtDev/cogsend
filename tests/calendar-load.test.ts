@@ -230,6 +230,49 @@ describe('calendar load', () => {
 		expect(items.find((i) => i.id === ids['dropped:caltt'])?.status).toBe('cancelled');
 	});
 
+	it('loads option-only TikTok titles per account without replacing an empty caption', async () => {
+		const id = newId();
+		const photoId = newId();
+		await db.insert(draftMedia).values({
+			id: photoId,
+			draftId: ids.late,
+			storageKey: 'title-photo.jpg',
+			mime: 'image/jpeg',
+			size: 10,
+			createdAt: NOW
+		});
+		await db.insert(draftVariants).values({
+			id,
+			draftId: ids.late,
+			platform: 'tiktok',
+			body: '',
+			optionsJson: JSON.stringify({
+				tiktok: {
+					[ids.caltt]: { draft: true, title: 'Public photo title' },
+					other: { draft: true, title: 'Wrong account' }
+				}
+			}),
+			createdAt: NOW,
+			updatedAt: NOW
+		});
+		try {
+			const { items } = await load();
+			expect(items.find((i) => i.id === ids['late:caltt'])).toMatchObject({
+				text: '',
+				previewTitle: 'Public photo title'
+			});
+			await db
+				.update(draftMedia)
+				.set({ mime: 'video/mp4', storageKey: 'replacement.mp4' })
+				.where(eq(draftMedia.id, photoId));
+			const replaced = await load();
+			expect(replaced.items.find((i) => i.id === ids['late:caltt'])?.previewTitle).toBeNull();
+		} finally {
+			await db.delete(draftMedia).where(eq(draftMedia.id, photoId));
+			await db.delete(draftVariants).where(eq(draftVariants.id, id));
+		}
+	});
+
 	it('joins in brand and channel, with unbranded accounts grouped', async () => {
 		const result = await load();
 		expect(result.brands.map((b) => b.name)).toEqual(['465Cal', 'JobJob', 'Unbranded']);
@@ -251,6 +294,80 @@ describe('calendar load', () => {
 		expect(channel('theirs')).toBeUndefined();
 		expect(result.media[ids.launch]).toHaveLength(1);
 	});
+
+	it.each([false, true])(
+		'preserves thread text and segment-local media order (explicit=%s)',
+		async (explicit) => {
+			const variantId = newId();
+			const mediaIds = [newId(), newId(), newId()];
+			await db.insert(draftVariants).values({
+				id: variantId,
+				draftId: ids.launch,
+				platform: 'bluesky',
+				body: 'First post\n---\nSecond post',
+				optionsJson: JSON.stringify(
+					explicit ? { threadSegments: ['First post', 'Second post'] } : {}
+				),
+				createdAt: NOW,
+				updatedAt: NOW
+			});
+			await db.insert(draftMedia).values([
+				{
+					id: mediaIds[0],
+					draftId: ids.launch,
+					storageKey: 'u/second.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 1,
+					sortOrder: 0,
+					createdAt: NOW
+				},
+				{
+					id: mediaIds[1],
+					draftId: ids.launch,
+					storageKey: 'u/first-b.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 0,
+					sortOrder: 2,
+					createdAt: NOW
+				},
+				{
+					id: mediaIds[2],
+					draftId: ids.launch,
+					storageKey: 'u/first-a.jpg',
+					mime: 'image/jpeg',
+					size: 10,
+					segmentIndex: 0,
+					sortOrder: 1,
+					createdAt: NOW
+				}
+			]);
+			try {
+				const result = await load();
+				const item = result.items.find((i) => i.id === ids['launch:mybs']);
+				expect(item?.previewSegments).toEqual(['First post', 'Second post']);
+				expect(item?.previewSegmentIndices).toEqual([0, 1]);
+				expect(
+					result.media[ids.launch]
+						.filter((m) => mediaIds.includes(m.id))
+						.map((m) => [m.storageKey, m.segmentIndex])
+				).toEqual([
+					['u/first-a.jpg', 0],
+					['u/first-b.jpg', 0],
+					['u/second.jpg', 1]
+				]);
+				const [delivery] = await db
+					.select()
+					.from(publishTargets)
+					.where(eq(publishTargets.id, ids['launch:mybs']));
+				expect(delivery.status).toBe('scheduled');
+			} finally {
+				await db.delete(draftVariants).where(eq(draftVariants.id, variantId));
+				for (const id of mediaIds) await db.delete(draftMedia).where(eq(draftMedia.id, id));
+			}
+		}
+	);
 
 	it('filters by brand, by channel, and by both together', async () => {
 		expect(names((await load({ brands: ['465cal'] })).items)).toEqual(

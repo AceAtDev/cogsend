@@ -142,7 +142,12 @@ export function validatePost(input: {
 	const issues =
 		platform && isPlatformId(platform)
 			? getProvider(platform).validate({ text }, { maxCharacters })
-			: [];
+			: Object.entries({ bluesky, mastodon, linkedin, threads, instagram, tiktok, x })
+					.filter(([, result]) => !result.ok)
+					.map(([platform, result]) => ({
+						code: 'text_invalid',
+						message: `${platform}: ${result.message}`
+					}));
 	return {
 		graphemes: countGraphemes(text),
 		mastodonLength: mastodonWeightedLength(text),
@@ -1033,11 +1038,14 @@ function withoutTiktokChoices(optionsJson: string): string {
 	return JSON.stringify(options);
 }
 
-function validateVariantOptions(options: unknown): string | null {
+export function validateVariantOptions(options: unknown): string | null {
 	if (options === undefined) return null;
 	if (!options || typeof options !== 'object' || Array.isArray(options))
 		return 'options must be an object';
 	const value = options as Record<string, unknown>;
+	const encodedLength = JSON.stringify(options).length;
+	if (encodedLength > MAX_VARIANT_OPTIONS_LENGTH)
+		return `Variant options are too large to save (${encodedLength} characters, max ${MAX_VARIANT_OPTIONS_LENGTH})`;
 	if (value.visibility !== undefined && !VISIBILITIES.has(String(value.visibility)))
 		return 'Invalid visibility';
 	if (value.poll !== undefined && value.poll !== null) {

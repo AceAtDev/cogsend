@@ -698,9 +698,9 @@ test('api key works logged out, stays out of key management', async () => {
 	});
 	await supportedClient.connect(supportedTransport);
 	const { tools } = await supportedClient.listTools();
-	expect(tools.map((tool) => tool.name)).toContain('list_drafts');
+	expect(tools.map((tool) => tool.name)).toContain('list_posts');
 	const supportedRead = await supportedClient.callTool({
-		name: 'list_drafts',
+		name: 'list_posts',
 		arguments: { limit: 1 }
 	});
 	expect(supportedRead.isError).not.toBe(true);
@@ -713,8 +713,11 @@ test('api key works logged out, stays out of key management', async () => {
 	expect(drafts.status).toBe(200);
 	const mcpCall = (
 		key: string,
-		name = 'create_draft',
-		args: Record<string, unknown> = { title: 'Read-only scope check' }
+		name = 'save_draft',
+		args: Record<string, unknown> = {
+			title: 'Read-only scope check',
+			text: 'Read-only scope check'
+		}
 	) =>
 		fetch(`${origin}/api/mcp`, {
 			method: 'POST',
@@ -740,11 +743,11 @@ test('api key works logged out, stays out of key management', async () => {
 				}
 			})
 		});
-	const readOnlyRead = await mcpCall(currentKey, 'list_drafts', { limit: 1 }).then((response) =>
+	const readOnlyRead = await mcpCall(currentKey, 'list_posts', { limit: 1 }).then((response) =>
 		response.json()
 	);
 	expect(readOnlyRead.result.isError).not.toBe(true);
-	expect(readOnlyRead.result.structuredContent.drafts).toEqual(expect.any(Array));
+	expect(readOnlyRead.result.structuredContent.posts).toEqual(expect.any(Array));
 	const readOnlyWrite = await mcpCall(currentKey).then((response) => response.json());
 	expect(readOnlyWrite.result.isError).toBe(true);
 	expect(readOnlyWrite.result.structuredContent).toMatchObject({ status: 403 });
@@ -771,11 +774,15 @@ test('api key works logged out, stays out of key management', async () => {
 	keyed = { Authorization: `Bearer ${currentKey}` };
 	const writeAllowed = await mcpCall(currentKey).then((response) => response.json());
 	expect(writeAllowed.result.isError).not.toBe(true);
-	expect(writeAllowed.result.structuredContent.draft.title).toBe('Read-only scope check');
+	expect(writeAllowed.result.structuredContent.postId).toEqual(expect.any(String));
 	// A script's bodiless write (curl -X POST, no Content-Type, no Origin)
 	// passes on its own credential; the same request carried by the session
 	// cookie alone is refused as cross-site (src/lib/server/csrf.ts).
-	const scripted = writeAllowed.result.structuredContent.draft.id;
+	const scripted = writeAllowed.result.structuredContent.postId;
+	const scriptedDraft = await fetch(`${origin}/api/drafts/${scripted}`, { headers: keyed }).then(
+		(response) => response.json()
+	);
+	expect(scriptedDraft.draft.title).toBe('Read-only scope check');
 	const copy = await fetch(`${origin}/api/drafts/${scripted}/duplicate`, {
 		method: 'POST',
 		headers: keyed

@@ -6,7 +6,7 @@ import {
 } from '#lib/domain/notifications.js';
 import { operatorZone } from '#lib/domain/zoned-time.js';
 import type { SubrequestBudget } from '../budget';
-import { batchQueries, type AppDb } from '../db/client';
+import { batchQueries, newId, parseJson, type AppDb } from '../db/client';
 import {
 	notificationAlerts,
 	notificationRecipients,
@@ -40,8 +40,8 @@ export const DIGEST_GRACE_MINUTES = 180;
 /** Rows one alert source reads per tick, across accounts. */
 const ALERT_COLLECT_LIMIT = 100;
 const ALERT_LINES_PER_EMAIL = 25;
-/** Accounts per alert query: each is a bound parameter, and D1 allows 100. */
-const ACCOUNTS_PER_QUERY = 90;
+/** Each composite cursor uses several parameters; keep the query below D1's 100. */
+const ACCOUNTS_PER_QUERY = 15;
 /** Claim, send, status, cursor. */
 const ALERT_EMAIL_COST = 4;
 /**
@@ -72,7 +72,7 @@ type Account = NotificationSettingsRow & {
 	role: 'admin' | 'member';
 	timezone: string;
 	recipients: { email: string; subscriptions: NotificationKind[] }[];
-	alerts: Map<string, { cursorAt: Date; lastSentAt: Date | null }>;
+	alerts: Map<string, { cursorAt: Date; cursorId?: string; lastSentAt: Date | null }>;
 };
 
 function senderReady(row: NotificationSettingsRow & { role: 'admin' | 'member' }, env: AppEnv) {
@@ -142,14 +142,16 @@ class Runner {
 		to: string[],
 		subject: string,
 		blocks: MailBlock[],
-		intro: string
+		intro: string,
+		compact = false
 	) {
 		const appName = this.env.APP_NAME;
 		const rendered = renderBlocks({
 			intro,
 			blocks,
 			footer: `Sent by ${appName} to the addresses on this account's notification list.`,
-			appUrl: appUrlOf(this.env)
+			appUrl: appUrlOf(this.env),
+			compact
 		});
 		try {
 			const sender = await this.sender(account);
@@ -220,7 +222,11 @@ async function attachRecipients(db: AppDb, accounts: Account[]) {
 			?.recipients.push({ email: r.email, subscriptions: parseSubscriptions(r.subscriptions) });
 	}
 	for (const s of alerts) {
-		byId.get(s.userId)?.alerts.set(s.kind, { cursorAt: s.cursorAt, lastSentAt: s.lastSentAt });
+		byId.get(s.userId)?.alerts.set(s.kind, {
+			cursorAt: s.cursorAt,
+			cursorId: s.cursorId,
+			lastSentAt: s.lastSentAt
+		});
 	}
 }
 
@@ -248,91 +254,108 @@ async function runAlerts(
 				.values(fresh.map((a) => ({ userId: a.userId, kind, cursorAt: now, lastSentAt: null })))
 				.onConflictDoNothing();
 		}
-		const asked = due.filter((a) => a.alerts.has(kind)).slice(0, ACCOUNTS_PER_QUERY);
-		if (!asked.length) continue;
-		if (!runner.afford(1 + ALERT_EMAIL_COST)) return;
-		let events: AlertEvent[];
-		try {
-			events = await source.collect(db, {
-				users: asked.map((a) => ({ userId: a.userId, since: a.alerts.get(kind)!.cursorAt })),
-				now,
-				appUrl: appUrlOf(env),
-				limit: ALERT_COLLECT_LIMIT,
-				mediaUrl: async (key) =>
-					appUrlOf(env) && env.APP_ENCRYPTION_KEY
-						? signEmailMediaUrl(env.APP_ENCRYPTION_KEY, appUrlOf(env), key, now.getTime())
-						: null
-			});
-		} catch (err) {
-			// A source whose table or column is not there yet (a feature still
-			// rolling out) must not stop the other kinds.
-			console.error('[notify] alert source failed', kind, err);
-			continue;
-		}
-		for (const account of asked) {
-			const mine = events
-				.filter((e) => e.userId === account.userId)
-				.sort((x, y) => x.at.getTime() - y.at.getTime());
-			if (!mine.length) continue;
-			if (!runner.afford(ALERT_EMAIL_COST)) return;
-			// Claimed before sending, so two overlapping ticks cannot both email.
-			const claimed = await db
-				.update(notificationAlerts)
-				.set({ lastSentAt: now })
-				.where(
-					and(
-						eq(notificationAlerts.userId, account.userId),
-						eq(notificationAlerts.kind, kind),
-						or(
-							isNull(notificationAlerts.lastSentAt),
-							lte(notificationAlerts.lastSentAt, new Date(now.getTime() - ALERT_WINDOW_MS)),
-							gt(notificationAlerts.lastSentAt, now)
-						)
-					)
-				)
-				.returning({ userId: notificationAlerts.userId });
-			if (!claimed.length) continue;
-			const shown = mine.slice(0, ALERT_LINES_PER_EMAIL);
-			const more = mine.length - shown.length;
-			const sent = await runner.deliver(
-				account,
-				subscribers(account, kind),
-				source.subjectFor?.(mine) ?? source.subject(mine.length),
-				[
-					{
-						id: kind,
-						heading: source.heading,
-						summary:
-							[
-								source.summarize?.(mine),
-								more > 0 ? `The first ${shown.length}; the rest follow in the next email.` : ''
-							]
-								.filter(Boolean)
-								.join(' ') || undefined,
-						groups: groupEvents(shown)
-					}
-				],
-				'This just happened on your account:'
-			);
-			if (!sent) {
-				// The claim stays, so a refused connection is retried once a window
-				// has passed instead of every tick; the cursor stays too, so the
-				// retry still carries these events.
+		const pending = due.filter((a) => a.alerts.has(kind));
+		for (let offset = 0; offset < pending.length; offset += ACCOUNTS_PER_QUERY) {
+			const asked = pending.slice(offset, offset + ACCOUNTS_PER_QUERY);
+			if (!runner.afford(1 + ALERT_EMAIL_COST)) return;
+			let events: AlertEvent[];
+			try {
+				events = await source.collect(db, {
+					users: asked.map((a) => ({
+						userId: a.userId,
+						since: a.alerts.get(kind)!.cursorAt,
+						sinceId: a.alerts.get(kind)!.cursorId
+					})),
+					now,
+					appUrl: appUrlOf(env),
+					limit: ALERT_COLLECT_LIMIT,
+					mediaUrl: async (key) =>
+						appUrlOf(env) && env.APP_ENCRYPTION_KEY
+							? signEmailMediaUrl(env.APP_ENCRYPTION_KEY, appUrlOf(env), key, now.getTime())
+							: null
+				});
+			} catch (err) {
+				// A source whose table or column is not there yet (a feature still
+				// rolling out) must not stop the other kinds.
+				console.error('[notify] alert source failed', kind, err);
 				continue;
 			}
-			runner.result.alerts += 1;
-			const cursor = shown[shown.length - 1].at;
-			await db
-				.update(notificationAlerts)
-				.set({ cursorAt: cursor })
-				.where(
-					and(
-						eq(notificationAlerts.userId, account.userId),
-						eq(notificationAlerts.kind, kind),
-						lt(notificationAlerts.cursorAt, cursor)
+			for (const account of asked) {
+				const mine = events
+					.filter((e) => e.userId === account.userId)
+					.sort(
+						(x, y) =>
+							x.at.getTime() - y.at.getTime() ||
+							((x.id ?? '') < (y.id ?? '') ? -1 : (x.id ?? '') > (y.id ?? '') ? 1 : 0)
+					);
+				if (!mine.length) continue;
+				if (!runner.afford(ALERT_EMAIL_COST)) return;
+				// Claimed before sending, so two overlapping ticks cannot both email.
+				const claimed = await db
+					.update(notificationAlerts)
+					.set({ lastSentAt: now })
+					.where(
+						and(
+							eq(notificationAlerts.userId, account.userId),
+							eq(notificationAlerts.kind, kind),
+							or(
+								isNull(notificationAlerts.lastSentAt),
+								lte(notificationAlerts.lastSentAt, new Date(now.getTime() - ALERT_WINDOW_MS)),
+								gt(notificationAlerts.lastSentAt, now)
+							)
+						)
 					)
+					.returning({ userId: notificationAlerts.userId });
+				if (!claimed.length) continue;
+				const shown = mine.slice(0, ALERT_LINES_PER_EMAIL);
+				const more = mine.length - shown.length;
+				const sent = await runner.deliver(
+					account,
+					subscribers(account, kind),
+					source.subjectFor?.(mine) ?? source.subject(mine.length),
+					[
+						{
+							id: kind,
+							heading: source.heading,
+							summary:
+								[
+									source.summarize?.(mine),
+									more > 0 ? `The first ${shown.length}; the rest follow in the next email.` : ''
+								]
+									.filter(Boolean)
+									.join(' ') || undefined,
+							groups: groupEvents(shown)
+						}
+					],
+					'This just happened on your account:'
 				);
-			account.alerts.set(kind, { cursorAt: cursor, lastSentAt: now });
+				if (!sent) {
+					// The claim stays, so a refused connection is retried once a window
+					// has passed instead of every tick; the cursor stays too, so the
+					// retry still carries these events.
+					continue;
+				}
+				runner.result.alerts += 1;
+				const cursor = shown[shown.length - 1].at;
+				const cursorId = shown[shown.length - 1].id ?? '';
+				await db
+					.update(notificationAlerts)
+					.set({ cursorAt: cursor, cursorId })
+					.where(
+						and(
+							eq(notificationAlerts.userId, account.userId),
+							eq(notificationAlerts.kind, kind),
+							or(
+								lt(notificationAlerts.cursorAt, cursor),
+								and(
+									eq(notificationAlerts.cursorAt, cursor),
+									lt(notificationAlerts.cursorId, cursorId)
+								)
+							)
+						)
+					);
+				account.alerts.set(kind, { cursorAt: cursor, cursorId, lastSentAt: now });
+			}
 		}
 	}
 }
@@ -361,70 +384,121 @@ async function runDigests(
 			readers.some((r) => r.subscriptions.includes(s.requires))
 		);
 		const sectionCost = sections.reduce((sum, s) => sum + s.cost, 0);
-		// Claim, the sections, then a send and a status write for each version.
-		if (!runner.afford(1 + sectionCost + 2)) return;
+		// Claim, sections, one version (send/status/progress), and lease release.
+		if (!runner.afford(1 + sectionCost + 4)) return;
+		const claimToken = newId();
 		const claimed = await db
 			.update(notificationSettings)
-			.set({ lastDigestOn: today.date })
+			.set({ digestClaimToken: claimToken, digestClaimedAt: now })
 			.where(
 				and(
 					eq(notificationSettings.userId, account.userId),
 					or(
 						isNull(notificationSettings.lastDigestOn),
 						ne(notificationSettings.lastDigestOn, today.date)
+					),
+					or(
+						isNull(notificationSettings.digestClaimedAt),
+						lt(notificationSettings.digestClaimedAt, new Date(now.getTime() - ALERT_WINDOW_MS))
 					)
 				)
 			)
-			.returning({ userId: notificationSettings.userId });
+			.returning();
 		if (!claimed.length) continue;
-		const ctx: DigestContext = {
-			db,
-			userId: account.userId,
-			timeZone,
-			now,
-			appUrl: appUrlOf(env),
-			today,
-			yesterday: dayWindow(now, timeZone, -1)
-		};
-		const built: { requires: NotificationKind; block: MailBlock }[] = [];
-		for (const section of sections) {
-			try {
-				const block = await section.build(ctx);
-				if (block) built.push({ requires: section.requires, block });
-			} catch (err) {
-				console.error('[notify] digest section failed', section.id, err);
+		const saved = claimed[0];
+		const previous = parseJson<unknown>(saved.digestSentTo, []);
+		const sentTo = new Set<string>(
+			saved.digestProgressOn === today.date && Array.isArray(previous)
+				? previous.filter((email): email is string => typeof email === 'string')
+				: []
+		);
+		const ownsClaim = and(
+			eq(notificationSettings.userId, account.userId),
+			eq(notificationSettings.digestClaimToken, claimToken)
+		);
+		let complete = false;
+		try {
+			const ctx: DigestContext = {
+				db,
+				userId: account.userId,
+				timeZone,
+				now,
+				appUrl: appUrlOf(env),
+				today,
+				yesterday: dayWindow(now, timeZone, -1),
+				mediaUrl: async (key) =>
+					env.APP_ENCRYPTION_KEY && appUrlOf(env)
+						? signEmailMediaUrl(env.APP_ENCRYPTION_KEY, appUrlOf(env), key, now.getTime())
+						: null
+			};
+			const built: { requires: NotificationKind; block: MailBlock }[] = [];
+			let buildFailed = false;
+			for (const section of sections) {
+				try {
+					const block = await section.build(ctx);
+					if (block) built.push({ requires: section.requires, block });
+				} catch (err) {
+					console.error('[notify] digest section failed', section.id, err);
+					buildFailed = true;
+				}
 			}
+			// Never record an incomplete version as sent. The finally releases
+			// the lease, so a transient section failure can retry next tick.
+			if (buildFailed) continue;
+			// Recipients with the same subscriptions get the same email, so most
+			// accounts send one message to everybody.
+			const versions = new Map<string, { to: string[]; blocks: MailBlock[]; full: boolean }>();
+			for (const reader of readers) {
+				if (sentTo.has(reader.email)) continue;
+				const blocks = built
+					.filter((b) => reader.subscriptions.includes(b.requires))
+					.map((b) => b.block);
+				const full = reader.subscriptions.includes('digest');
+				// A reminder-only reader hears nothing on a day with nothing to remind.
+				if (!full && !blocks.length) continue;
+				const key = `${full}:${blocks.map((b) => b.id).join(',')}`;
+				const version = versions.get(key) ?? { to: [], blocks, full };
+				version.to.push(reader.email);
+				versions.set(key, version);
+			}
+			let sentAny = false;
+			let allSent = true;
+			for (const version of versions.values()) {
+				if (!runner.afford(4)) {
+					allSent = false;
+					break;
+				}
+				const ok = await runner.deliver(
+					account,
+					version.to,
+					version.full ? `your day, ${today.label}` : 'reminder',
+					version.blocks,
+					version.full ? `${today.label} (${timeZone})` : `A reminder for ${today.label}:`,
+					version.full
+				);
+				sentAny ||= ok;
+				if (ok) {
+					for (const email of version.to) sentTo.add(email);
+					await db
+						.update(notificationSettings)
+						.set({ digestProgressOn: today.date, digestSentTo: JSON.stringify([...sentTo]) })
+						.where(ownsClaim);
+				} else {
+					allSent = false;
+				}
+			}
+			complete = allSent;
+			if (sentAny) runner.result.digests += 1;
+		} finally {
+			await db
+				.update(notificationSettings)
+				.set({
+					digestClaimToken: null,
+					digestClaimedAt: null,
+					...(complete ? { lastDigestOn: today.date } : {})
+				})
+				.where(ownsClaim);
 		}
-		// Recipients with the same subscriptions get the same email, so most
-		// accounts send one message to everybody.
-		const versions = new Map<string, { to: string[]; blocks: MailBlock[]; full: boolean }>();
-		for (const reader of readers) {
-			const blocks = built
-				.filter((b) => reader.subscriptions.includes(b.requires))
-				.map((b) => b.block);
-			const full = reader.subscriptions.includes('digest');
-			// A reminder-only reader hears nothing on a day with nothing to remind.
-			if (!full && !blocks.length) continue;
-			const key = `${full}:${blocks.map((b) => b.id).join(',')}`;
-			const version = versions.get(key) ?? { to: [], blocks, full };
-			version.to.push(reader.email);
-			versions.set(key, version);
-		}
-		let sentAny = false;
-		for (const version of versions.values()) {
-			if (!runner.afford(2)) break;
-			const ok = await runner.deliver(
-				account,
-				version.to,
-				version.full ? `your day, ${today.label}` : 'reminder',
-				version.blocks,
-				version.full
-					? `Here is your day, ${today.label} (${timeZone}).`
-					: `A reminder for ${today.label}:`
-			);
-			sentAny ||= ok;
-		}
-		if (sentAny) runner.result.digests += 1;
 	}
 }
 

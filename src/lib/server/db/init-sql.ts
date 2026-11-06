@@ -306,6 +306,10 @@ CREATE TABLE IF NOT EXISTS \`notification_settings\` (
 	\`smtp_port\` integer NOT NULL DEFAULT 465,
 	\`digest_minute\` integer NOT NULL DEFAULT 480,
 	\`last_digest_on\` text,
+	\`digest_progress_on\` text,
+	\`digest_sent_to\` text NOT NULL DEFAULT '[]',
+	\`digest_claim_token\` text,
+	\`digest_claimed_at\` integer,
 	\`last_test_at\` integer,
 	\`last_sent_at\` integer,
 	\`last_error\` text,
@@ -330,6 +334,7 @@ CREATE TABLE IF NOT EXISTS \`notification_alerts\` (
 	\`user_id\` text NOT NULL,
 	\`kind\` text NOT NULL,
 	\`cursor_at\` integer NOT NULL,
+	\`cursor_id\` text NOT NULL DEFAULT '',
 	\`last_sent_at\` integer,
 	PRIMARY KEY (\`user_id\`, \`kind\`),
 	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
@@ -474,6 +479,19 @@ export function ensureSchemaOnce(d1: D1Database): Promise<void> {
  * here too for databases that bootstrapped before them.
  */
 const COLUMN_BACKFILLS: Array<{ table: string; columns: { name: string; ddl: string }[] }> = [
+	{
+		table: 'notification_settings',
+		columns: [
+			{ name: 'digest_progress_on', ddl: 'digest_progress_on text' },
+			{ name: 'digest_sent_to', ddl: "digest_sent_to text NOT NULL DEFAULT '[]'" },
+			{ name: 'digest_claim_token', ddl: 'digest_claim_token text' },
+			{ name: 'digest_claimed_at', ddl: 'digest_claimed_at integer' }
+		]
+	},
+	{
+		table: 'notification_alerts',
+		columns: [{ name: 'cursor_id', ddl: "cursor_id text NOT NULL DEFAULT ''" }]
+	},
 	{
 		table: 'users',
 		columns: [
@@ -656,6 +674,10 @@ CREATE TABLE IF NOT EXISTS notification_settings (
 	smtp_port integer NOT NULL DEFAULT 465,
 	digest_minute integer NOT NULL DEFAULT 480,
 	last_digest_on text,
+	digest_progress_on text,
+	digest_sent_to text NOT NULL DEFAULT '[]',
+	digest_claim_token text,
+	digest_claimed_at integer,
 	last_test_at integer,
 	last_sent_at integer,
 	last_error text,
@@ -678,6 +700,7 @@ CREATE TABLE IF NOT EXISTS notification_alerts (
 	user_id text NOT NULL,
 	kind text NOT NULL,
 	cursor_at integer NOT NULL,
+	cursor_id text NOT NULL DEFAULT '',
 	last_sent_at integer,
 	PRIMARY KEY (user_id, kind),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

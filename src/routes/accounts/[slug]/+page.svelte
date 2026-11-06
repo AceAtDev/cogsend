@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { reconcileSlotDrafts, type SlotDraft } from '#lib/domain/slot-drafts.js';
 	import { invalidateAll } from '$app/navigation';
 	import { ChevronLeft, Plus, X } from '@lucide/svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
@@ -26,8 +28,7 @@
 		MAX_POSTS_PER_DAY,
 		WEEKDAY_LABEL,
 		WEEKDAYS,
-		type Weekday,
-		type WeeklySlots
+		type Weekday
 	} from '#lib/domain/posting-slots.js';
 
 	let { data } = $props();
@@ -115,29 +116,16 @@
 		}
 	}
 
-	type Draft = {
-		slots: WeeklySlots;
-		maxPerDay: number | null;
-		minGap: number | null;
-		adding: Record<Weekday, string>;
-	};
-	let drafts = $state<Record<string, Draft>>({});
-	let rulesFor = '';
+	let drafts = $state<Record<string, SlotDraft>>({});
+	let ruleSignatures = new Map<string, string>();
 	$effect(() => {
-		const key = JSON.stringify(data.channels.map((c) => [c.connectionId, c.rules]));
-		if (key === rulesFor) return;
-		rulesFor = key;
-		drafts = Object.fromEntries(
-			data.channels.map((c) => [
-				c.connectionId,
-				{
-					slots: structuredClone(c.rules.slots),
-					maxPerDay: c.rules.maxPerDay,
-					minGap: c.rules.minGapMinutes,
-					adding: Object.fromEntries(WEEKDAYS.map((d) => [d, ''])) as Record<Weekday, string>
-				}
-			])
+		const next = reconcileSlotDrafts(
+			data.channels,
+			untrack(() => drafts),
+			ruleSignatures
 		);
+		ruleSignatures = next.signatures;
+		drafts = next.drafts;
 	});
 
 	function addTime(id: string, day: Weekday) {

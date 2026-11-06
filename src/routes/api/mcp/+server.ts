@@ -18,6 +18,7 @@ import {
 	setDraftVariant,
 	updateDraft,
 	validatePost,
+	validateVariantOptions,
 	type OperationContext
 } from '#lib/server/api/operations.js';
 import { ApiOperationError } from '#lib/server/api/operation-error.js';
@@ -1123,6 +1124,12 @@ function createServer(event: RequestEvent) {
 		async (input, agent) => {
 			const { ctx, userId } = agent;
 			const run = async () => {
+				// Validate every variant before the base draft or earlier variants can change.
+				for (const variant of input.variants ?? []) {
+					if (variant.remove) continue;
+					const problem = validateVariantOptions(variant.options);
+					if (problem) throw new ApiOperationError(problem, 400);
+				}
 				const { ids, channels } = await resolveIds(agent, input.channels, 'channels');
 				const tiktok = await planDraftTiktok(agent, input.draftId, input.channels, input.tiktok);
 				let draftId = input.draftId;

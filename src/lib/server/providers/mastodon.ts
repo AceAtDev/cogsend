@@ -24,7 +24,13 @@ import type {
 	PublishResult,
 	ValidationIssue
 } from './types';
-import { MetricsError, metricsErrorForStatus, ProviderError, PublishPartialError } from './types';
+import {
+	MetricsError,
+	metricsErrorForStatus,
+	ProviderError,
+	PublishPartialError,
+	requireThreadParent
+} from './types';
 import { providerFetch } from './timed-fetch';
 
 function normalizeInstance(url: string, allowLocal: boolean): string {
@@ -460,6 +466,7 @@ export const mastodonProvider: PlatformProvider = {
 		const resumeIds = opts?.resume?.segmentIds ?? [];
 		const startAt = Math.min(resumeIds.length, segments.length);
 		const segmentIds = resumeIds.slice(0, startAt);
+		requireThreadParent('Mastodon', segmentIds, segments.length, opts?.resume?.remoteUrl);
 		let replyTo = segmentIds.at(-1);
 		let firstUrl = opts?.resume?.remoteUrl || undefined;
 
@@ -512,19 +519,13 @@ export const mastodonProvider: PlatformProvider = {
 					segmentIds: [...segmentIds],
 					remoteUrl: firstUrl ?? opts?.resume?.remoteUrl ?? null
 				});
-				if (result.id) {
-					replyTo = result.id;
-				} else if (i < segments.length - 1) {
-					// A reply needs the parent's id: stop here with what was posted,
-					// so the retry resumes after this segment rather than reposting.
-					throw new PublishPartialError(
-						'Mastodon accepted the status but returned no id — the rest of the thread cannot be linked',
-						{
-							segmentIds: [...segmentIds],
-							remoteUrl: firstUrl ?? opts?.resume?.remoteUrl ?? null
-						}
-					);
-				}
+				requireThreadParent(
+					'Mastodon',
+					segmentIds,
+					segments.length,
+					firstUrl ?? opts?.resume?.remoteUrl
+				);
+				if (result.id) replyTo = result.id;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				if (segmentIds.length) {

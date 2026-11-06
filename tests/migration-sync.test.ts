@@ -80,6 +80,7 @@ describe('satisfiedMigrations', () => {
 		expect([...satisfied]).toContain('0013_sessions_security.sql');
 		expect([...satisfied]).toContain('0016_mfa_challenges_expires_idx.sql');
 		expect([...satisfied]).toContain('0024_approvals.sql');
+		expect([...satisfied]).toContain('0029_notification_recovery.sql');
 	});
 
 	it('keeps the 0001 table list in step with the migration', () => {
@@ -124,6 +125,21 @@ describe('satisfiedMigrations', () => {
 		expect(satisfiedMigrations(state('0'))).toContain('0003_publish_targets_draft_conn_idx.sql');
 		expect(satisfiedMigrations(state('0'))).not.toContain('0004_publish_targets_draft_conn_uq.sql');
 		expect(satisfiedMigrations(state('1'))).toContain('0004_publish_targets_draft_conn_uq.sql');
+	});
+	it('records recovery only when all cursor and digest state columns exist', async () => {
+		const state = await introspectionOnBootstrap();
+		expect(satisfiedMigrations(state)).toContain('0029_notification_recovery.sql');
+		for (const [table, column] of [
+			['notification_alerts', 'cursor_id'],
+			['notification_settings', 'digest_progress_on'],
+			['notification_settings', 'digest_sent_to'],
+			['notification_settings', 'digest_claim_token'],
+			['notification_settings', 'digest_claimed_at']
+		]) {
+			state.columns.get(table)!.delete(column);
+			expect(satisfiedMigrations(state)).not.toContain('0029_notification_recovery.sql');
+			state.columns.get(table)!.add(column);
+		}
 	});
 });
 

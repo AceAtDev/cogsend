@@ -410,7 +410,8 @@
 			<h3 class={labelClass}>Recipients</h3>
 			{#if !recipients.length}
 				<p class="mb-4 text-[13px] font-medium text-stone-500">
-					Nobody yet, so no alerts or digests are sent. Add the addresses that should hear about this account.
+					Nobody yet, so no alerts or digests are sent. Add the addresses that should hear about
+					this account.
 				</p>
 			{/if}
 			<ul class="space-y-4">

@@ -20,7 +20,8 @@ import {
 	ProviderError,
 	resumedVideoState,
 	retryAfterFrom,
-	unconfirmedPostError
+	unconfirmedPostError,
+	credentialsAfterRefreshFailure
 } from './types';
 import type {
 	ConnectionCredentials,
@@ -992,16 +993,17 @@ export const tiktokProvider: PlatformProvider = {
 				})
 			});
 		} catch {
-			return creds;
+			return credentialsAfterRefreshFailure('TikTok', creds);
 		}
 		const text = await res.text().catch(() => '');
-		// A rate limit or TikTok's own trouble keeps the current token for the
-		// next try; a refusal of the refresh token expires the account.
-		if (res.status === 429 || res.status >= 500) return creds;
+		// Keep a still-valid token during an outage, but defer if it has run out;
+		// a refusal of the refresh token expires the account.
+		if (res.status === 429 || res.status >= 500)
+			return credentialsAfterRefreshFailure('TikTok', creds);
 		const tok = tokenFields(text);
 		if (!tok.accessToken) {
 			const { code } = parseTiktokError(text);
-			if (res.ok && !code) return creds;
+			if (res.ok && !code) return credentialsAfterRefreshFailure('TikTok', creds);
 			throw new ProviderError(
 				`TikTok token refresh rejected${code ? ` (${code})` : ''} — reconnect`,
 				{

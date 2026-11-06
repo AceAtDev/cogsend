@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { draftExcerpt } from '#lib/domain/excerpt.js';
 import { UNBRANDED_SLUG } from '#lib/domain/channel-keys.js';
+import { previewContent, previewPhotoTitle } from './preview-content.js';
 import {
 	AWAITING_REVIEW,
 	parseReviewNote,
@@ -200,6 +201,10 @@ export type ReviewDelivery = {
 	scheduledFor: number | null;
 	timing: ReviewTiming;
 	text: string;
+	previewTitle: string | null;
+	previewSegments?: string[];
+	previewSegmentIndices?: number[];
+	displayName: string | null;
 	connectionStatus: string;
 };
 
@@ -222,6 +227,7 @@ export type ReviewCard = {
 		width: number | null;
 		height: number | null;
 		altText: string | null;
+		segmentIndex?: number;
 		meta: Record<string, unknown> | null;
 	}>;
 };
@@ -323,7 +329,10 @@ export async function loadReviewQueue(
 	const draftIds = [...new Set(rows.map((r) => r.draftId))];
 
 	const media = new Map<string, ReviewCard['media']>();
-	const variants = new Map<string, Array<{ id: string; platform: string; body: string | null }>>();
+	const variants = new Map<
+		string,
+		Array<{ id: string; platform: string; body: string | null; optionsJson: string | null }>
+	>();
 	for (const chunk of chunkIds(draftIds, ID_CHUNK)) {
 		const [mediaRows, variantRows] = (await batchQueries(db, [
 			db
@@ -346,7 +355,8 @@ export async function loadReviewQueue(
 					id: draftVariants.id,
 					draftId: draftVariants.draftId,
 					platform: draftVariants.platform,
-					body: draftVariants.body
+					body: draftVariants.body,
+					optionsJson: draftVariants.optionsJson
 				})
 				.from(draftVariants)
 				.where(inArray(draftVariants.draftId, chunk))
@@ -363,7 +373,13 @@ export async function loadReviewQueue(
 				segmentIndex: number;
 				metaJson: string | null;
 			}>,
-			Array<{ id: string; draftId: string; platform: string; body: string | null }>
+			Array<{
+				id: string;
+				draftId: string;
+				platform: string;
+				body: string | null;
+				optionsJson: string | null;
+			}>
 		];
 		mediaRows.sort((a, b) => a.segmentIndex - b.segmentIndex || a.sortOrder - b.sortOrder);
 		for (const m of mediaRows)
@@ -376,6 +392,7 @@ export async function loadReviewQueue(
 					width: m.width,
 					height: m.height,
 					altText: m.altText,
+					segmentIndex: m.segmentIndex,
 					meta: m.metaJson ? parseJson<Record<string, unknown>>(m.metaJson, {}) : null
 				}
 			]);
@@ -429,6 +446,7 @@ export async function loadReviewQueue(
 				? variants.get(row.draftId)?.find((v) => v.id === row.variantId)
 				: undefined) ?? variants.get(row.draftId)?.find((v) => v.platform === channel.platform);
 		const at = row.scheduledFor?.getTime() ?? null;
+		const options = parseJson<Record<string, unknown>>(variant?.optionsJson, {});
 		if (at === null || (card.scheduledFor !== null && at < card.scheduledFor))
 			card.scheduledFor = at;
 		card.timing = reviewTiming(card.scheduledFor, now);
@@ -444,7 +462,10 @@ export async function loadReviewQueue(
 			status: row.status,
 			scheduledFor: at,
 			timing: reviewTiming(row.scheduledFor, now),
-			text: variant?.body?.trim() ? variant.body : row.baseBody,
+			text: variant?.body ?? row.baseBody,
+			previewTitle: previewPhotoTitle(channel.platform, options, row.connectionId, card.media),
+			...previewContent(variant?.body ?? row.baseBody, options, card.media, channel.platform),
+			displayName: channel.displayName,
 			connectionStatus: channel.status
 		});
 	}

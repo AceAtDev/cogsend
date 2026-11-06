@@ -124,7 +124,13 @@ process.exit(0);
 		const run = spawnSync('node', ['deploy.mjs'], {
 			cwd: out,
 			encoding: 'utf8',
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env }
+			env: {
+				...process.env,
+				PATH: `${bin}:${process.env.PATH}`,
+				// The fixture must not inherit a repository above the temp directory.
+				GIT_CEILING_DIRECTORIES: tmp,
+				...env
+			}
 		});
 		const calls = existsSync(log)
 			? readFileSync(log, 'utf8')

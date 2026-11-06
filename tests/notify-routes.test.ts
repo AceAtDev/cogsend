@@ -175,7 +175,7 @@ describe('recipients', () => {
 		expect(all.body.recipient.subscriptions).toEqual([
 			'digest',
 			'failures',
-		'published',
+			'published',
 			'review',
 			'connections',
 			'paused'

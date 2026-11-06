@@ -470,6 +470,10 @@ export type CalendarItem = {
 	errorMessage: string | null;
 	/** The text this account gets: its platform version, else the post's. */
 	text: string;
+	/** Viewer-facing title, not the scheduler's internal draft label. */
+	previewTitle?: string | null;
+	previewSegments?: string[];
+	previewSegmentIndices?: number[];
 	mediaCount: number;
 };
 
@@ -480,6 +484,7 @@ export type CalendarMedia = {
 	width: number | null;
 	height: number | null;
 	altText: string | null;
+	segmentIndex?: number;
 	meta: Record<string, unknown> | null;
 };
 

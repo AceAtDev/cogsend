@@ -2,6 +2,7 @@
 	import { ExternalLink, PenLine, RotateCcw, ShieldCheck, X } from '@lucide/svelte';
 	import CopyButton from '#lib/components/CopyButton.svelte';
 	import MediaPreview from '#lib/components/MediaPreview.svelte';
+	import PostViewer from '#lib/components/PostViewer.svelte';
 	import MetricsPanel from '#lib/components/MetricsPanel.svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import { dialogFocus } from '#lib/components/dialog-focus.js';
@@ -47,6 +48,7 @@
 	const shownMedia = $derived(media.filter((m) => m.storageKey));
 
 	let picking = $state(false);
+	let viewerIndex = $state<number | null>(null);
 	let when = $state('');
 	let pickError = $state<string | null>(null);
 
@@ -85,7 +87,11 @@
 		aria-labelledby="calendar-detail-title"
 		data-testid="calendar-detail"
 		class="flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-[1.5rem] border border-stone-200/80 bg-white shadow-[0_16px_40px_-12px_rgb(28_25_23/0.25)] md:max-h-none md:w-[420px] md:rounded-none md:rounded-l-[1.5rem]"
-		use:dialogFocus={{ onEscape: onClose }}
+		use:dialogFocus={{
+			onEscape: () => {
+				if (viewerIndex === null) onClose();
+			}
+		}}
 	>
 		<div class="flex items-start gap-3 border-b border-stone-100 px-5 pt-5 pb-4">
 			<div class="min-w-0 flex-1">
@@ -182,6 +188,7 @@
 					items={shownMedia.map((m) => ({ ...m, meta: m.meta as never }))}
 					maxHeight={220}
 					extra={Math.max(0, shownMedia.length - 4)}
+					onOpen={(index) => (viewerIndex = index)}
 				/>
 			{/if}
 
@@ -291,3 +298,16 @@
 		{/if}
 	</div>
 </div>
+
+<PostViewer
+	open={viewerIndex !== null}
+	onClose={() => (viewerIndex = null)}
+	items={shownMedia.map((m) => ({ ...m, meta: m.meta as never }))}
+	platform={item.channel.platform}
+	content={item.text}
+	segments={item.previewSegments}
+	segmentIndices={item.previewSegmentIndices}
+	title={item.previewTitle}
+	account={{ displayName: item.channel.displayName, handle: item.channel.handle }}
+	initialIndex={viewerIndex ?? 0}
+/>

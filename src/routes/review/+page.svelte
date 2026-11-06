@@ -12,12 +12,14 @@
 	} from '@lucide/svelte';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import MediaPreview from '#lib/components/MediaPreview.svelte';
+	import PostViewer from '#lib/components/PostViewer.svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import { sessionExpiredIfUnauthorized } from '#lib/components/session-expired.js';
 	import { showToast } from '#lib/components/toast.svelte.js';
 	import { formatDateTime, fromZonedInputValue, toZonedInputValue } from '#lib/domain/calendar.js';
 	import { displayAt } from '#lib/domain/channel-keys.js';
 	import { MAX_REVIEW_NOTE } from '#lib/domain/review.js';
+	import { cancelReviewDeliveries } from '#lib/domain/review-cancel.js';
 	import { formatRelativeTime } from '#lib/domain/relative-time.js';
 	import type { PageProps } from './$types';
 
@@ -37,6 +39,10 @@
 	let retimeError = $state<string | null>(null);
 	let confirmBulk = $state<{ label: string; ids: string[] } | null>(null);
 	let showRejected = $state(false);
+	let viewer = $state<{ card: Card; deliveryId: string; index: number } | null>(null);
+	const viewerDelivery = $derived(
+		viewer?.card.deliveries.find((d) => d.deliveryId === viewer?.deliveryId)
+	);
 
 	const brandKey = (g: Group) => g.brand.id ?? 'unbranded';
 	const cardKey = (g: Group, c: Card) => `${brandKey(g)}:${c.postId}:${c.status}`;
@@ -139,13 +145,34 @@
 		if (await approve(idsOf(card), key, at)) retiming = null;
 	}
 
-	function cancel(card: Card, key: string) {
-		return post(
-			'/api/targets/bulk',
-			{ op: 'cancel', ids: idsOf(card).slice(0, 10) },
-			key,
-			'Cancelled'
-		);
+	async function cancel(card: Card, key: string) {
+		busyKey = key;
+		try {
+			const outcome = await cancelReviewDeliveries(idsOf(card), async (ids) => {
+				const res = await fetch('/api/targets/bulk', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ op: 'cancel', ids })
+				});
+				if (sessionExpiredIfUnauthorized(res))
+					throw new Error('Your session expired — sign in again');
+				const out = await res.json().catch(() => ({}));
+				if (!res.ok) throw new Error(out.error || 'Could not cancel these deliveries');
+				return out;
+			});
+			if (outcome.failures.length) {
+				showToast(
+					`Cancelled ${outcome.cancelled}; ${outcome.failures.length} not cancelled: ${[...new Set(outcome.failures)].join('; ')}`,
+					'error'
+				);
+			} else {
+				showToast(`Cancelled ${outcome.cancelled} deliver${outcome.cancelled === 1 ? 'y' : 'ies'}`);
+			}
+			await invalidateAll();
+			return outcome.failures.length === 0;
+		} finally {
+			busyKey = null;
+		}
 	}
 
 	const pill =
@@ -345,9 +372,22 @@
 										items={shown.map((m) => ({ ...m, meta: m.meta as never }))}
 										maxHeight={240}
 										extra={Math.max(0, shown.length - 4)}
+										onOpen={(index) =>
+											(viewer = { card, deliveryId: card.deliveries[0].deliveryId, index })}
 									/>
 								</div>
 							{/if}
+							<div class="mt-3 flex flex-wrap gap-2" aria-label="Preview by account">
+								{#each card.deliveries as d (d.deliveryId)}
+									<button
+										type="button"
+										class="rounded-full border border-stone-200 px-3 py-2 text-[12px] font-bold text-stone-700 hover:bg-stone-100"
+										onclick={() => (viewer = { card, deliveryId: d.deliveryId, index: 0 })}
+									>
+										Preview {d.platformName}{d.handle ? ` ${displayAt(d.handle)}` : ''}
+									</button>
+								{/each}
+							</div>
 
 							{#if rejecting === key}
 								<form
@@ -542,3 +582,20 @@
 	}}
 	onCancel={() => (confirmBulk = null)}
 />
+
+{#if viewer && viewerDelivery}
+	<PostViewer
+		open={true}
+		onClose={() => (viewer = null)}
+		items={viewer.card.media
+			.filter((m) => m.storageKey)
+			.map((m) => ({ ...m, meta: m.meta as never }))}
+		platform={viewerDelivery.platform}
+		content={viewerDelivery.text}
+		segments={viewerDelivery.previewSegments}
+		segmentIndices={viewerDelivery.previewSegmentIndices}
+		title={viewerDelivery.previewTitle}
+		account={{ displayName: viewerDelivery.displayName, handle: viewerDelivery.handle }}
+		initialIndex={viewer.index}
+	/>
+{/if}

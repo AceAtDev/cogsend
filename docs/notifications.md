@@ -15,7 +15,7 @@ Everything here is per account: on an instance with [several users](multi-user.m
 | Account needs reconnecting | Soon after an account expires or loses access                                           |
 | Paused brand reminder      | With the digest, while a brand is paused; a reminder-only recipient gets just that line |
 
-The digest lists the posts planned for today grouped by brand, what was published and what failed yesterday, and what needs you now (failed posts waiting for a retry, accounts to reconnect, posts waiting for review). Sections for features your instance does not have yet are left out.
+The digest is a brief: attention items first, then Today and Yesterday with up to three thumbnail cards each and accurate totals. Links open each post or the full list. TikTok inbox drafts are labeled separately from live posts. Empty attention sections are omitted; the weekly highlight shows only the best post with positive engagement and skips zero metrics. The immediate on-post email is unchanged.
 
 Alerts are batched: at most one email per kind every 15 minutes. Whatever happens in between goes out together in the next one. A recipient hears only about what happens after they were added, not about older failures.
 

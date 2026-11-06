@@ -4,6 +4,8 @@
 	export type PreviewItem = MediaShape & {
 		id: string;
 		altText: string | null;
+		/** Thread post this attachment belongs to (zero-based). */
+		segmentIndex?: number | null;
 		/** A local copy shown before (or instead of) the stored one. */
 		previewUrl?: string;
 	};
@@ -21,7 +23,7 @@
 
 <script lang="ts">
 	import { Play } from '@lucide/svelte';
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import {
 		aspectOf,
 		coverUrl,
@@ -41,6 +43,7 @@
 		extra = 0,
 		toolbar,
 		testId,
+		onOpen,
 		mediaBase = MEDIA_BASE
 	}: {
 		items: PreviewItem[];
@@ -52,6 +55,8 @@
 		extra?: number;
 		toolbar?: Snippet<[PreviewItem]>;
 		testId?: string;
+		/** Open the full post viewer at this attachment; leaves composer behavior unchanged when absent. */
+		onOpen?: (index: number) => void;
 		/** Where the files are served from; a preview link has its own route. */
 		mediaBase?: string;
 	} = $props();
@@ -62,6 +67,10 @@
 	// A video becomes a <video> only once someone asks to play it, so a list
 	// of posts never downloads one nobody watches.
 	let playing = $state<string | null>(null);
+	let interactive = $state(false);
+	onMount(() => {
+		interactive = true;
+	});
 
 	const shown = $derived(items.slice(0, 4));
 	const grid = $derived(gridFor(shown.length));
@@ -108,7 +117,8 @@
 				class="group/play relative block h-full w-full bg-stone-900"
 				aria-label={`Play ${label(m, i)}`}
 				data-testid="media-play-{m.id}"
-				onclick={() => (playing = m.id)}
+				disabled={!interactive}
+				onclick={() => (onOpen ? onOpen(i) : (playing = m.id))}
 			>
 				{#if cover}
 					<img
@@ -136,6 +146,23 @@
 				{/if}
 			</button>
 		{/if}
+	{:else if onOpen}
+		<button
+			type="button"
+			class="block h-full w-full"
+			aria-label={`Open post preview, ${label(m, i)}`}
+			disabled={!interactive}
+			onclick={() => onOpen?.(i)}
+		>
+			<img
+				src={m.previewUrl || imageUrl(m, mediaBase)}
+				alt={label(m, i)}
+				loading="lazy"
+				decoding="async"
+				onload={(e) => measure(m, e.currentTarget as HTMLImageElement)}
+				class="h-full w-full {fit === 'contain' ? 'object-contain' : 'object-cover'}"
+			/>
+		</button>
 	{:else}
 		<img
 			src={m.previewUrl || imageUrl(m, mediaBase)}

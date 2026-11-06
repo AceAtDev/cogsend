@@ -68,6 +68,8 @@ export const INTROSPECTION_SQL = `SELECT
   (SELECT group_concat(name, ' ') FROM pragma_table_info('connections')) AS connections_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('brands')) AS brands_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('publish_targets')) AS publish_targets_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('notification_settings')) AS notification_settings_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('notification_alerts')) AS notification_alerts_cols,
   (SELECT group_concat(name || ':' || "unique", ' ') FROM pragma_index_list('publish_targets')) AS publish_targets_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('oauth_pending')) AS oauth_pending_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('mfa_challenges')) AS mfa_challenges_idx,
@@ -99,7 +101,9 @@ export function readState(row) {
 		'draft_media',
 		'connections',
 		'brands',
-		'publish_targets'
+		'publish_targets',
+		'notification_settings',
+		'notification_alerts'
 	]) {
 		columns.set(table, new Set(list(row?.[`${table}_cols`])));
 	}
@@ -216,6 +220,16 @@ export function satisfiedMigrations(state) {
 		[
 			'0028_insights_last_published.sql',
 			idx('publish_targets', 'publish_targets_conn_status_updated_idx')
+		],
+		[
+			'0029_notification_recovery.sql',
+			all(
+				col('notification_alerts', 'cursor_id'),
+				col('notification_settings', 'digest_progress_on'),
+				col('notification_settings', 'digest_sent_to'),
+				col('notification_settings', 'digest_claim_token'),
+				col('notification_settings', 'digest_claimed_at')
+			)
 		]
 	]
 		.filter(([, ok]) => ok)

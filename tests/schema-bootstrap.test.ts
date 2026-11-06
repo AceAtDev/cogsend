@@ -78,6 +78,37 @@ async function tableNames(client: Client): Promise<string[]> {
 }
 
 describe('ensureSchema', () => {
+	it('repairs notification recovery columns on an older bootstrap and remains idempotent', async () => {
+		const { client, binding } = await freshDb();
+		try {
+			await client.executeMultiple(INIT_SQL);
+			for (const column of [
+				'digest_progress_on',
+				'digest_sent_to',
+				'digest_claim_token',
+				'digest_claimed_at'
+			])
+				await client.execute(`ALTER TABLE notification_settings DROP COLUMN ${column}`);
+			await client.execute('ALTER TABLE notification_alerts DROP COLUMN cursor_id');
+			await ensureSchema(binding);
+			await ensureSchema(binding);
+			const settings = (await client.execute('PRAGMA table_info(notification_settings)')).rows.map(
+				(row) => row.name
+			);
+			for (const column of [
+				'digest_progress_on',
+				'digest_sent_to',
+				'digest_claim_token',
+				'digest_claimed_at'
+			])
+				expect(settings).toContain(column);
+			expect(
+				(await client.execute('PRAGMA table_info(notification_alerts)')).rows.map((row) => row.name)
+			).toContain('cursor_id');
+		} finally {
+			client.close();
+		}
+	});
 	it('creates the full schema on an empty database', async () => {
 		const { client, binding } = await freshDb();
 		await ensureSchema(binding);

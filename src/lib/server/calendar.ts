@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt } from 'drizzle-orm';
 import {
 	calendarStatus,
 	filteredConnectionIds,
@@ -17,6 +17,7 @@ import {
 	UNBRANDED_SLUG
 } from '#lib/domain/channel-keys.js';
 import { isPlatformId, platformName } from '#lib/domain/platforms.js';
+import { previewContent, previewPhotoTitle } from './preview-content.js';
 import { batchQueries, chunkIds, parseJson, type AppDb } from '#lib/server/db/client.js';
 import {
 	brands,
@@ -218,7 +219,13 @@ export async function loadCalendar(
 		segmentIndex: number;
 		metaJson: string | null;
 	};
-	type VariantRow = { id: string; draftId: string; platform: string; body: string | null };
+	type VariantRow = {
+		id: string;
+		draftId: string;
+		platform: string;
+		body: string | null;
+		optionsJson: string | null;
+	};
 	const media: Record<string, CalendarMedia[]> = {};
 	const variantById = new Map<string, VariantRow>();
 	const variantByDraftPlatform = new Map<string, VariantRow>();
@@ -249,16 +256,11 @@ export async function loadCalendar(
 						id: draftVariants.id,
 						draftId: draftVariants.draftId,
 						platform: draftVariants.platform,
-						body: draftVariants.body
+						body: draftVariants.body,
+						optionsJson: draftVariants.optionsJson
 					})
 					.from(draftVariants)
-					.where(
-						and(
-							inArray(draftVariants.draftId, variantDraftIds),
-							isNotNull(draftVariants.body),
-							ne(draftVariants.body, '')
-						)
-					)
+					.where(inArray(draftVariants.draftId, variantDraftIds))
 			);
 		}
 		const [mediaRows, variantRows = []] = (await batchQueries(db, queries)) as [
@@ -277,6 +279,7 @@ export async function loadCalendar(
 				width: m.width,
 				height: m.height,
 				altText: m.altText,
+				segmentIndex: m.segmentIndex,
 				meta: m.metaJson ? parseJson<Record<string, unknown>>(m.metaJson, {}) : null
 			});
 		}
@@ -292,6 +295,7 @@ export async function loadCalendar(
 			(t.variantId ? variantById.get(t.variantId) : undefined) ??
 			variantByDraftPlatform.get(`${t.draftId}:${conn.platform}`);
 		const status = calendarStatus(t, now);
+		const options = parseJson<Record<string, unknown>>(variant?.optionsJson, {});
 		return {
 			id: t.id,
 			draftId: t.draftId,
@@ -302,7 +306,19 @@ export async function loadCalendar(
 			retrying: status === 'scheduled' && Boolean(t.errorMessage),
 			remoteUrl: t.remoteUrl,
 			errorMessage: status === 'failed' || status === 'scheduled' ? t.errorMessage : null,
-			text: variant?.body || t.baseBody,
+			text: variant?.body ?? t.baseBody,
+			previewTitle: previewPhotoTitle(
+				conn.platform,
+				options,
+				t.connectionId,
+				media[t.draftId] ?? []
+			),
+			...previewContent(
+				variant?.body ?? t.baseBody,
+				options,
+				media[t.draftId] ?? [],
+				conn.platform
+			),
 			mediaCount: media[t.draftId]?.length ?? 0
 		};
 	});

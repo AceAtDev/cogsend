@@ -48,6 +48,7 @@ Hosted schedulers usually charge per channel and keep your posts and tokens on t
 - **Publish or schedule**: see results per account, then cancel, reschedule or retry from Posts
 - **Automatic retries**: temporary failures retry on their own, up to five attempts
 - **Calendar**: every post per account on a week or month grid, colour-coded and filtered by brand, with drag to reschedule
+- **Interactive post previews**: click media in Calendar or Review to inspect the selected account's caption, TikTok photo title, carousel, video or thread in mobile and desktop layouts across all seven platforms. Media retain their original aspect ratio; these are simulations, not guarantees of a platform's final crop or app UI. Opening a preview never approves or publishes a post.
 - **Insights**: published against failed over 7, 30 or 90 days, why posts failed, and how posts performed (likes, shares, views) per brand and channel on Bluesky, Mastodon, TikTok and LinkedIn pages
 - **Link previews**: cards for URLs in a post
 - **Secure by default**: encrypted credentials and 2FA on the admin account

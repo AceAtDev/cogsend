@@ -21,7 +21,13 @@ import type {
 	PublishResult,
 	ValidationIssue
 } from './types';
-import { ProviderError, PublishPartialError, unconfirmedPostError } from './types';
+import {
+	ProviderError,
+	PublishPartialError,
+	unconfirmedPostError,
+	credentialsAfterRefreshFailure,
+	requireThreadParent
+} from './types';
 import { X_MAX_GIF_BYTES, X_MAX_IMAGE_BYTES } from '#lib/domain/media-limits.js';
 import { providerFetch } from './timed-fetch';
 
@@ -734,6 +740,7 @@ export const xProvider: PlatformProvider = {
 		const resumeIds = opts?.resume?.segmentIds ?? [];
 		const startAt = Math.min(resumeIds.length, segments.length);
 		const segmentIds = resumeIds.slice(0, startAt);
+		requireThreadParent('X', segmentIds, segments.length, opts?.resume?.remoteUrl);
 		let replyTo = segmentIds.at(-1);
 		let firstUrl = opts?.resume?.remoteUrl || undefined;
 
@@ -797,19 +804,8 @@ export const xProvider: PlatformProvider = {
 					segmentIds: [...segmentIds],
 					remoteUrl: firstUrl ?? opts?.resume?.remoteUrl ?? null
 				});
-				if (id) {
-					replyTo = id;
-				} else if (i < segments.length - 1) {
-					// A reply needs the parent's id: stop here with what was posted,
-					// so the retry resumes after this segment rather than reposting.
-					throw new PublishPartialError(
-						'X accepted the post but returned no id — the rest of the thread cannot be linked',
-						{
-							segmentIds: [...segmentIds],
-							remoteUrl: firstUrl ?? opts?.resume?.remoteUrl ?? null
-						}
-					);
-				}
+				requireThreadParent('X', segmentIds, segments.length, firstUrl ?? opts?.resume?.remoteUrl);
+				if (id) replyTo = id;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				if (segmentIds.length) {
@@ -860,7 +856,7 @@ export const xProvider: PlatformProvider = {
 					code: 'auth'
 				});
 			}
-			return creds;
+			return credentialsAfterRefreshFailure('X', creds);
 		}
 		if (!tok.access_token) {
 			throw new ProviderError('X token refresh returned no token — reconnect', {

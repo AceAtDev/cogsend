@@ -29,16 +29,14 @@ describe('email thumbnails', () => {
 			updatedAt: now
 		});
 		const draftId = newId();
-		await db
-			.insert(drafts)
-			.values({
-				id: draftId,
-				userId,
-				baseBody: 'x',
-				status: 'draft',
-				createdAt: now,
-				updatedAt: now
-			});
+		await db.insert(drafts).values({
+			id: draftId,
+			userId,
+			baseBody: 'x',
+			status: 'draft',
+			createdAt: now,
+			updatedAt: now
+		});
 		for (const [key, mime] of [
 			[IMAGE, 'image/png'],
 			[VIDEO, 'video/mp4'],

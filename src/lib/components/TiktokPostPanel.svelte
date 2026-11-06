@@ -9,6 +9,7 @@
 		TIKTOK_DISCLOSURE_MISSING_MESSAGE,
 		TIKTOK_DRAFT_NOTE,
 		TIKTOK_PROCESSING_NOTE,
+		TIKTOK_PHOTO_TITLE_MAX,
 		tiktokDisclosureNotice,
 		tiktokDurationProblem,
 		tiktokNeedsBrandedConsent,
@@ -31,6 +32,7 @@
 		choices,
 		creators,
 		caption,
+		photoPost = false,
 		video = null,
 		disabled = false,
 		onChange,
@@ -40,6 +42,7 @@
 		choices: Record<string, TiktokPostChoice>;
 		creators: Record<string, TiktokCreatorState>;
 		caption: string;
+		photoPost?: boolean;
 		video?: { src: string; poster: string | null; durationMs: number | null } | null;
 		disabled?: boolean;
 		onChange: (connectionId: string, choice: TiktokPostChoice) => void;
@@ -107,6 +110,24 @@
 			data-testid="tiktok-account-{account.id}"
 			aria-busy={!state || state.status === 'loading'}
 		>
+			{#if photoPost}
+				<label class="mb-3 flex flex-col gap-1.5 text-[11px] font-bold text-stone-500">
+					TikTok photo title for {account.displayName || displayHandle(account.handle)}
+					<input
+						type="text"
+						data-testid="tiktok-title-{account.id}"
+						value={choice.title ?? ''}
+						maxlength={TIKTOK_PHOTO_TITLE_MAX}
+						{disabled}
+						oninput={(e) => update(account.id, { title: e.currentTarget.value })}
+						class="rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-1.5 text-[12px] font-bold text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none pointer-coarse:text-base"
+					/>
+					<span class="font-medium"
+						>Shown above the caption, including in an inbox draft. The internal post title is not
+						sent to TikTok.</span
+					>
+				</label>
+			{/if}
 			{#if !state || state.status === 'loading'}
 				<p class="flex items-center gap-2 text-[12px] font-medium text-stone-500">
 					<LoaderCircle class="h-3.5 w-3.5 animate-spin" /> Reading the TikTok account's settings…

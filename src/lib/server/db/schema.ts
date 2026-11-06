@@ -433,8 +433,12 @@ export const notificationSettings = sqliteTable('notification_settings', {
 	smtpPort: integer('smtp_port').notNull().default(465),
 	/** Minutes after local midnight, in the account's time zone. */
 	digestMinute: integer('digest_minute').notNull().default(480),
-	/** The local date (YYYY-MM-DD) of the last digest claimed. */
+	/** The local date (YYYY-MM-DD) of the last completed digest. */
 	lastDigestOn: text('last_digest_on'),
+	digestProgressOn: text('digest_progress_on'),
+	digestSentTo: text('digest_sent_to').notNull().default('[]'),
+	digestClaimToken: text('digest_claim_token'),
+	digestClaimedAt: integer('digest_claimed_at', { mode: 'timestamp_ms' }),
 	lastTestAt: integer('last_test_at', { mode: 'timestamp_ms' }),
 	lastSentAt: integer('last_sent_at', { mode: 'timestamp_ms' }),
 	lastError: text('last_error'),
@@ -468,8 +472,9 @@ export const notificationAlerts = sqliteTable(
 			.notNull()
 			.references(() => users.id, { onDelete: 'cascade' }),
 		kind: text('kind').notNull(),
-		/** Events at or before this instant have been reported. */
+		/** Events through (cursorAt, cursorId), ordered lexicographically, were reported. */
 		cursorAt: integer('cursor_at', { mode: 'timestamp_ms' }).notNull(),
+		cursorId: text('cursor_id').notNull().default(''),
 		lastSentAt: integer('last_sent_at', { mode: 'timestamp_ms' })
 	},
 	(t) => [primaryKey({ columns: [t.userId, t.kind] })]

@@ -464,16 +464,20 @@ describe('daily digest', () => {
 		expect(digest!.recipients).toEqual(['boss@example.com']);
 		expect(subjectOf(digest!.data)).toBe('CogSend: your day, Saturday 31 October');
 		const text = textPart(digest!.data);
-		expect(text).toContain('PLANNED TODAY, SATURDAY 31 OCTOBER');
-		expect(text).toContain('2 posts across 1 brand.');
-		expect(text).toContain('09:30 · Mastodon acme@mastodon.example: “Morning post”');
-		expect(text).toContain('23:30 · Mastodon acme@mastodon.example: “Late post”');
+		expect(text).toContain('TODAY');
+		expect(text).toContain('2 posts planned.');
+		expect(text).toContain('[09:30 · SCHEDULED] Mastodon acme@mastodon.example');
+		expect(text).toContain('Morning post');
+		expect(text).toContain('[23:30 · SCHEDULED] Mastodon acme@mastodon.example');
+		expect(text).toContain('Late post');
 		expect(text).not.toContain('Tomorrow post');
-		expect(text).toContain('YESTERDAY, FRIDAY 30 OCTOBER');
-		expect(text).toContain('1 published, 1 failed.');
+		expect(text).toContain('YESTERDAY');
+		expect(text).toContain('1 published · 1 failed');
 		expect(text).toContain('https://mastodon.example/@acme/1');
-		expect(text).toContain('NEEDS YOUR ATTENTION');
-		expect(text).toContain('1 post failed and needs a retry or a new time');
+		expect(text).toContain('NEEDS ATTENTION');
+		expect(text).toContain('1 failed post to retry');
+		expect(htmlPart(digest!.data)).toContain('Daily brief');
+		expect(htmlPart(digest!.data)).not.toContain('<ul');
 		// Nothing measured and nothing paused: those blocks are simply absent.
 		expect(text).not.toMatch(/best posts|paused/i);
 
@@ -515,8 +519,9 @@ describe('daily digest', () => {
 		expect(textPart(digests()[0].data)).toContain('(America/New_York)');
 	});
 
-	it('takes extra sections from the hooks and leaves out one that fails', async () => {
-		await seedDay();
+	it('takes extra sections from hooks and retries without sending incomplete digests when a section fails', async () => {
+		const owner = await seedDay();
+		let fail = true;
 		const extra: DigestSection = {
 			id: 'extra',
 			requires: 'digest',
@@ -534,7 +539,8 @@ describe('daily digest', () => {
 			requires: 'digest',
 			cost: 1,
 			async build() {
-				throw new Error('no such column: metrics.likes');
+				if (fail) throw new Error('temporary query failure');
+				return null;
 			}
 		};
 		const reminder: DigestSection = {
@@ -557,6 +563,19 @@ describe('daily digest', () => {
 		const out = captureConsole('error');
 		await runNotifications(db, env, { now: MORNING, connect: fake.connect, hooks });
 		expect(out).toHaveBeenCalled();
+		expect(
+			fake.delivered.filter((mail) => /your day|reminder/.test(subjectOf(mail.data)))
+		).toHaveLength(0);
+		const state = (
+			await db.select().from(notificationSettings).where(eq(notificationSettings.userId, owner.id))
+		)[0];
+		expect(state).toMatchObject({ lastDigestOn: null, digestSentTo: '[]', digestClaimToken: null });
+		fail = false;
+		await runNotifications(db, env, {
+			now: new Date(MORNING.getTime() + 60_000),
+			connect: fake.connect,
+			hooks
+		});
 		const digest = fake.delivered.find((d) => d.recipients.includes('boss@example.com'))!;
 		expect(textPart(digest.data)).toContain('CAMPAIGN NOTES');
 		expect(textPart(digest.data)).toContain('42 likes');
@@ -609,8 +628,9 @@ describe('daily digest', () => {
 		const digest = textPart(
 			fake.delivered.find((d) => d.recipients.includes('boss@example.com'))!.data
 		);
-		expect(digest).toContain('BEST POSTS THIS WEEK');
-		expect(digest.indexOf('Loud post')).toBeLessThan(digest.indexOf('Quiet post'));
+		expect(digest).toContain('BEST POST THIS WEEK');
+		expect(digest).toContain('Loud post');
+		expect(digest).not.toContain('Quiet post');
 		expect(digest).toContain('40 ');
 		expect(digest).toContain('https://mastodon.example/@acme/2');
 		// The pause is a reminder subscription, not part of the plain digest.
@@ -672,6 +692,304 @@ describe('subrequest budget', () => {
 		});
 		expect(result.notifications.alerts).toBe(1);
 		expect(textPart(fake.delivered[0].data)).toContain('from the tick');
+	});
+});
+
+describe('notification recovery regressions', () => {
+	const digestHooks: NotificationHooks = {
+		alertSources: [],
+		digestSections: [
+			{
+				id: 'day',
+				requires: 'digest',
+				cost: 0,
+				async build() {
+					return { id: 'day', heading: 'Day', groups: [] };
+				}
+			},
+			{
+				id: 'paused',
+				requires: 'paused',
+				cost: 0,
+				async build() {
+					return {
+						id: 'paused',
+						heading: 'Paused',
+						groups: [{ lines: [{ text: 'Paused brand' }] }]
+					};
+				}
+			}
+		]
+	};
+	const readers = [
+		{ email: 'daily@example.com', subscriptions: ['digest'] as NotificationKind[] },
+		{ email: 'reminder@example.com', subscriptions: ['paused'] as NotificationKind[] }
+	];
+	it('processes more than one composite-cursor account batch within D1 parameter limits', async () => {
+		for (let i = 0; i < 17; i++) {
+			const owner = await account({
+				email: `batch-${i}@localhost`,
+				recipients: [{ email: `ops-${i}@example.com`, subscriptions: ['failures'] }]
+			});
+			await delivery(owner, {
+				status: 'failed',
+				body: `batch-${i}`,
+				updatedAt: new Date(EVENING.getTime() - 1000)
+			});
+		}
+		t.reset();
+		const fake = fakeSmtp();
+		const result = await runNotifications(db, env, { now: EVENING, connect: fake.connect });
+		expect(result.alerts).toBe(17);
+		expect(fake.delivered).toHaveLength(17);
+		expect(t.maxParams()).toBeLessThanOrEqual(100);
+	});
+	async function state(userId: string) {
+		return (
+			await db.select().from(notificationSettings).where(eq(notificationSettings.userId, userId))
+		)[0];
+	}
+
+	it.each(['published', 'review', 'expired', 'expiring'])(
+		'pages tied %s source rows by stable ID',
+		async (kind) => {
+			const owner = await account({ email: `${kind}@localhost`, recipients: [] });
+			const at = new Date(EVENING.getTime() - 1000);
+			for (let i = 0; i < 5; i++) {
+				if (kind === 'published' || kind === 'review') {
+					await delivery(owner, {
+						status: kind === 'published' ? 'published' : 'awaiting_review',
+						body: `${kind}-${i}`,
+						updatedAt: at,
+						scheduledFor: at
+					});
+				} else {
+					await db.insert(connections).values({
+						id: newId(),
+						userId: owner.id,
+						platform: 'mastodon',
+						handle: `source-${i}`,
+						credentialsEncrypted: 'enc',
+						status: kind === 'expired' ? 'expired' : 'active',
+						metaJson:
+							kind === 'expiring'
+								? JSON.stringify({ expiryWarnedAt: at.getTime(), reconnectBy: EVENING.getTime() })
+								: '{}',
+						createdAt: at,
+						updatedAt: at
+					});
+				}
+			}
+			const source = defaultHooks.alertSources.find(
+				(s) => s.kind === (kind === 'expired' || kind === 'expiring' ? 'connections' : kind)
+			)!;
+			let since = new Date(at.getTime() - 1);
+			let sinceId = '';
+			const seen: string[] = [];
+			for (let page = 0; page < 4; page++) {
+				const events = await source.collect(db, {
+					users: [{ userId: owner.id, since, sinceId }],
+					now: EVENING,
+					appUrl: '',
+					limit: 2
+				});
+				seen.push(...events.map((event) => event.id!));
+				if (events.length) {
+					since = events.at(-1)!.at;
+					sinceId = events.at(-1)!.id!;
+				}
+			}
+			expect(seen).toHaveLength(5);
+			expect(new Set(seen).size).toBe(5);
+		}
+	);
+
+	it.each([false, true])(
+		'drains 125 failures across both page limits without loss or repeats (tied=%s)',
+		async (tied) => {
+			const owner = await account({
+				email: 'burst@localhost',
+				recipients: [{ email: 'ops@example.com', subscriptions: ['failures'] }]
+			});
+			for (let i = 0; i < 125; i++) {
+				await delivery(owner, {
+					status: 'failed',
+					body: `event-${String(i).padStart(3, '0')}`,
+					updatedAt: new Date(EVENING.getTime() - 1000 + (tied ? 0 : i))
+				});
+			}
+			const fake = fakeSmtp();
+			for (let tick = 0; tick < 6; tick++) {
+				await runNotifications(db, env, {
+					now: new Date(EVENING.getTime() + tick * ALERT_WINDOW_MS),
+					connect: fake.connect
+				});
+			}
+			expect(fake.delivered).toHaveLength(5);
+			const texts = fake.delivered.map((mail) => textPart(mail.data)).join('\n');
+			for (let i = 0; i < 125; i++)
+				expect(texts.match(new RegExp(`event-${String(i).padStart(3, '0')}`, 'g'))).toHaveLength(1);
+		}
+	);
+
+	it('retries a failed digest in the same day and sends again on the next day', async () => {
+		const owner = await account({ email: 'retry@localhost', recipients: [readers[0]] });
+		const log = captureConsole();
+		try {
+			const failed = await runNotifications(db, env, {
+				now: MORNING,
+				hooks: digestHooks,
+				connect: fakeSmtp({ connectError: 'offline' }).connect
+			});
+			expect(failed.failed).toBe(1);
+			expect(await state(owner.id)).toMatchObject({
+				lastDigestOn: null,
+				digestClaimToken: null,
+				digestClaimedAt: null
+			});
+			const fake = fakeSmtp();
+			for (const offset of [60_000, 120_000, 86_400_000])
+				await runNotifications(db, env, {
+					now: new Date(MORNING.getTime() + offset),
+					hooks: digestHooks,
+					connect: fake.connect
+				});
+			expect(fake.delivered).toHaveLength(2);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('persists recipients before a budget stop and resumes only the unsent version', async () => {
+		const owner = await account({ email: 'budget@localhost', recipients: readers });
+		const baseline = t.count();
+		class CountedBudget extends SubrequestBudget {
+			override get remaining() {
+				return super.remaining - (t.count() - baseline);
+			}
+		}
+		const budget = new CountedBudget(10);
+		const fake = fakeSmtp();
+		const first = await runNotifications(db, env, {
+			now: MORNING,
+			hooks: digestHooks,
+			connect: fake.connect,
+			budget
+		});
+		expect(first).toMatchObject({ digests: 1, stopped: 'budget' });
+		expect(fake.delivered).toHaveLength(1);
+		expect(budget.remaining).toBeGreaterThanOrEqual(2);
+		expect(await state(owner.id)).toMatchObject({ lastDigestOn: null, digestClaimToken: null });
+		expect(JSON.parse((await state(owner.id)).digestSentTo)).toEqual(fake.delivered[0].recipients);
+		await runNotifications(db, env, {
+			now: new Date(MORNING.getTime() + 60_000),
+			hooks: digestHooks,
+			connect: fake.connect
+		});
+		expect(fake.delivered).toHaveLength(2);
+		expect(fake.delivered.flatMap((mail) => mail.recipients).sort()).toEqual(
+			readers.map((r) => r.email).sort()
+		);
+		expect((await state(owner.id)).lastDigestOn).toBe('2026-10-31');
+	});
+
+	it('retries only a failed version after another version succeeded', async () => {
+		const owner = await account({ email: 'partial@localhost', recipients: readers });
+		const fake = fakeSmtp();
+		let attempts = 0;
+		const log = captureConsole();
+		try {
+			await runNotifications(db, env, {
+				now: MORNING,
+				hooks: digestHooks,
+				connect: (...args) => {
+					if (++attempts === 2) throw new Error('offline second version');
+					return fake.connect(...args);
+				}
+			});
+			expect(fake.delivered).toHaveLength(1);
+			expect((await state(owner.id)).lastDigestOn).toBeNull();
+			await runNotifications(db, env, {
+				now: new Date(MORNING.getTime() + 60_000),
+				hooks: digestHooks,
+				connect: fake.connect
+			});
+			expect(fake.delivered.flatMap((mail) => mail.recipients).sort()).toEqual(
+				readers.map((r) => r.email).sort()
+			);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('does not duplicate sends when ticks overlap during section building', async () => {
+		await account({ email: 'concurrent@localhost', recipients: [readers[0]] });
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const hooks: NotificationHooks = {
+			alertSources: [],
+			digestSections: [
+				{
+					id: 'day',
+					requires: 'digest',
+					cost: 0,
+					async build() {
+						entered();
+						await gate;
+						return null;
+					}
+				}
+			]
+		};
+		const fake = fakeSmtp();
+		const first = runNotifications(db, env, { now: MORNING, hooks, connect: fake.connect });
+		await started;
+		try {
+			const overlap = await runNotifications(db, env, {
+				now: MORNING,
+				hooks,
+				connect: fake.connect
+			});
+			expect(overlap.digests).toBe(0);
+		} finally {
+			release();
+			await first;
+		}
+		expect(fake.delivered).toHaveLength(1);
+	});
+
+	it('recovers stale leases, but not live leases, and leaves pre-claim budget refusals due', async () => {
+		const owner = await account({ email: 'lease@localhost', recipients: [readers[0]] });
+		const fake = fakeSmtp();
+		await runNotifications(db, env, {
+			now: MORNING,
+			hooks: digestHooks,
+			connect: fake.connect,
+			budget: new SubrequestBudget(6)
+		});
+		expect(await state(owner.id)).toMatchObject({ lastDigestOn: null, digestClaimToken: null });
+		await db
+			.update(notificationSettings)
+			.set({ digestClaimToken: 'crashed', digestClaimedAt: MORNING })
+			.where(eq(notificationSettings.userId, owner.id));
+		await runNotifications(db, env, {
+			now: new Date(MORNING.getTime() + 60_000),
+			hooks: digestHooks,
+			connect: fake.connect
+		});
+		expect(fake.delivered).toHaveLength(0);
+		await runNotifications(db, env, {
+			now: new Date(MORNING.getTime() + ALERT_WINDOW_MS + 1),
+			hooks: digestHooks,
+			connect: fake.connect
+		});
+		expect(fake.delivered).toHaveLength(1);
 	});
 });
 

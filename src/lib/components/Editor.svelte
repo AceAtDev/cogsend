@@ -3536,7 +3536,7 @@
 							value={hiddenQuote(index)?.visible ?? segment}
 							data-segment-index={index}
 							data-testid="segment-input-{index}"
-							readonly={editLocked}
+							readonly={!mounted || editLocked}
 							oninput={(e) => handleSegmentInput(index, e)}
 							onpaste={(e) => handlePaste(e, index)}
 							onblur={() => {
@@ -3867,6 +3867,7 @@
 				choices={tiktokChoices}
 				creators={tiktokCreators}
 				caption={tiktokCaption}
+				photoPost={media.some((m) => (m.mime || '').startsWith('image/')) && !tiktokVideo}
 				video={tiktokVideo}
 				disabled={editLocked}
 				onChange={setTiktokChoice}

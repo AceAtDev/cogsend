@@ -15,6 +15,7 @@ import type {
 	ValidationIssue
 } from './types';
 import {
+	credentialsAfterRefreshFailure,
 	ensureCalls,
 	mediaByteLength,
 	MetricsError,
@@ -704,14 +705,14 @@ export const linkedinProvider: PlatformProvider = {
 		if (!res.ok) {
 			// Auth rejection (revoked/rotated refresh token): fail loud with 401
 			// so publish marks the connection expired. Transients (429/5xx)
-			// return creds so the attempt proceeds with the current token.
+			// can use the current token only while it is still valid.
 			if (res.status === 400 || res.status === 401 || res.status === 403) {
 				throw new ProviderError(`LinkedIn token refresh rejected (${res.status}) — reconnect`, {
 					status: 401,
 					code: 'auth'
 				});
 			}
-			return creds;
+			return credentialsAfterRefreshFailure('LinkedIn', creds);
 		}
 		const data = (await res.json()) as {
 			access_token?: string;

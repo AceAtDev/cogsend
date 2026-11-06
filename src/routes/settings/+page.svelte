@@ -21,6 +21,10 @@
 	import { tickAdvice, type TickAdvice } from '#lib/domain/scheduler-status.js';
 
 	let { data } = $props();
+	let interactive = $state(false);
+	onMount(() => {
+		interactive = true;
+	});
 	const isAdmin = $derived(data.user?.role === 'admin');
 	let msg = $state<string | null>(null);
 	let err = $state<string | null>(null);
@@ -891,6 +895,7 @@
 								isPictureDialogOpen = true;
 							}}
 							aria-label={profilePictureUrl.trim() ? 'Edit profile picture' : 'Add profile picture'}
+							disabled={!interactive}
 							title="Edit profile picture"
 							class="absolute -right-0.5 -bottom-0.5 flex h-8 w-8 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 shadow-sm transition-colors hover:bg-stone-100 hover:text-stone-900 disabled:opacity-50"
 						>

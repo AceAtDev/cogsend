@@ -168,7 +168,9 @@ A TikTok post needs the choices TikTok's guidelines leave to the creator, made f
 - With `disclose: true`, set `yourBrand` (promotes your own business), `brandedContent` (a paid partnership), or both. Branded content cannot be `SELF_ONLY`.
 - A video longer than the account may post is refused.
 
-`{"draft": true}` on its own sends the video to the creator's TikTok inbox instead: none of the other choices apply, the caption does not go with it, and the creator finishes and posts it in the TikTok app. TikTok holds at most 5 waiting drafts from apps a day.
+`{"draft": true}` sends the media to the creator's TikTok inbox instead: the creator finishes and posts it in the TikTok app. A video arrives without its caption; a photo post keeps its caption and any supplied photo title. TikTok holds at most 5 waiting drafts from apps a day.
+
+For photos, use `posts[].tiktok.title` in `schedule_posts`, or `tiktok.title` in `save_draft`, for the public title above the caption (at most 90 characters). It works with `{"draft": true, "title": "Protein snacks"}` too. `posts[].title` (or the top-level `save_draft` title) is only the internal calendar label: it is never used as a fallback public title. The post text is the caption. The composer exposes a separate TikTok photo title for each selected account. To verify saved choices, call `get_post` with `response_format: "detailed"`: TikTok variants include `tiktok`, keyed by connection id, with the saved title and draft/direct choices. These are saved settings, not proof of what the TikTok app ultimately displays.
 
 A call with no choices answers `code: "tiktok_privacy_required"` with `tiktokMissing`, each TikTok channel and the levels it offers, so the agent can ask the operator; a choice TikTok would refuse answers `code: "tiktok_options"`; `tiktok` on a post with no TikTok channel is refused. The preview shows each TikTok delivery's choices and the consent line the operator agrees to by posting (TikTok's Music Usage Confirmation, and its Branded Content Policy for branded content). The choices are kept on the draft, as the composer and the [REST API](api.md#publishing-behaviour) keep them.
 
