@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import MediaInspector from './MediaInspector.svelte';
+	import './post-feed-legibility.css';
 	import {
 		ChevronLeft,
 		ChevronRight,
@@ -68,11 +70,15 @@
 	let natural = $state<Record<string, number>>({});
 	let segment = $state(0);
 	let device = $state<'mobile' | 'desktop'>('mobile');
+	let presentation = $state<'media' | 'feed'>('media');
+	let showOverlays = $state(false);
 	const items = $derived(segmentItems(allItems, segment, segments.length, segmentIndices));
 	const shownContent = $derived(segments.length > 0 ? (segments[segment] ?? '') : content);
 	const active = $derived(items[clampSlide(index, items.length)]);
 	const isReel = $derived(platform === 'instagram' && items.length === 1 && isVideoMedia(items[0]));
-	const gridMode = $derived(profile.layout === 'grid' && items.length > 1 && !enlarged);
+	const gridMode = $derived(
+		presentation === 'feed' && profile.layout === 'grid' && items.length > 1 && !enlarged
+	);
 	const gridItems = $derived(items.slice(0, 4));
 	const grid = $derived(gridFor(gridItems.length));
 	const longCaption = $derived(Array.from(shownContent).length > profile.captionLimit);
@@ -86,6 +92,8 @@
 			index = position.index;
 			expanded = false;
 			enlarged = false;
+			presentation = 'media';
+			showOverlays = false;
 		}
 	});
 
@@ -114,6 +122,7 @@
 		// A native top-layer modal owns these keys, including when another modal is behind it.
 		event.stopPropagation();
 		if (
+			(event.target instanceof HTMLElement && event.target.closest('[data-zoomed="true"]')) ||
 			gridMode ||
 			event.target instanceof HTMLVideoElement ||
 			event.target instanceof HTMLSelectElement
@@ -133,6 +142,8 @@
 	<dialog
 		use:modal
 		class="post-viewer"
+		class:inspection={presentation === 'media'}
+		class:feed-safe={presentation === 'feed' && !showOverlays}
 		class:tiktok={platform === 'tiktok'}
 		class:linkedin={platform === 'linkedin'}
 		class:instagram-reel={isReel}
@@ -154,249 +165,305 @@
 			<div class="viewer-bar">
 				<div>
 					<h2 id={`${uid}-title`}>{profile.name} preview</h2>
-					<p>Original-media simulation · app layout and provider crops may vary</p>
+					<p>
+						{presentation === 'media'
+							? 'Original media. Nothing covering it.'
+							: 'Feed simulation. App layout and crops may vary.'}
+					</p>
 				</div>
 				<button type="button" class="icon-button" aria-label="Close post preview" onclick={onClose}
 					><X size={20} /></button
 				>
 			</div>
-			<div class="device-toolbar" role="group" aria-label="Preview device">
-				<button type="button" aria-pressed={device === 'mobile'} onclick={() => (device = 'mobile')}
-					>Mobile</button
-				>
-				<button
-					type="button"
-					aria-pressed={device === 'desktop'}
-					onclick={() => (device = 'desktop')}>Desktop</button
-				>
-				<span>{device === 'mobile' ? 'Mobile feed' : 'Desktop feed'}</span>
+			<div class="device-toolbar" role="group" aria-label="Preview layout">
+				<div class="viewer-control-group" role="group" aria-label="Preview mode">
+					<button
+						type="button"
+						aria-pressed={presentation === 'media'}
+						onclick={() => (presentation = 'media')}>Media</button
+					>
+					<button
+						type="button"
+						aria-pressed={presentation === 'feed'}
+						onclick={() => (presentation = 'feed')}>Feed</button
+					>
+				</div>
+				{#if presentation === 'feed'}
+					<div class="viewer-control-group" role="group" aria-label="Preview device">
+						<button
+							type="button"
+							aria-pressed={device === 'mobile'}
+							onclick={() => (device = 'mobile')}>Mobile</button
+						>
+						<button
+							type="button"
+							aria-pressed={device === 'desktop'}
+							onclick={() => (device = 'desktop')}>Desktop</button
+						>
+					</div>
+					<span>{device === 'mobile' ? 'Mobile feed' : 'Desktop feed'}</span>
+					<label class="overlay-choice"
+						><input type="checkbox" bind:checked={showOverlays} /> Show overlays</label
+					>
+				{/if}
 			</div>
-			<article class="provider-post" data-platform={platform}>
-				{#if platform === 'tiktok'}<div class="platform-top">
-						<span>Following</span><strong>For You</strong>
-					</div>
-				{:else if platform === 'instagram'}<div class="platform-top instagram-wordmark">
-						{isReel ? 'Reels' : 'Instagram'}
-					</div>
-				{:else if platform === 'threads'}<div class="platform-top">
-						<strong>Threads</strong><span>For you</span>
-					</div>
-				{:else if platform === 'x'}<div class="platform-top">
-						<strong>𝕏</strong><span>For you</span>
-					</div>
-				{:else if platform === 'linkedin'}<div class="platform-top linkedin-wordmark">
-						<strong>in</strong><span>Home</span>
-					</div>
-				{:else if platform === 'mastodon'}<div class="platform-top">
-						<strong>Mastodon</strong><span>Home</span>
-					</div>
-				{:else if platform === 'bluesky'}<div class="platform-top">
-						<strong>Bluesky</strong><span>Following</span>
-					</div>{/if}
-				{#if segments.length > 1}
-					<nav class="thread-nav" aria-label="Thread posts">
-						<label for={`${uid}-segment`}>Post {segment + 1} of thread</label>
-						<select
-							id={`${uid}-segment`}
+			{#if presentation === 'media'}
+				{#if segments.length > 1}<div class="inspector-thread">
+						<label for={`${uid}-inspection-segment`}>Thread post</label><select
+							id={`${uid}-inspection-segment`}
 							value={segment}
-							onchange={(event) => {
-								segment = Number(event.currentTarget.value);
+							onchange={(e) => {
+								segment = Number(e.currentTarget.value);
 								index = 0;
-								expanded = false;
-								enlarged = false;
 							}}
 						>
 							{#each segments as _, i (i)}<option value={i}
 									>Post {i + 1} of {segments.length}</option
 								>{/each}
 						</select>
-					</nav>
-				{/if}
-				<header class="account">
-					{#if account.avatarUrl}<img
-							src={account.avatarUrl}
-							alt=""
-							class:square={profile.avatar === 'square'}
-						/>{:else}<span
-							class="avatar"
-							class:square={profile.avatar === 'square'}
-							aria-hidden="true">{Array.from(name)[0]?.toUpperCase()}</span
-						>{/if}
-					<div>
-						<strong>{name}</strong>{#if account.handle && account.handle !== name}<p>
-								{account.handle}
-							</p>{/if}
-					</div>
-					<span class="provider-label">{profile.name}</span>
-					<MoreHorizontal size={18} aria-hidden="true" />
-				</header>
-				{#if profile.captionFirst}{@render caption()}{/if}
-				{#if items.length}
-					{#if gridMode}
-						<div
-							class="feed-grid"
-							style={`grid-template-rows:repeat(${grid.rows}, minmax(0, 1fr))`}
-							aria-label={`${profile.name} feed media layout`}
-						>
-							{#each gridItems as item, i (item.id)}
-								<button
-									type="button"
-									style={`grid-column:${grid.cells[i].column};grid-row:${grid.cells[i].row}`}
-									onclick={() => {
-										index = i;
-										enlarged = true;
-									}}
-									aria-label={`Enlarge ${isVideoMedia(item) ? 'video' : 'image'} ${i + 1}`}
-								>
-									{#if isVideoMedia(item)}
-										{#if coverUrl(item, mediaBase)}<img
-												src={coverUrl(item, mediaBase)!}
-												alt={item.altText || ''}
-											/>{/if}<span class="video-label">▶ Video</span>
-									{:else}<img src={source(item)} alt={item.altText || `Image ${i + 1}`} />{/if}
-									{#if i === 3 && items.length > 4}<span class="extra">+{items.length - 4}</span
-										>{/if}
-								</button>
-							{/each}
+					</div>{/if}
+				<MediaInspector
+					{items}
+					{index}
+					onSelect={(next) => (index = next)}
+					content={shownContent}
+					{title}
+					{name}
+					handle={account.handle}
+					platformName={isReel ? 'Instagram Reels' : profile.name}
+					{mediaBase}
+				/>
+			{:else}
+				<article class="provider-post" data-platform={platform}>
+					{#if platform === 'tiktok'}<div class="platform-top">
+							<span>Following</span><strong>For You</strong>
 						</div>
-						<p class="media-hint">Select media to enlarge</p>
-					{:else if active}
-						{#if enlarged}<button
-								type="button"
-								class="back-button"
-								onclick={() => (enlarged = false)}>← Back to feed layout</button
+					{:else if platform === 'instagram'}<div class="platform-top instagram-wordmark">
+							{isReel ? 'Reels' : 'Instagram'}
+						</div>
+					{:else if platform === 'threads'}<div class="platform-top">
+							<strong>Threads</strong><span>For you</span>
+						</div>
+					{:else if platform === 'x'}<div class="platform-top">
+							<strong>𝕏</strong><span>For you</span>
+						</div>
+					{:else if platform === 'linkedin'}<div class="platform-top linkedin-wordmark">
+							<strong>in</strong><span>Home</span>
+						</div>
+					{:else if platform === 'mastodon'}<div class="platform-top">
+							<strong>Mastodon</strong><span>Home</span>
+						</div>
+					{:else if platform === 'bluesky'}<div class="platform-top">
+							<strong>Bluesky</strong><span>Following</span>
+						</div>{/if}
+					{#if segments.length > 1}
+						<nav class="thread-nav" aria-label="Thread posts">
+							<label for={`${uid}-segment`}>Post {segment + 1} of thread</label>
+							<select
+								id={`${uid}-segment`}
+								value={segment}
+								onchange={(event) => {
+									segment = Number(event.currentTarget.value);
+									index = 0;
+									expanded = false;
+									enlarged = false;
+								}}
+							>
+								{#each segments as _, i (i)}<option value={i}
+										>Post {i + 1} of {segments.length}</option
+									>{/each}
+							</select>
+						</nav>
+					{/if}
+					<header class="account">
+						{#if account.avatarUrl}<img
+								src={account.avatarUrl}
+								alt=""
+								class:square={profile.avatar === 'square'}
+							/>{:else}<span
+								class="avatar"
+								class:square={profile.avatar === 'square'}
+								aria-hidden="true">{Array.from(name)[0]?.toUpperCase()}</span
 							>{/if}
-						<div
-							class="media-stage"
-							style={`--media-ratio:${ratio}`}
-							role="group"
-							aria-roledescription="carousel"
-							aria-label="Post media"
-							ontouchstart={(event) => {
-								const point = event.touches[0];
-								touch = point ? { x: point.clientX, y: point.clientY } : null;
-							}}
-							ontouchend={(event) => {
-								const point = event.changedTouches[0];
-								if (touch && point && !(event.target instanceof HTMLVideoElement))
-									move(swipeStep(point.clientX - touch.x, point.clientY - touch.y));
-								touch = null;
-							}}
-						>
-							{#key active.id}
-								{#if isVideoMedia(active)}
-									<!-- svelte-ignore a11y_media_has_caption -->
-									<video
-										src={source(active)}
-										poster={coverUrl(active, mediaBase) ?? undefined}
-										controls
-										playsinline
-										preload="metadata"
-										aria-label={active.altText || `Video ${index + 1}`}
-										onloadedmetadata={(event) => {
-											const el = event.currentTarget as HTMLVideoElement;
-											if (el.videoWidth && el.videoHeight)
-												natural[active.id] = el.videoWidth / el.videoHeight;
+						<div>
+							<strong>{name}</strong>{#if account.handle && account.handle !== name}<p>
+									{account.handle}
+								</p>{/if}
+						</div>
+						<span class="provider-label">{profile.name}</span>
+						<MoreHorizontal size={18} aria-hidden="true" />
+					</header>
+					{#if profile.captionFirst}{@render caption()}{/if}
+					{#if items.length}
+						{#if gridMode}
+							<div
+								class="feed-grid"
+								style={`grid-template-rows:repeat(${grid.rows}, minmax(0, 1fr))`}
+								aria-label={`${profile.name} feed media layout`}
+							>
+								{#each gridItems as item, i (item.id)}
+									<button
+										type="button"
+										style={`grid-column:${grid.cells[i].column};grid-row:${grid.cells[i].row}`}
+										onclick={() => {
+											index = i;
+											enlarged = true;
 										}}
-									></video>
-								{:else}<img
-										src={source(active)}
-										alt={active.altText || `Image ${index + 1}`}
-										onload={(event) => {
-											const el = event.currentTarget as HTMLImageElement;
-											if (el.naturalWidth && el.naturalHeight)
-												natural[active.id] = el.naturalWidth / el.naturalHeight;
-										}}
-									/>{/if}
-							{/key}
-							{#if platform === 'tiktok' || isReel}<div
-									class="tiktok-actions"
-									aria-label={`Simulated ${isReel ? 'Reels' : 'TikTok'} actions`}
+										aria-label={`Enlarge ${isVideoMedia(item) ? 'video' : 'image'} ${i + 1}`}
+									>
+										{#if isVideoMedia(item)}
+											{#if coverUrl(item, mediaBase)}<img
+													src={coverUrl(item, mediaBase)!}
+													alt={item.altText || ''}
+												/>{/if}<span class="video-label">▶ Video</span>
+										{:else}<img src={source(item)} alt={item.altText || `Image ${i + 1}`} />{/if}
+										{#if i === 3 && items.length > 4}<span class="extra">+{items.length - 4}</span
+											>{/if}
+									</button>
+								{/each}
+							</div>
+							<p class="media-hint">Select media to enlarge</p>
+						{:else if active}
+							{#if enlarged}<button
+									type="button"
+									class="back-button"
+									onclick={() => (enlarged = false)}>← Back to feed layout</button
+								>{/if}
+							<div
+								class="media-stage"
+								style={`--media-ratio:${ratio}`}
+								role="group"
+								aria-roledescription="carousel"
+								aria-label="Post media"
+								ontouchstart={(event) => {
+									const point = event.touches[0];
+									touch = point ? { x: point.clientX, y: point.clientY } : null;
+								}}
+								ontouchend={(event) => {
+									const point = event.changedTouches[0];
+									if (touch && point && !(event.target instanceof HTMLVideoElement))
+										move(swipeStep(point.clientX - touch.x, point.clientY - touch.y));
+									touch = null;
+								}}
+							>
+								{#key active.id}
+									{#if isVideoMedia(active)}
+										<!-- svelte-ignore a11y_media_has_caption -->
+										<video
+											src={source(active)}
+											poster={coverUrl(active, mediaBase) ?? undefined}
+											controls
+											playsinline
+											preload="metadata"
+											aria-label={active.altText || `Video ${index + 1}`}
+											onloadedmetadata={(event) => {
+												const el = event.currentTarget as HTMLVideoElement;
+												if (el.videoWidth && el.videoHeight)
+													natural[active.id] = el.videoWidth / el.videoHeight;
+											}}
+										></video>
+									{:else}<img
+											src={source(active)}
+											alt={active.altText || `Image ${index + 1}`}
+											onload={(event) => {
+												const el = event.currentTarget as HTMLImageElement;
+												if (el.naturalWidth && el.naturalHeight)
+													natural[active.id] = el.naturalWidth / el.naturalHeight;
+											}}
+										/>{/if}
+								{/key}
+								{#if platform === 'tiktok' || isReel}<div
+										class="tiktok-actions"
+										aria-label={`Simulated ${isReel ? 'Reels' : 'TikTok'} actions`}
+									>
+										<button disabled aria-label="Like (preview only)"><Heart size={25} /></button
+										><button disabled aria-label="Comments (preview only)"
+											><MessageCircle size={25} /></button
+										><button disabled aria-label="Save (preview only)"
+											><Bookmark size={25} /></button
+										><button disabled aria-label="Share (preview only)"><Share2 size={25} /></button
+										>
+									</div>{/if}
+								{#if items.length > 1}
+									<nav class="carousel-controls" aria-label="Media navigation">
+										<button
+											type="button"
+											class="icon-button"
+											aria-label="Previous media"
+											disabled={index === 0}
+											onclick={() => move(-1)}><ChevronLeft size={20} /></button
+										>
+										<div class="dots">
+											{#each items as item, i (item.id)}<button
+													type="button"
+													class="dot-button"
+													class:selected={i === index}
+													aria-label={`Show media ${i + 1}`}
+													aria-current={i === index ? 'true' : undefined}
+													onclick={() => (index = i)}><span></span></button
+												>{/each}
+										</div>
+										<button
+											type="button"
+											class="icon-button"
+											aria-label="Next media"
+											disabled={index === items.length - 1}
+											onclick={() => move(1)}><ChevronRight size={20} /></button
+										>
+									</nav>
+									<p class="media-count" aria-live="polite">{index + 1} / {items.length}</p>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+					{#if platform !== 'tiktok' && !isReel}
+						<div class="platform-actions" aria-label={`Simulated ${profile.name} actions`}>
+							{#if platform === 'linkedin'}
+								<button disabled><ThumbsUp size={18} /><span>Like</span></button><button disabled
+									><MessageCircle size={18} /><span>Comment</span></button
+								><button disabled><Repeat2 size={18} /><span>Repost</span></button><button disabled
+									><Send size={18} /><span>Send</span></button
 								>
-									<button disabled aria-label="Like (preview only)"><Heart size={25} /></button
-									><button disabled aria-label="Comments (preview only)"
-										><MessageCircle size={25} /></button
-									><button disabled aria-label="Save (preview only)"><Bookmark size={25} /></button
-									><button disabled aria-label="Share (preview only)"><Share2 size={25} /></button>
-								</div>{/if}
-							{#if items.length > 1}
-								<nav class="carousel-controls" aria-label="Media navigation">
-									<button
-										type="button"
-										class="icon-button"
-										aria-label="Previous media"
-										disabled={index === 0}
-										onclick={() => move(-1)}><ChevronLeft size={20} /></button
-									>
-									<div class="dots">
-										{#each items as item, i (item.id)}<button
-												type="button"
-												class="dot-button"
-												class:selected={i === index}
-												aria-label={`Show media ${i + 1}`}
-												aria-current={i === index ? 'true' : undefined}
-												onclick={() => (index = i)}><span></span></button
-											>{/each}
-									</div>
-									<button
-										type="button"
-										class="icon-button"
-										aria-label="Next media"
-										disabled={index === items.length - 1}
-										onclick={() => move(1)}><ChevronRight size={20} /></button
-									>
-								</nav>
-								<p class="media-count" aria-live="polite">{index + 1} / {items.length}</p>
+							{:else if platform === 'instagram'}
+								<button disabled aria-label="Like (preview only)"><Heart size={23} /></button
+								><button disabled aria-label="Comment (preview only)"
+									><MessageCircle size={23} /></button
+								><button disabled aria-label="Send (preview only)"><Send size={23} /></button
+								><button class="save-action" disabled aria-label="Save (preview only)"
+									><Bookmark size={23} /></button
+								>
+							{:else if platform === 'mastodon'}
+								<button disabled aria-label="Reply (preview only)"
+									><MessageCircle size={20} /></button
+								><button disabled aria-label="Boost (preview only)"><Repeat2 size={20} /></button
+								><button disabled aria-label="Favourite (preview only)"><Heart size={20} /></button
+								><button disabled aria-label="Bookmark (preview only)"
+									><Bookmark size={20} /></button
+								>
+							{:else}
+								<button disabled aria-label="Reply (preview only)"
+									><MessageCircle size={20} /></button
+								><button disabled aria-label="Repost (preview only)"><Repeat2 size={20} /></button
+								><button disabled aria-label="Like (preview only)"><Heart size={20} /></button
+								><button disabled aria-label="Share (preview only)"><Share2 size={20} /></button>
 							{/if}
 						</div>
 					{/if}
-				{/if}
-				{#if platform !== 'tiktok' && !isReel}
-					<div class="platform-actions" aria-label={`Simulated ${profile.name} actions`}>
-						{#if platform === 'linkedin'}
-							<button disabled><ThumbsUp size={18} /><span>Like</span></button><button disabled
-								><MessageCircle size={18} /><span>Comment</span></button
-							><button disabled><Repeat2 size={18} /><span>Repost</span></button><button disabled
-								><Send size={18} /><span>Send</span></button
-							>
-						{:else if platform === 'instagram'}
-							<button disabled aria-label="Like (preview only)"><Heart size={23} /></button><button
-								disabled
-								aria-label="Comment (preview only)"><MessageCircle size={23} /></button
-							><button disabled aria-label="Send (preview only)"><Send size={23} /></button><button
-								class="save-action"
-								disabled
-								aria-label="Save (preview only)"><Bookmark size={23} /></button
-							>
-						{:else if platform === 'mastodon'}
-							<button disabled aria-label="Reply (preview only)"><MessageCircle size={20} /></button
-							><button disabled aria-label="Boost (preview only)"><Repeat2 size={20} /></button
-							><button disabled aria-label="Favourite (preview only)"><Heart size={20} /></button
-							><button disabled aria-label="Bookmark (preview only)"><Bookmark size={20} /></button>
-						{:else}
-							<button disabled aria-label="Reply (preview only)"><MessageCircle size={20} /></button
-							><button disabled aria-label="Repost (preview only)"><Repeat2 size={20} /></button
-							><button disabled aria-label="Like (preview only)"><Heart size={20} /></button><button
-								disabled
-								aria-label="Share (preview only)"><Share2 size={20} /></button
-							>
-						{/if}
-					</div>
-				{/if}
-				{#if !profile.captionFirst}{@render caption()}{/if}
-				{#if platform === 'tiktok' && active && isVideoMedia(active)}<div class="sound-row">
-						<Music2 size={16} /><span>Original video audio</span>
-					</div>{/if}
-			</article>
-			<div class="preview-metadata">
-				{#if active && !gridMode}<span
-						>{active.width && active.height
-							? `${active.width} × ${active.height}px · `
-							: ''}{ratio.toFixed(2)}:1 original aspect · uncropped</span
-					>{:else if gridMode}<span>Feed arrangement · select a tile for original dimensions</span
-					>{/if}
-				<span>Platform action icons are display-only.</span>
-			</div>
+					{#if !profile.captionFirst}{@render caption()}{/if}
+					{#if platform === 'tiktok' && active && isVideoMedia(active)}<div class="sound-row">
+							<Music2 size={16} /><span>Original video audio</span>
+						</div>{/if}
+				</article>
+				<div class="preview-metadata">
+					{#if active && !gridMode}<span
+							>{active.width && active.height
+								? `${active.width} × ${active.height}px · `
+								: ''}{ratio.toFixed(2)}:1 original aspect · uncropped</span
+						>{:else if gridMode}<span>Feed arrangement · select a tile for original dimensions</span
+						>{/if}
+					<span>Platform action icons are display-only.</span>
+				</div>
+			{/if}
 		</div>
 	</dialog>
 {/if}
@@ -1150,5 +1217,103 @@
 		min-height: 0;
 		max-height: none;
 		aspect-ratio: auto;
+	}
+	.viewer-control-group {
+		display: inline-flex;
+		gap: 0.125rem;
+		padding: 0.125rem;
+		background: #f5f5f4;
+		border-radius: 0.75rem;
+	}
+	.device-toolbar .viewer-control-group + .viewer-control-group {
+		margin-left: 0.5rem;
+	}
+	.post-viewer.inspection {
+		width: min(calc(100vw - 3rem), 80rem);
+		height: 92dvh;
+		max-height: 92dvh;
+		max-width: none;
+		margin: auto;
+		overflow: hidden;
+		background: #fff;
+	}
+	.inspection .viewer-panel {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		min-height: 0;
+		padding: 0;
+	}
+	.inspection .viewer-bar,
+	.inspection .device-toolbar {
+		flex-shrink: 0;
+		position: static;
+		background: #fff;
+	}
+	.viewer-bar h2 {
+		font-size: 1.125rem;
+		line-height: 1.35;
+	}
+	.viewer-bar p {
+		font-size: 0.8125rem;
+		line-height: 1.5;
+	}
+	.device-toolbar {
+		flex-wrap: wrap;
+	}
+	.device-toolbar button,
+	.viewer-bar .icon-button {
+		min-height: 48px;
+		min-width: 48px;
+	}
+	.overlay-choice {
+		display: flex;
+		align-items: center;
+		min-height: 48px;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+		color: #44403c;
+		padding: 0 0.5rem;
+		cursor: pointer;
+	}
+	.overlay-choice input {
+		width: 20px;
+		height: 20px;
+		accent-color: #292524;
+	}
+	.inspector-thread {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
+		border-bottom: 1px solid #e7e5e4;
+	}
+	.inspector-thread select {
+		min-height: 48px;
+		padding: 0 0.75rem;
+		border: 1px solid #d6d3d1;
+		border-radius: 0.625rem;
+		background: #fff;
+	}
+	@media (max-width: 700px) {
+		.post-viewer.inspection {
+			width: 100%;
+			max-width: 100%;
+			height: 100dvh;
+			max-height: 100dvh;
+			margin: 0;
+			border-radius: 0;
+		}
+		.viewer-bar {
+			padding: 0.5rem 0.75rem;
+			padding-top: max(0.5rem, env(safe-area-inset-top));
+		}
+		.device-toolbar {
+			padding: 0.25rem 0.75rem;
+		}
+		.device-toolbar span {
+			display: none;
+		}
 	}
 </style>

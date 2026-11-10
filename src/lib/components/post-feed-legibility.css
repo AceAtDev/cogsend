@@ -1,0 +1,272 @@
+/*
+ * Import once from PostViewer.svelte. Activate only on the dialog when
+ * presentation === 'feed' && !showOverlays; Media/overlay modes stay untouched.
+ * The repeated .feed-safe is an intentional specificity anchor: legacy Svelte
+ * platform/device selectors include a generated scope class. This wins that
+ * cascade without !important or relying on bundled stylesheet ordering.
+ */
+.post-viewer.feed-safe.feed-safe.feed-safe {
+	color: #1c1917;
+	overflow-x: hidden;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe button {
+	min-width: 48px;
+	min-height: 48px;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe :where(.viewer-panel, .viewer-bar, .device-toolbar) {
+	min-width: 0;
+	max-width: 100%;
+	box-sizing: border-box;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .device-toolbar {
+	flex-wrap: wrap;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] {
+	display: flex;
+	flex-direction: column;
+	position: relative;
+	width: min(100% - 2rem, 42rem);
+	min-width: 0;
+	max-width: 100%;
+	height: auto;
+	max-height: none;
+	aspect-ratio: auto;
+	margin: 1rem auto;
+	color: #1c1917;
+	background: #fff;
+	border-color: #e7e5e4;
+	box-sizing: border-box;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe.mobile-preview .provider-post[data-platform] {
+	width: min(100% - 1rem, 390px);
+}
+
+/* Portrait platforms stay a media-sized card, not a wide blank desktop canvas. */
+.post-viewer.feed-safe.feed-safe.feed-safe.desktop-preview .provider-post[data-platform='tiktok'],
+.post-viewer.feed-safe.feed-safe.feed-safe.desktop-preview.instagram-reel
+	.provider-post[data-platform='instagram'] {
+	width: min(100% - 2rem, 30rem);
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] > * {
+	min-width: 0;
+	max-width: 100%;
+	box-sizing: border-box;
+	grid-column: auto;
+	grid-row: auto;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .platform-top,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .caption,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .sound-row {
+	position: static;
+	inset: auto;
+	z-index: auto;
+	width: auto;
+	height: auto;
+	max-height: none;
+	background: #fff;
+	color: #1c1917;
+	text-shadow: none;
+	overflow: visible;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .platform-top {
+	display: flex;
+	order: 0;
+	min-height: 48px;
+	border-bottom: 1px solid #e7e5e4;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .thread-nav {
+	order: 5;
+	flex-wrap: wrap;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account {
+	order: 10;
+	gap: 0.75rem;
+	padding: 0.875rem 1rem;
+	flex-shrink: 0;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account > div {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account img,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .avatar {
+	width: 42px;
+	height: 42px;
+	flex-shrink: 0;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account p {
+	display: block;
+	color: #57534e;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .provider-label {
+	display: none;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .platform-top span {
+	color: #57534e;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .back-button {
+	order: 15;
+	align-self: flex-start;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-stage {
+	order: 20;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	justify-content: flex-start;
+	flex: 0 0 auto;
+	align-self: stretch;
+	width: 100%;
+	height: auto;
+	min-height: 0;
+	max-height: none;
+	aspect-ratio: auto;
+	background: #0c0a09;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-stage img,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-stage video {
+	display: block;
+	flex: 0 0 auto;
+	width: 100%;
+	height: auto;
+	min-height: 0;
+	max-height: 72dvh;
+	aspect-ratio: var(--media-ratio, auto);
+	object-fit: contain;
+	background: #0c0a09;
+}
+
+/* These are sibling rows below the actual image/video, never click shields. */
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .tiktok-actions,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .carousel-controls,
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-count {
+	position: static;
+	inset: auto;
+	z-index: auto;
+	flex-shrink: 0;
+	width: 100%;
+	max-width: 100%;
+	margin: 0;
+	box-sizing: border-box;
+	color: #1c1917;
+	background: #fff;
+	filter: none;
+	text-shadow: none;
+	border-radius: 0;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .tiktok-actions {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-around;
+	padding: 0.25rem 0.5rem;
+	border-top: 1px solid #e7e5e4;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .carousel-controls {
+	padding: 0.25rem 0.5rem;
+	border-top: 1px solid #e7e5e4;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .dots {
+	min-width: 0;
+	max-width: calc(100% - 96px);
+	flex-wrap: nowrap;
+	overflow-x: auto;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .dot-button.selected span {
+	background: #1c1917;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-count {
+	color: #57534e;
+	font-size: 0.8125rem;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .feed-grid {
+	order: 20;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .media-hint {
+	order: 25;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .platform-actions {
+	order: 30;
+	flex-wrap: wrap;
+	color: #1c1917;
+	background: #fff;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .caption {
+	order: 40;
+	flex: 0 0 auto;
+	padding: 1rem;
+	overflow-wrap: anywhere;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .caption p {
+	display: block;
+	font-size: 1rem;
+	line-height: 1.5;
+	-webkit-line-clamp: unset;
+	line-clamp: unset;
+	overflow: visible;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .caption h3 {
+	font-size: 1rem;
+	line-height: 1.5;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .caption button {
+	min-height: 44px;
+	font-size: 0.875rem;
+	color: #44403c;
+}
+
+.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .sound-row {
+	order: 50;
+	padding: 0 1rem 1rem;
+	font-size: 0.8125rem;
+}
+
+@media (max-width: 600px) {
+	.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] {
+		width: 100%;
+		margin-block: 0;
+		border-radius: 0;
+	}
+
+	.post-viewer.feed-safe.feed-safe.feed-safe.desktop-preview .provider-post[data-platform='tiktok'],
+	.post-viewer.feed-safe.feed-safe.feed-safe.desktop-preview.instagram-reel
+		.provider-post[data-platform='instagram'] {
+		width: 100%;
+	}
+
+	.post-viewer.feed-safe.feed-safe.feed-safe .provider-post[data-platform] .account {
+		flex-wrap: wrap;
+	}
+}

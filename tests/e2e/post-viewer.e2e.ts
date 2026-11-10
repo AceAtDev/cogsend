@@ -42,7 +42,7 @@ test.beforeEach(async ({ page }) => {
 	await page.route(`**/api/media/${prefix}*`, (route) =>
 		route.fulfill({
 			contentType: 'image/svg+xml',
-			body: '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350"><rect width="1080" height="1350" fill="#ccfaf1"/><circle cx="540" cy="550" r="300" fill="#059669"/><text x="540" y="1050" text-anchor="middle" font-size="75">4:5 original image</text></svg>'
+			body: '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350"><rect width="1080" height="1350" fill="#f5f1e8"/><g font-family="Georgia,serif" text-anchor="middle" fill="#1c1917"><text x="540" y="130" font-size="64" font-weight="bold">30g Protein</text><text x="270" y="260" font-size="52">Cod</text><text x="810" y="260" font-size="52">Tofu</text><text x="270" y="305" font-size="28" fill="#57534e">baked</text><text x="810" y="305" font-size="28" fill="#57534e">firm, calcium-set</text><path d="M540 220v960" stroke="#78716c"/><ellipse cx="270" cy="640" rx="180" ry="130" fill="#e2b76c"/><path d="M660 530h300v240H660z" fill="#e9dcb7"/><text x="270" y="1000" font-size="30">cut</text><text x="810" y="1000" font-size="30">bulk</text><text x="270" y="1120" font-size="62" font-weight="bold">132g</text><text x="810" y="1120" font-size="62" font-weight="bold">173g</text><text x="270" y="1170" font-size="30">138 kcal</text><text x="810" y="1170" font-size="30">250 kcal</text><text x="540" y="1280" font-size="26" fill="#57534e">Readable nutrition artwork · layout test fixture</text></g></svg>'
 		})
 	);
 });
@@ -66,10 +66,19 @@ test('all seven providers open from Review in mobile and desktop modes', async (
 		await expect(viewer).toBeVisible();
 		await expect(viewer).toContainText(`${prefix}${platform}`);
 		await expect(viewer).not.toContainText('Internal label never public');
+		await expect(viewer.getByRole('button', { name: 'Media', exact: true })).toHaveAttribute(
+			'aria-pressed',
+			'true'
+		);
+		await expect(viewer.getByTestId('media-inspector')).toBeVisible();
+		if (platform === 'tiktok')
+			await viewer.screenshot({ path: '../deliverables/viewer-readable/media-desktop.png' });
+		await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
+		await expect(viewer.getByRole('checkbox', { name: 'Show overlays' })).not.toBeChecked();
 		if (platform === 'tiktok') {
 			await expect(viewer).toContainText('Actual photo title');
-			await expect(viewer.getByRole('button', { name: 'Next media' })).toBeInViewport();
-			await expect(viewer.getByText('Actual photo title', { exact: true })).toBeInViewport();
+			await expect(viewer.getByRole('button', { name: 'Next media' })).toBeVisible();
+			await expect(viewer.getByText('Actual photo title', { exact: true })).toBeVisible();
 		}
 		await viewer.screenshot({ path: `../deliverables/post-viewer/${platform}-mobile.png` });
 		await viewer.getByRole('button', { name: 'Desktop', exact: true }).click();
@@ -89,6 +98,9 @@ test('all seven providers open from Review in mobile and desktop modes', async (
 		await page.getByRole('button', { name: new RegExp(`Preview .*${prefix}${platform}`) }).click();
 		const viewer = page.locator('dialog[open]');
 		await expect(viewer).toBeVisible();
+		if (platform === 'tiktok')
+			await viewer.screenshot({ path: '../deliverables/viewer-readable/media-mobile.png' });
+		await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
 		await expect
 			.poll(async () => (await viewer.boundingBox())?.width ?? 9999)
 			.toBeLessThanOrEqual(390);
@@ -96,6 +108,81 @@ test('all seven providers open from Review in mobile and desktop modes', async (
 		await expect
 			.poll(async () => (await viewer.boundingBox())?.width ?? 9999)
 			.toBeLessThanOrEqual(390);
+		await page.keyboard.press('Escape');
+	}
+});
+
+test('artwork is unobstructed, captions are readable, and actual-size media can be panned', async ({
+	page
+}) => {
+	await page.goto('/review');
+	const viewer = page.locator('dialog[open]');
+	await clickUntilVisible(
+		page,
+		page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
+		viewer
+	);
+	const image = viewer.getByAltText('tiktok slide 1');
+	const details = viewer.getByRole('complementary', { name: 'Post details' });
+	const [mediaRect, detailsRect] = await Promise.all([image.boundingBox(), details.boundingBox()]);
+	expect(mediaRect!.x + mediaRect!.width).toBeLessThanOrEqual(detailsRect!.x + 1);
+	await expect(viewer.locator('.tiktok-actions')).toHaveCount(0);
+	expect(
+		await viewer
+			.locator('.inspection-caption')
+			.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+	).toBeGreaterThanOrEqual(16);
+	const actualSize = viewer.getByRole('button', { name: 'View media at actual size' });
+	await actualSize.click();
+	await expect.poll(async () => (await image.boundingBox())?.width ?? 0).toBe(1080);
+	const region = viewer.getByRole('region', { name: 'Post media' });
+	await region.focus();
+	await page.keyboard.press('ArrowRight');
+	await expect(image).toBeVisible();
+	await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+	await viewer.screenshot({ path: '../deliverables/viewer-readable/actual-size.png' });
+	await viewer.getByRole('button', { name: 'Fit media to window' }).click();
+	await expect.poll(async () => (await image.boundingBox())?.width ?? 9999).toBeLessThan(1080);
+	await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
+	await expect(viewer.getByRole('checkbox', { name: 'Show overlays' })).not.toBeChecked();
+	const [art, caption] = await Promise.all([
+		viewer.getByAltText('tiktok slide 1').boundingBox(),
+		viewer.locator('.caption').boundingBox()
+	]);
+	expect(caption!.y).toBeGreaterThanOrEqual(art!.y + art!.height);
+	await viewer.getByRole('button', { name: 'Show more', exact: true }).click();
+	await expect(viewer.getByRole('button', { name: 'Show less', exact: true })).toBeVisible();
+	await viewer.getByRole('checkbox', { name: 'Show overlays' }).check();
+	await expect(viewer).not.toHaveClass(/feed-safe/);
+});
+
+test('mobile controls remain thumb-sized and caption navigation works at 320 and 390px', async ({
+	page
+}) => {
+	await page.emulateMedia({ reducedMotion: 'reduce' });
+	await page.goto('/review');
+	for (const width of [320, 390]) {
+		await page.setViewportSize({ width, height: 844 });
+		const viewer = page.locator('dialog[open]');
+		await clickUntilVisible(
+			page,
+			page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
+			viewer
+		);
+		await expect(viewer.getByRole('combobox', { name: 'Media zoom' })).toHaveValue('0');
+		expect(
+			await viewer.getByTestId('media-inspector').evaluate((el) => el.scrollWidth <= el.clientWidth)
+		).toBe(true);
+		for (const button of await viewer.getByRole('button').all()) {
+			if (!(await button.isVisible())) continue;
+			const box = await button.boundingBox();
+			expect(box!.width).toBeGreaterThanOrEqual(48);
+			expect(box!.height).toBeGreaterThanOrEqual(48);
+		}
+		await viewer.getByRole('button', { name: 'Caption', exact: true }).click();
+		await expect(viewer.getByText('Actual photo title', { exact: true })).toBeInViewport();
+		await viewer.getByRole('button', { name: 'Back to media', exact: true }).click();
+		await expect(viewer.getByRole('combobox', { name: 'Media zoom' })).toBeInViewport();
 		await page.keyboard.press('Escape');
 	}
 });
@@ -123,8 +210,7 @@ test('thumbnail opens carousel, reaches hidden slides, restores focus on close',
 	await thumb.click();
 	const viewer = page.locator('dialog[open]');
 	await expect(viewer).toBeVisible();
-	await viewer.getByRole('button', { name: 'Show more', exact: true }).click();
-	await expect(viewer.getByRole('button', { name: 'Show less', exact: true })).toBeVisible();
+	await expect(viewer.getByTestId('media-inspector')).toBeVisible();
 	for (let i = 0; i < 5; i++) await viewer.getByRole('button', { name: /next/i }).click();
 	await expect(viewer.getByAltText('tiktok slide 6')).toBeVisible();
 	await page.keyboard.press('ArrowLeft');
@@ -200,7 +286,7 @@ test('thread post switching keeps each segment media separate', async ({ page })
 	);
 	await expect(viewer).toContainText('First thread post');
 	await expect(viewer.getByAltText('x slide 6')).toHaveCount(0);
-	await viewer.getByRole('combobox').selectOption('1');
+	await viewer.getByRole('combobox', { name: 'Thread post', exact: true }).selectOption('1');
 	await expect(viewer).toContainText('Second thread post');
 	await expect(viewer.getByAltText('x slide 6')).toBeVisible();
 });
