@@ -289,6 +289,11 @@ export function nowView(agent: AgentContext) {
 	return describeInstant(agent.now, agent.timeZone);
 }
 
+// Agents behind clients that hide tool schemas guess where TikTok's choices go
+// (options, variants); spelling out the field path here, in the first call, ends that.
+const TIKTOK_CALL_SHAPE =
+	'TikTok channels need the post-level field tiktok, never inside variants or options: schedule_posts {"posts":[{"channels":["<tiktok key>"],"draftId":"<id>","runAt":"<time>","tiktok":{"draft":true}}]}; save_draft, publish_now and move_post take the same tiktok at the top level.';
+
 export async function listChannelsOp(agent: AgentContext) {
 	const { ctx, userId, timeZone } = agent;
 	const dir = await loadChannels(ctx.db, userId);
@@ -356,7 +361,8 @@ export async function listChannelsOp(agent: AgentContext) {
 			...lines,
 			'Target channels by key exactly as listed. A bare platform such as "instagram" is refused when more than one channel posts there.',
 			'On a brand that requires review, what you schedule or publish waits as awaiting_review until the operator approves it in the Review inbox; a rejection comes back as status rejected with a note (list_posts, get_post). Revise the post and call resubmit_for_review.',
-			'Before writing for a brand, read its brief with get_brand_brief. Use list_slots or runAt "next_slot" for times on channels with posting slots.'
+			'Before writing for a brand, read its brief with get_brand_brief. Use list_slots or runAt "next_slot" for times on channels with posting slots.',
+			...(dir.channels.some((c) => c.platform === 'tiktok') ? [TIKTOK_CALL_SHAPE] : [])
 		].join('\n')
 	};
 }

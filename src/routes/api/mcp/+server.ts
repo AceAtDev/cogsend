@@ -296,6 +296,12 @@ type ToolSpec = {
 	title: string;
 	annotation: (typeof annotations)[keyof typeof annotations];
 	description: string;
+	/**
+	 * A one-line call shape shown first in the description. Some clients show
+	 * agents only the first ~115 characters of a description and no schema, so
+	 * this line is all they have to build the call from.
+	 */
+	args: string;
 	outputSchema: z.ZodType;
 	/** A valid call, quoted back in every error so the agent can correct itself. */
 	example: Record<string, unknown>;
@@ -352,7 +358,7 @@ function registerForEvent<T extends z.ZodType>(
 		name,
 		{
 			title: spec.title,
-			description: spec.description,
+			description: `Args: ${spec.args}\n${spec.description}`,
 			inputSchema,
 			outputSchema: spec.outputSchema,
 			annotations: { title: spec.title, ...spec.annotation },
@@ -477,6 +483,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'List brands and channels',
 			annotation: annotations.read,
+			args: '{} (call first; returns channel keys, now, TikTok call shape)',
 			description:
 				'Call this first. Lists every brand with its connected channels (channel key such as "jobjob.linkedin", platform, @handle, display name, status, brand colour), each brand’s brief at a glance (which sections exist; get_brand_brief reads it), each channel’s posting slots and limits with its next open slot, the server time now in UTC and in the operator’s time zone, and a one-line requirements summary per platform in use. Every other tool targets channels by these exact keys; work out relative dates ("next Tuesday 9am") from the `now` returned here. A bare platform name is never a valid target when two brands post there. Do not use it to read posts: list_posts does that.',
 			outputSchema: loose({
@@ -505,6 +512,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'Read a brand’s brief',
 			annotation: annotations.read,
+			args: '{brand?: slug} or {channel?: key}',
 			description:
 				'Reads the brief the operator wrote for a brand: voice and tone, audience, do and don’t, links, hashtags, calls to action, and notes per platform, as sections and as one markdown document, with each channel’s posting slots and limits. Read it before drafting anything for a brand and follow it in every post; when a brand has no brief, ask the operator rather than guessing a voice. Name the brand by slug or name, or a channel key to get that channel’s brand with its platform note picked out; with neither it returns every brand. Unbranded channels have no brief. It never changes anything: the operator edits briefs in Accounts.',
 			outputSchema: loose({
@@ -540,6 +548,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'List open posting slots',
 			annotation: annotations.read,
+			args: '{channels?: [key], brand?, from?, to?, limit?}',
 			description:
 				'Lists the open posting slots of channels between from and to (default the next 7 days, at most 60), in the operator’s time zone with UTC, plus each channel’s weekly slots and limits (max posts a day, minimum minutes between posts). A slot is open when no post on that channel is within 15 minutes of it (or within its minimum gap) and its day is not full; posts held for review count too. Use it to plan a week of posts, or pass runAt "next_slot" to schedule_posts and let the server pick. Without channels it covers every active channel, or one brand’s with brand. It does not list posts: list_posts does that.',
 			outputSchema: loose({
@@ -589,6 +598,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'List planned and past posts',
 			annotation: annotations.read,
+			args: '{brand?, channel?: key, status?: [..], from?, to?, cursor?, limit?}',
 			description:
 				'Lists deliveries (one post on one channel) in time order, with post id, delivery id, channel key, brand, @handle, status and local and UTC time. By default it shows what is still to come or needs attention (awaiting_review, rejected, scheduled, pending, publishing, failed); a delivery held for review or rejected carries review.state and the reviewer’s review.note, so read the rejections here before revising and calling resubmit_for_review; filter by brand, channel, status and a from/to range (a day such as "2026-11-03" means that whole day in the operator’s zone). Use status ["draft"] alone to list unscheduled drafts instead. Results are paged: pass nextCursor back as cursor. Use get_post for one post’s full text, media and checks.',
 			outputSchema: loose({
@@ -621,6 +631,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'Get one post',
 			annotation: annotations.read,
+			args: '{postId, response_format?: "concise"|"detailed"}',
 			description:
 				'One post by postId: its text, per-platform variants, media (with mediaId for edit_media) and every delivery with channel key, @handle, status and local and UTC time; a published delivery also carries its latest metrics (counts, when read, or why there are none). With response_format "detailed" it also returns full text and checks the post against every channel it still goes to, listing what a platform would refuse. Each delivery held for review or rejected carries review (state waiting, overdue or rejected, the reviewer’s note, when it was reviewed). Use list_posts to find post ids; use this before move_post or publish_now to see what will go out.',
 			outputSchema: loose({
@@ -644,6 +655,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'How published posts performed',
 			annotation: annotations.read,
+			args: '{brand?, channels?: [key], from?, to?, sort?, limit?}',
 			description:
 				'How published posts performed over a range of publish dates (default: the last 30 days): totals per brand and per channel, and the top deliveries by the chosen count, each with its channel key, publish time, counts and text excerpt. Use it to learn which posts, channels and formats work before drafting new ones. Counts come from snapshots about 1h, 24h and 7d after publishing, so a post from the last hour may have none yet. Bluesky, Mastodon, TikTok and LinkedIn company pages report counts; Instagram, Threads and X are not collected yet. Use get_post for one post’s latest counts.',
 			outputSchema: loose({
@@ -702,6 +714,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'Platform requirements',
 			annotation: annotations.read,
+			args: '{platforms?: ["tiktok", ..], channels?: [key]} (plural keys)',
 			description:
 				'What each platform takes before you build a post: text limit, whether media is required, image count, types and sizes, whether images and video can mix, video container, codecs, size, duration, aspect, resolution and frame rate, covers, threads and alt text, with a one-line summary each. Give channels to add what each account changes (a Mastodon instance’s limits, an X plan). Also lists the ways to attach a file and their size caps. list_channels already carries the one-line summaries; use this for the details.',
 			outputSchema: loose({
@@ -745,6 +758,7 @@ function createServer(event: RequestEvent) {
 			scope: 'read',
 			title: 'Check a post',
 			annotation: annotations.read,
+			args: '{text?, draftId?, channels?: [key], platform?}',
 			description:
 				'Checks text, or a saved draft (draftId), against each channel it would go to, the same way publishing will, and returns every problem per channel with what to fix. Without channels it checks text against every platform’s length rules. Each problem names the channel and what to change, such as an image count or a missing video. schedule_posts runs the same checks itself, so use this while drafting, not as a required step before scheduling.',
 			outputSchema: loose({ ok: z.boolean(), summary: z.string() }),
@@ -798,6 +812,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create and schedule posts',
 			annotation: annotations.schedule,
+			args: '{posts:[{channels,draftId|text,runAt,tiktok?:{draft:true},variants?:[{for,text}]}],confirmToken?}',
 			description: `Creates and schedules up to ${MAX_BATCH_POSTS} posts in one call: each with text, optional per-channel or per-platform variants, optional media (public URLs, or a draftId whose text and media you prepared with save_draft/attach_media), target channel keys and runAt (a time, or "next_slot" for each channel’s next open posting slot, which respects the channel’s max posts a day and minimum gap; a time that breaks those limits is refused with the next allowed one). Every post is validated against each channel’s platform rules before anything is written; one bad post refuses the whole batch with every problem listed. Safety: a call that targets more than one channel or brand, or uses runAt "now", returns a preview and a confirmToken instead of writing; show the preview to the operator, then repeat the identical call with confirmToken. Send dryRun: true to preview a single-channel call too, and an idempotencyKey so a retry never schedules twice. A TikTok channel also needs posts[].tiktok, which TikTok allows no default for (ask the operator): either Direct Post (privacy from what the account offers, comments, Duet, Stitch and disclosure; only Only me until TikTok audits the app) or {draft: true}, which sends the video to the TikTok inbox for the operator to post publicly from the app. Review: on a brand that requires it (list_channels says which), committed deliveries come back as status awaiting_review: they keep their time (a next_slot time too, which stays reserved) but nothing goes out until the operator approves them in the Review inbox, so never resend them. Do not use it to change an existing delivery: reschedule_posts changes a time, move_post a channel.`,
 			outputSchema: writeOut({
 				committed: z.boolean(),
@@ -930,6 +945,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Change post times',
 			annotation: annotations.reschedule,
+			args: '{items:[{deliveryId|postId, channels?, runAt}], dryRun?}',
 			description:
 				'Moves scheduled deliveries to a new time, leaving their channels and content alone. Each item names one delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels) and the new runAt, or "next_slot" for each channel’s next open posting slot; up to 20 items, all checked against the channels’ posting limits before any is changed. Repeating the same call is safe. Failed deliveries are rescheduled too; published, publishing, cancelled and rejected ones are refused. A delivery held for review stays held at its new time. Use move_post to change channels and publish_now to send immediately.',
 			outputSchema: writeOut({
@@ -961,6 +977,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Change a post’s channels',
 			annotation: annotations.move,
+			args: '{postId, to:[key], from?, runAt?, tiktok?:{draft:true}, dryRun?, confirmToken?}',
 			description:
 				'Moves a post from some channels to others (from → to), or adds channels when from is omitted, keeping its content and, unless runAt is given, its scheduled time. The post is checked against every new channel first. Like a new post, it always needs confirmation: the first call returns before/after and a confirmToken, and the identical call with that token applies it; the old deliveries are cancelled before the new ones are scheduled, so a failure never leaves it on both. Moving to a TikTok channel needs tiktok, as in schedule_posts. Use reschedule_posts for a time-only change and cancel_posts to drop a channel without adding one.',
 			outputSchema: writeOut({
@@ -997,6 +1014,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Cancel deliveries',
 			annotation: annotations.cancel,
+			args: '{items:[{deliveryId|postId, channels?}], deletePost?}',
 			description:
 				'Takes down deliveries that have not gone out yet, for good, by deliveryId or by postId (optionally narrowed to some channels); up to 20 items, all checked first. Each delivery is removed rather than left as cancelled, and a post with nothing left to send is deleted with its media; the Activity log keeps a record of what was removed (text, media, channels and times) for the operator. Published or publishing deliveries cannot be taken down. With deletePost: true and only postIds, it deletes the posts and their media instead, which cannot be undone and is refused once anything was published. Use reschedule_posts to postpone rather than cancel.',
 			outputSchema: writeOut({
@@ -1020,6 +1038,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Resubmit a rejected post for review',
 			annotation: annotations.reschedule,
+			args: '{items:[{deliveryId|postId, channels?}], runAt?}',
 			description:
 				'Sends deliveries the operator rejected back to the Review inbox, after you revised the post as their note asked (read it with list_posts or get_post; change text with save_draft and media with edit_media or attach_media). Each item names a delivery (deliveryId) or a whole post (postId, optionally narrowed to some channels); runAt gives them a new time, and is required when the old one has passed. Deliveries already waiting for review are left as they are, so repeating the call is safe. Nothing is published by this: the operator still approves.',
 			outputSchema: writeOut({
@@ -1043,6 +1062,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Publish a post now',
 			annotation: annotations.publish,
+			args: '{postId, channels:[key], tiktok?:{draft:true}, dryRun?, confirmToken?}',
 			description:
 				'Publishes an existing post to the given channels immediately, publicly, and retries a failed delivery the same way. Always two steps: the first call checks the post against each channel and returns what would go out with a confirmToken; the identical call with that token publishes. Channels the post already published to are skipped. A TikTok channel needs tiktok (privacy, comments, Duet, Stitch, disclosure, or {draft: true} to send it to the TikTok inbox, the way to a public post until TikTok audits the app) unless save_draft stored them; there is no default. On a brand that requires review nothing is sent: the deliveries come back awaiting_review and go out on the next tick once the operator approves them. To create and publish new content in one go, use schedule_posts with runAt "now"; to post later, use schedule_posts or reschedule_posts.',
 			outputSchema: writeOut({
@@ -1071,6 +1091,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Create or edit a draft',
 			annotation: annotations.saveDraft,
+			args: '{draftId?,text?,title?,channels?,variants?:[{platform,text?,options?}],tiktok?:{draft:true}}',
 			description:
 				'Creates a draft (no draftId) or edits one: title, text, per-platform variants with options (visibility, spoiler text, poll, explicit thread segments) and the channels it is meant for. A draft is never sent by itself; schedule it with schedule_posts (posts[].draftId) or publish_now. Use it for content that needs media or variant options, then attach media with attach_media. Editing replaces the fields you send; a variant with remove: true is deleted. tiktok stores TikTok’s per-post choices for the draft’s TikTok channels, which schedule_posts and publish_now then use.',
 			outputSchema: writeOut({ postId: z.string() }),
@@ -1192,6 +1213,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Attach an image or video',
 			annotation: annotations.attach,
+			args: '{draftId?, url | base64, altText?, segmentIndex?}',
 			description: `Attaches one file to a draft: a public http(s) URL (image up to 16 MB or MP4 video, type read from the file) or a small image inline as base64 (at most ${BASE64_MAX_BYTES / 1_000_000} MB). Without draftId it creates a new empty draft and returns its postId, so you can add text with save_draft and schedule it with schedule_posts (posts[].draftId). A video too large for one request is refused with useUploadSession: send it with media_upload. Files on your disk (a carousel’s slides, a rendered video) go with media_upload action "links", not base64. Simple URL media can also go straight into schedule_posts (posts[].media).`,
 			outputSchema: writeOut({ postId: z.string(), media: loose({ mediaId: z.string() }) }),
 			example: { url: 'https://example.com/clip.mp4', altText: 'Product demo' }
@@ -1245,6 +1267,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Upload files from disk (carousels, videos)',
 			annotation: annotations.mediaUpload,
+			args: '{action:"links"|"start"|"complete"|"abort", draftId?, count?, ..}',
 			description:
 				'The way to get local files into a draft. Action "links" (count 1-20, optional draftId and segmentIndex; creates a draft when draftId is omitted) returns one upload link per file, in order: send each file with a plain HTTP PUT and no other credential, e.g. `curl -fsS -T slide-1.jpg "<url>"`. Link n puts its file n-th in the post (a carousel keeps its order however the uploads finish); each link takes one image up to 16 MB or MP4 up to 95 MB, works once and expires after an hour. Use it for carousels and any file on disk instead of base64. For an MP4 over 95 MB (up to 300 MB): action "start" (size) returns part URLs to PUT with your API key, then "complete" (draftId, upload, parts with every etag) attaches it, or "abort" gives it up. For a file already at a public URL, use attach_media.',
 			outputSchema: writeOut({ postId: z.string() }),
@@ -1375,6 +1398,7 @@ function createServer(event: RequestEvent) {
 			scope: 'write',
 			title: 'Edit or remove an attachment',
 			annotation: annotations.editMedia,
+			args: '{draftId, mediaId, action:"update"|"remove"|"set_cover"|"remove_cover", ..}',
 			description:
 				'Changes one attachment of a draft (mediaId from get_post). action "update" sets alt text or moves it to another segment; "remove" deletes it and its file; "set_cover" sets a video’s cover from a JPEG of at most 8 MB (coverUrl or coverBase64); "remove_cover" lets each platform pick its own frame. Covers are used only where get_platform_requirements says video.cover. A published post cannot be edited.',
 			outputSchema: writeOut({ postId: z.string() }),

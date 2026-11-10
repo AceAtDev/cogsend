@@ -145,7 +145,12 @@ describe('MCP v2 catalog', () => {
 			expect(tool.title, tool.name).toBeTruthy();
 			expect(tool.inputSchema.additionalProperties, tool.name).toBe(false);
 			expect((tool.outputSchema as { type?: string }).type, tool.name).toBe('object');
-			const sentences = (tool.description ?? '').split(/(?<=[.!?])\s+(?=[A-Z])/).length;
+			// Odysseus-style clients show ~115 characters of a description and no
+			// schema, so the call shape must come first and fit in that window.
+			const [argsLine, ...rest] = (tool.description ?? '').split('\n');
+			expect(argsLine, tool.name).toMatch(/^Args: \{/);
+			expect(argsLine.length, tool.name).toBeLessThanOrEqual(110);
+			const sentences = rest.join('\n').split(/(?<=[.!?])\s+(?=[A-Z])/).length;
 			expect(sentences, tool.name).toBeGreaterThanOrEqual(3);
 			expect(sentences, tool.name).toBeLessThanOrEqual(7);
 			expect(
@@ -153,6 +158,10 @@ describe('MCP v2 catalog', () => {
 			).toBeGreaterThan(0);
 		}
 		const schedule = tools.find((t) => t.name === 'schedule_posts')!;
+		for (const name of ['schedule_posts', 'save_draft', 'publish_now', 'move_post'])
+			expect(tools.find((t) => t.name === name)!.description!.split('\n')[0], name).toContain(
+				'tiktok?:{draft:true}'
+			);
 		const examples = (schedule._meta as Record<string, unknown[]>)['cogsend/inputExamples'];
 		expect(examples.length).toBeGreaterThanOrEqual(2);
 	});
@@ -184,6 +193,9 @@ describe('MCP v2 catalog', () => {
 			['bluesky', 'instagram', 'linkedin', 'tiktok'].sort()
 		);
 		expect(text(result)).toContain('jobjob.linkedin');
+		// With a TikTok channel connected, the first call spells out where its choices go.
+		expect(out.summary).toContain('"tiktok":{"draft":true}');
+		expect(out.summary).toContain('never inside variants or options');
 	});
 });
 
