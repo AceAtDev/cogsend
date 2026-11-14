@@ -57,8 +57,11 @@ test.afterEach(() => {
 	ids.clear();
 });
 
-test('all seven providers open from Review in mobile and desktop modes', async ({ page }) => {
+const SCALE_KEY = 'cogsend.preview.pxPerCm';
+
+test('all seven providers open from Review in phone, desktop and file views', async ({ page }) => {
 	test.setTimeout(120000);
+	await page.setViewportSize({ width: 1440, height: 1000 });
 	await page.goto('/review');
 	for (const platform of platforms) {
 		await page.getByRole('button', { name: new RegExp(`Preview .*${prefix}${platform}`) }).click();
@@ -66,30 +69,20 @@ test('all seven providers open from Review in mobile and desktop modes', async (
 		await expect(viewer).toBeVisible();
 		await expect(viewer).toContainText(`${prefix}${platform}`);
 		await expect(viewer).not.toContainText('Internal label never public');
-		await expect(viewer.getByRole('button', { name: 'Media', exact: true })).toHaveAttribute(
+		await expect(viewer.getByRole('button', { name: 'Phone', exact: true })).toHaveAttribute(
 			'aria-pressed',
 			'true'
 		);
-		await expect(viewer.getByTestId('media-inspector')).toBeVisible();
+		await expect(viewer.locator('.device .screen')).toBeVisible();
 		if (platform === 'tiktok')
-			await viewer.screenshot({ path: '../deliverables/viewer-readable/media-desktop.png' });
-		await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
-		await expect(viewer.getByRole('checkbox', { name: 'Show overlays' })).not.toBeChecked();
-		if (platform === 'tiktok') {
-			await expect(viewer).toContainText('Actual photo title');
-			await expect(viewer.getByRole('button', { name: 'Next media' })).toBeVisible();
-			await expect(viewer.getByText('Actual photo title', { exact: true })).toBeVisible();
-		}
-		await viewer.screenshot({ path: `../deliverables/post-viewer/${platform}-mobile.png` });
+			await expect(viewer.getByText('Actual photo title', { exact: true }).first()).toBeVisible();
+		await viewer.screenshot({ path: `../deliverables/post-viewer/${platform}-phone.png` });
 		await viewer.getByRole('button', { name: 'Desktop', exact: true }).click();
-		await expect(viewer).toBeVisible();
-		if (platform === 'tiktok') {
-			await expect
-				.poll(async () => (await viewer.getByAltText('tiktok slide 1').boundingBox())?.width ?? 0)
-				.toBeGreaterThan(100);
-		}
+		await expect(viewer.locator('.desktop')).toBeVisible();
 		await viewer.screenshot({ path: `../deliverables/post-viewer/${platform}-desktop.png` });
-		await viewer.getByRole('button', { name: 'Mobile', exact: true }).click();
+		await viewer.getByRole('button', { name: 'File', exact: true }).click();
+		await expect(viewer.getByRole('region', { name: 'Original file' })).toBeVisible();
+		await expect(viewer).toContainText('1080 × 1350 px');
 		await page.keyboard.press('Escape');
 		await expect(viewer).not.toBeVisible();
 	}
@@ -99,22 +92,22 @@ test('all seven providers open from Review in mobile and desktop modes', async (
 		const viewer = page.locator('dialog[open]');
 		await expect(viewer).toBeVisible();
 		if (platform === 'tiktok')
-			await viewer.screenshot({ path: '../deliverables/viewer-readable/media-mobile.png' });
-		await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
-		await expect
-			.poll(async () => (await viewer.boundingBox())?.width ?? 9999)
-			.toBeLessThanOrEqual(390);
-		await viewer.getByRole('button', { name: 'Desktop', exact: true }).click();
-		await expect
-			.poll(async () => (await viewer.boundingBox())?.width ?? 9999)
-			.toBeLessThanOrEqual(390);
+			await viewer.screenshot({ path: '../deliverables/post-viewer/tiktok-phone-mobile.png' });
+		for (const view of ['Phone', 'Desktop', 'File']) {
+			await viewer.getByRole('button', { name: view, exact: true }).click();
+			await expect
+				.poll(async () => (await viewer.boundingBox())?.width ?? 9999)
+				.toBeLessThanOrEqual(390);
+		}
 		await page.keyboard.press('Escape');
 	}
 });
 
-test('artwork is unobstructed, captions are readable, and actual-size media can be panned', async ({
+test('a calibrated phone renders at physical size and reports the media in cm', async ({
 	page
 }) => {
+	await page.setViewportSize({ width: 1600, height: 1100 });
+	await page.addInitScript((key) => localStorage.setItem(key, '50'), SCALE_KEY);
 	await page.goto('/review');
 	const viewer = page.locator('dialog[open]');
 	await clickUntilVisible(
@@ -122,41 +115,85 @@ test('artwork is unobstructed, captions are readable, and actual-size media can 
 		page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
 		viewer
 	);
-	const image = viewer.getByAltText('tiktok slide 1');
-	const details = viewer.getByRole('complementary', { name: 'Post details' });
-	const [mediaRect, detailsRect] = await Promise.all([image.boundingBox(), details.boundingBox()]);
-	expect(mediaRect!.x + mediaRect!.width).toBeLessThanOrEqual(detailsRect!.x + 1);
-	await expect(viewer.locator('.tiktok-actions')).toHaveCount(0);
-	expect(
-		await viewer
-			.locator('.inspection-caption')
-			.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
-	).toBeGreaterThanOrEqual(16);
-	const actualSize = viewer.getByRole('button', { name: 'View media at actual size' });
-	await actualSize.click();
-	await expect.poll(async () => (await image.boundingBox())?.width ?? 0).toBe(1080);
-	const region = viewer.getByRole('region', { name: 'Post media' });
-	await region.focus();
-	await page.keyboard.press('ArrowRight');
-	await expect(image).toBeVisible();
-	await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
-	await viewer.screenshot({ path: '../deliverables/viewer-readable/actual-size.png' });
-	await viewer.getByRole('button', { name: 'Fit media to window' }).click();
-	await expect.poll(async () => (await image.boundingBox())?.width ?? 9999).toBeLessThan(1080);
-	await viewer.getByRole('button', { name: 'Feed', exact: true }).click();
-	await expect(viewer.getByRole('checkbox', { name: 'Show overlays' })).not.toBeChecked();
-	const [art, caption] = await Promise.all([
-		viewer.getByAltText('tiktok slide 1').boundingBox(),
-		viewer.locator('.caption').boundingBox()
-	]);
-	expect(caption!.y).toBeGreaterThanOrEqual(art!.y + art!.height);
-	await viewer.getByRole('button', { name: 'Show more', exact: true }).click();
-	await expect(viewer.getByRole('button', { name: 'Show less', exact: true })).toBeVisible();
-	await viewer.getByRole('checkbox', { name: 'Show overlays' }).check();
-	await expect(viewer).not.toHaveClass(/feed-safe/);
+	// iPhone 15: 1179 px at 460 ppi is 6.51 cm wide, so 325.5 px at 50 px per cm.
+	await expect
+		.poll(async () => (await viewer.locator('.device .screen').boundingBox())?.width ?? 0)
+		.toBeCloseTo(325.5, 0);
+	// A 4:5 photo letterboxed across a 6.51 cm screen is 6.5 × 8.1 cm.
+	await expect(viewer.getByRole('region', { name: 'Size on screen' })).toContainText(
+		'6.5 × 8.1 cm'
+	);
+	await expect(viewer).toContainText('True size on this screen');
+	await viewer.screenshot({ path: '../deliverables/post-viewer/tiktok-true-size.png' });
+	const overlays = viewer.getByRole('switch', { name: /App buttons and caption/ });
+	await expect(overlays).toBeChecked();
+	await expect(viewer.locator('.sim-rail')).toBeVisible();
+	await overlays.uncheck();
+	await expect(viewer.locator('.sim-rail')).toHaveCount(0);
+	await overlays.check();
+	await viewer.locator('.sim-more').click();
+	await expect(viewer.locator('.sim-more')).toHaveText('less');
+	await viewer.getByRole('combobox', { name: 'Phone' }).selectOption('iphone-6-9');
+	// 1320 px at 460 ppi is 7.29 cm.
+	await expect
+		.poll(async () => (await viewer.locator('.device .screen').boundingBox())?.width ?? 0)
+		.toBeCloseTo(364.5, 0);
 });
 
-test('mobile controls remain thumb-sized and caption navigation works at 320 and 390px', async ({
+test('calibrating against a card is saved for this screen', async ({ page }) => {
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await page.addInitScript((key) => localStorage.removeItem(key), SCALE_KEY);
+	await page.goto('/review');
+	const viewer = page.locator('dialog[open]');
+	await clickUntilVisible(
+		page,
+		page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
+		viewer
+	);
+	await expect(viewer).toContainText('Approximate until you calibrate');
+	await viewer.getByRole('button', { name: 'Calibrate screen' }).click();
+	await viewer.getByRole('slider', { name: 'Card outline size' }).fill('44');
+	// ID-1 cards are 8.56 cm wide.
+	await expect
+		.poll(async () => (await viewer.locator('.card-outline').boundingBox())?.width ?? 0)
+		.toBeCloseTo(8.56 * 44, 0);
+	await viewer.screenshot({ path: '../deliverables/post-viewer/calibrate.png' });
+	await page.keyboard.press('Escape');
+	await expect(viewer).toBeVisible();
+	await viewer.getByRole('button', { name: 'Calibrate screen' }).click();
+	await viewer.getByRole('slider', { name: 'Card outline size' }).fill('44');
+	await viewer.getByRole('button', { name: 'Save' }).click();
+	await expect(viewer).toContainText('True size on this screen');
+	expect(await page.evaluate((key) => localStorage.getItem(key), SCALE_KEY)).toBe('44');
+});
+
+test('file view shows the original at 100% and can be panned', async ({ page }) => {
+	await page.setViewportSize({ width: 1280, height: 900 });
+	await page.goto('/review');
+	const viewer = page.locator('dialog[open]');
+	await clickUntilVisible(
+		page,
+		page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
+		viewer
+	);
+	await viewer.getByRole('button', { name: 'File', exact: true }).click();
+	const image = viewer.getByAltText('tiktok slide 1');
+	await expect.poll(async () => (await image.boundingBox())?.width ?? 9999).toBeLessThan(1080);
+	await viewer.getByRole('button', { name: '100%', exact: true }).click();
+	await expect.poll(async () => (await image.boundingBox())?.width ?? 0).toBe(1080);
+	const region = viewer.getByRole('region', { name: 'Original file' });
+	await region.focus();
+	await page.keyboard.press('ArrowRight');
+	await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+	await expect(image).toBeVisible();
+	await viewer.getByRole('button', { name: 'Fit', exact: true }).click();
+	await expect.poll(async () => (await image.boundingBox())?.width ?? 9999).toBeLessThan(1080);
+	expect(
+		await viewer.locator('.copy-text').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+	).toBeGreaterThanOrEqual(16);
+});
+
+test('mobile controls remain thumb-sized and the caption is reachable at 320 and 390px', async ({
 	page
 }) => {
 	await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -169,20 +206,18 @@ test('mobile controls remain thumb-sized and caption navigation works at 320 and
 			page.getByRole('button', { name: new RegExp(`Preview .*${prefix}tiktok`) }),
 			viewer
 		);
-		await expect(viewer.getByRole('combobox', { name: 'Media zoom' })).toHaveValue('0');
-		expect(
-			await viewer.getByTestId('media-inspector').evaluate((el) => el.scrollWidth <= el.clientWidth)
-		).toBe(true);
-		for (const button of await viewer.getByRole('button').all()) {
+		const body = viewer.locator('.viewer-body');
+		expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+		// Buttons inside the simulated phone are drawn at the phone's real size on purpose.
+		for (const button of await viewer.locator('button:not(.screen button)').all()) {
 			if (!(await button.isVisible())) continue;
 			const box = await button.boundingBox();
 			expect(box!.width).toBeGreaterThanOrEqual(48);
 			expect(box!.height).toBeGreaterThanOrEqual(48);
 		}
-		await viewer.getByRole('button', { name: 'Caption', exact: true }).click();
-		await expect(viewer.getByText('Actual photo title', { exact: true })).toBeInViewport();
-		await viewer.getByRole('button', { name: 'Back to media', exact: true }).click();
-		await expect(viewer.getByRole('combobox', { name: 'Media zoom' })).toBeInViewport();
+		await viewer.locator('.copy-title').scrollIntoViewIfNeeded();
+		await expect(viewer.locator('.copy-title')).toHaveText('Actual photo title');
+		await expect(viewer.locator('.copy-title')).toBeInViewport();
 		await page.keyboard.press('Escape');
 	}
 });
@@ -210,8 +245,8 @@ test('thumbnail opens carousel, reaches hidden slides, restores focus on close',
 	await thumb.click();
 	const viewer = page.locator('dialog[open]');
 	await expect(viewer).toBeVisible();
-	await expect(viewer.getByTestId('media-inspector')).toBeVisible();
-	for (let i = 0; i < 5; i++) await viewer.getByRole('button', { name: /next/i }).click();
+	await expect(viewer.locator('.device .screen')).toBeVisible();
+	for (let i = 0; i < 5; i++) await viewer.getByRole('button', { name: 'Next media' }).click();
 	await expect(viewer.getByAltText('tiktok slide 6')).toBeVisible();
 	await page.keyboard.press('ArrowLeft');
 	await expect(viewer.getByAltText('tiktok slide 5')).toBeVisible();

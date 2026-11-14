@@ -10,6 +10,16 @@ import {
 	viewerProfile,
 	VIEWER_PROFILES
 } from '#lib/domain/post-viewer.js';
+import {
+	clampPxPerCm,
+	feedAspect,
+	formatCm,
+	phoneById,
+	phoneLayout,
+	PHONES,
+	screenCm,
+	toCm
+} from '#lib/domain/true-size.js';
 
 describe('provider viewer model', () => {
 	it('isolates thread attachments and translates a flattened selected attachment index', () => {
@@ -60,5 +70,35 @@ describe('provider viewer model', () => {
 		expect(captionPreview('Hello world', 5, true)).toBe('Hello world');
 		expect(captionPreview('😀😀😀', 2, false)).toBe('😀😀…');
 		expect(captionPreview('short', 20, false)).toBe('short');
+	});
+});
+
+describe('true-size phone preview', () => {
+	it('derives the physical screen from panel pixels and density', () => {
+		const iphone = screenCm(phoneById('iphone-6-1'));
+		expect(iphone.width).toBeCloseTo(6.51, 2);
+		expect(iphone.height).toBeCloseTo(14.11, 2);
+		expect(phoneById('unknown').id).toBe(PHONES[0].id);
+	});
+
+	it('scales the app viewport to the real screen width and never hides a shrink', () => {
+		const phone = phoneById('iphone-6-1');
+		const roomy = phoneLayout(phone, 50, { width: 2000, height: 2000 }, 0);
+		expect(roomy.fit).toBe(1);
+		expect(phone.viewport.width * roomy.scale).toBeCloseTo(screenCm(phone).width * 50, 6);
+		const tight = phoneLayout(phone, 50, { width: 2000, height: 400 }, 0);
+		expect(tight.fit).toBeLessThan(1);
+		expect(tight.frame.height).toBeCloseTo(400, 6);
+		expect(toCm(100 * tight.fit, 50, tight.fit)).toBeCloseTo(2, 6);
+	});
+
+	it('rejects nonsense calibration and crops Instagram feed media to its allowed range', () => {
+		expect(clampPxPerCm(Number.NaN)).toBeNull();
+		expect(clampPxPerCm(5)).toBe(20);
+		expect(clampPxPerCm(500)).toBe(120);
+		expect(feedAspect('instagram', 9 / 16)).toBe(0.8);
+		expect(feedAspect('instagram', 3)).toBe(1.91);
+		expect(feedAspect('tiktok', 9 / 16)).toBe(9 / 16);
+		expect(formatCm(6.512, 8.14)).toBe('6.5 × 8.1 cm');
 	});
 });
