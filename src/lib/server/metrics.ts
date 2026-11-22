@@ -142,9 +142,14 @@ const ENROLL_MARK_EVERY_MS = 10 * 60_000;
  */
 export async function enrollPublished(db: AppDb, now = Date.now()) {
 	const floor = now - SNAPSHOT_WINDOW_MS;
-	const mark = Number(await readAppSetting(db, METRICS_ENROLL_SETTING));
-	// A mark from the future (a skewed clock, a restored database) is ignored.
-	const markOk = Number.isFinite(mark) && mark > 0 && mark <= now;
+	const { mark, platforms: markedFor } = parseEnrollMark(
+		await readAppSetting(db, METRICS_ENROLL_SETTING)
+	);
+	// A mark from the future (a skewed clock, a restored database) is ignored,
+	// and so is one taken before a platform was collected: its posts published
+	// before the mark would otherwise never be enrolled.
+	const markOk =
+		Number.isFinite(mark) && mark > 0 && mark <= now && markedFor === ENROLL_PLATFORMS_KEY;
 	const since = markOk ? Math.max(floor, mark - ENROLL_OVERLAP_MS) : floor;
 	const platforms = sql.join(
 		COLLECTED_PLATFORMS.map((p) => sql`${p}`),
@@ -167,8 +172,20 @@ export async function enrollPublished(db: AppDb, now = Date.now()) {
 	// scans the same range again.
 	if (enrolled >= METRICS_DISCOVER_LIMIT) return;
 	if (!markOk || now - mark >= ENROLL_MARK_EVERY_MS) {
-		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now));
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, enrollMark(now));
 	}
+}
+
+const ENROLL_PLATFORMS_KEY = COLLECTED_PLATFORMS.join(',');
+
+/** The stored mark: `<epoch ms>;<collected platforms>`. */
+export function enrollMark(at: number): string {
+	return `${at};${ENROLL_PLATFORMS_KEY}`;
+}
+
+function parseEnrollMark(raw: string | null | undefined): { mark: number; platforms: string } {
+	const [at = '', platforms = ''] = (raw ?? '').split(';');
+	return { mark: Number(at), platforms };
 }
 
 type WorkRow = {

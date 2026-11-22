@@ -141,7 +141,7 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 			(p, i) =>
 				`  ${i + 1}. ${p.channel} ${p.publishedAt.display}: ${countsLine(p.platform, p.counts)} — "${p.excerpt}" (post ${p.postId})`
 		),
-		`Instagram, Threads and X: ${NOT_COLLECTED_YET.toLowerCase()}`
+		`Threads and X: ${NOT_COLLECTED_YET.toLowerCase()}`
 	];
 	return {
 		now: nowView(agent),
@@ -156,7 +156,8 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 			mastodon: 'favourites, boosts, replies, quotes (Mastodon 4.5+)',
 			tiktok: 'views, likes, comments, shares (public videos; needs the video.list permission)',
 			linkedin: 'company pages only: impressions, likes, comments, shares, clicks',
-			instagram: NOT_COLLECTED_YET,
+			instagram:
+				'views, likes, comments, shares (needs instagram_business_manage_insights; accounts connected before it give likes and comments only)',
 			threads: NOT_COLLECTED_YET,
 			x: NOT_COLLECTED_YET
 		},

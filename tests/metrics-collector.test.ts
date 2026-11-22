@@ -22,6 +22,7 @@ import {
 	collectDueMetrics,
 	enrollPublished,
 	METRICS_ENROLL_SETTING,
+	enrollMark,
 	latestMetricsFor,
 	loadDeliveryMetrics,
 	METRICS_BACKOFF_SETTING,
@@ -155,7 +156,7 @@ describe('enrolment scan range', () => {
 	it('scans only from the stored mark once one exists, and ignores a mark from the future', async () => {
 		const now = Date.UTC(2026, 10, 2, 12);
 		const bsky = await account('bluesky');
-		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now - 10 * 60_000));
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, enrollMark(now - 10 * 60_000));
 		// Inside the nine-day window but well before mark minus the overlap: skipped.
 		const before = await published(bsky, bskyUri(41), now - 3 * D);
 		// After the mark: enrolled.
@@ -166,11 +167,25 @@ describe('enrolment scan range', () => {
 		expect(ids).not.toContain(before.id);
 
 		// A mark from the future falls back to the whole window.
-		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now + D));
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, enrollMark(now + D));
 		await enrollPublished(db, now);
 		ids = (await db.select().from(deliveryMetrics)).map((r) => r.targetId);
 		expect(ids).toContain(before.id);
-		expect(Number(await readAppSetting(db, METRICS_ENROLL_SETTING, { fresh: true }))).toBe(now);
+		expect(await readAppSetting(db, METRICS_ENROLL_SETTING, { fresh: true })).toBe(enrollMark(now));
+	});
+});
+
+describe('enrolment after a platform starts being collected', () => {
+	it('scans the whole window once when the mark predates the platform list', async () => {
+		const now = Date.UTC(2026, 10, 2, 12);
+		const ig = await account('instagram');
+		// A mark from before Instagram was collected: a bare number.
+		await writeAppSetting(db, METRICS_ENROLL_SETTING, String(now - 10 * 60_000));
+		const earlier = await published(ig, '17890000000000002', now - 3 * D);
+		await enrollPublished(db, now);
+		const ids = (await db.select().from(deliveryMetrics)).map((r) => r.targetId);
+		expect(ids).toContain(earlier.id);
+		expect(await readAppSetting(db, METRICS_ENROLL_SETTING, { fresh: true })).toBe(enrollMark(now));
 	});
 });
 
