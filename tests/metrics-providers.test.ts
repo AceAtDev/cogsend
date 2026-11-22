@@ -3,6 +3,12 @@ import { blueskyMetrics } from '#lib/server/providers/bluesky.js';
 import { mastodonMetrics } from '#lib/server/providers/mastodon.js';
 import { tiktokMetrics, TIKTOK_SCOPES } from '#lib/server/providers/tiktok.js';
 import { linkedinMetrics } from '#lib/server/providers/linkedin.js';
+import {
+	INSTAGRAM_INSIGHTS_SCOPE,
+	INSTAGRAM_SCOPES,
+	instagramAuthorizeUrl,
+	instagramMetrics
+} from '#lib/server/providers/instagram.js';
 import { MetricsError, retryAfterFrom, type FetchLike } from '#lib/server/providers/types.js';
 import { LINKEDIN_PERSONAL_MESSAGE } from '#lib/domain/metrics.js';
 
@@ -247,6 +253,112 @@ describe('TikTok metrics', () => {
 		const out = await tiktokMetrics(['v_pub_file~v2-1.123'], tiktokCreds, fetchImpl);
 		expect(seen).toHaveLength(0);
 		expect(out.get('v_pub_file~v2-1.123')?.kind).toBe('unavailable');
+	});
+});
+
+const igMedia = '17890000000000001';
+const igCreds = {
+	accessToken: 'ig',
+	scopes: [
+		'instagram_business_basic',
+		'instagram_business_content_publish',
+		INSTAGRAM_INSIGHTS_SCOPE
+	]
+};
+const metaError = (code: number, subcode?: number, status = 400) =>
+	Response.json(
+		{ error: { message: 'x', type: 'OAuthException', code, error_subcode: subcode } },
+		{ status }
+	);
+
+describe('Instagram metrics', () => {
+	it('asks for instagram_business_manage_insights when connecting', () => {
+		expect(INSTAGRAM_SCOPES).toContain(INSTAGRAM_INSIGHTS_SCOPE);
+		const url = new URL(instagramAuthorizeUrl('app', 'https://cogsend.example', 'st'));
+		expect(url.searchParams.get('scope')?.split(',')).toContain(INSTAGRAM_INSIGHTS_SCOPE);
+	});
+
+	it('reads views, likes, comments and shares from the media insights', async () => {
+		const { fetchImpl, seen } = fake(() =>
+			Response.json({
+				data: [
+					{ name: 'views', period: 'lifetime', values: [{ value: 900 }] },
+					{ name: 'likes', period: 'lifetime', values: [{ value: 40 }] },
+					{ name: 'comments', period: 'lifetime', values: [{ value: 6 }] },
+					{ name: 'shares', period: 'lifetime', values: [{ value: 3 }] }
+				]
+			})
+		);
+		const out = await instagramMetrics([igMedia], igCreds, fetchImpl);
+		const url = new URL(seen[0].url);
+		expect(url.origin).toBe('https://graph.instagram.com');
+		expect(url.pathname).toMatch(new RegExp(`/v\\d+\\.0/${igMedia}/insights$`));
+		expect(url.searchParams.get('metric')).toBe('views,likes,comments,shares');
+		expect(url.searchParams.get('access_token')).toBe('ig');
+		expect(out.get(igMedia)).toEqual({
+			kind: 'ok',
+			counts: { views: 900, likes: 40, comments: 6, shares: 3 }
+		});
+	});
+
+	it('leaves a metric Instagram has no data for yet as not reported', async () => {
+		const { fetchImpl } = fake(() =>
+			Response.json({ data: [{ name: 'likes', period: 'lifetime', values: [{ value: 2 }] }] })
+		);
+		const out = await instagramMetrics([igMedia], igCreds, fetchImpl);
+		expect(out.get(igMedia)).toEqual({
+			kind: 'ok',
+			counts: { views: null, likes: 2, comments: null, shares: null }
+		});
+	});
+
+	it('reads likes and comments for a connection made before the insights scope', async () => {
+		const { fetchImpl, seen } = fake(() =>
+			Response.json({ like_count: 12, comments_count: 1, id: igMedia })
+		);
+		const out = await instagramMetrics(
+			[igMedia],
+			{
+				accessToken: 'ig',
+				scopes: ['instagram_business_basic', 'instagram_business_content_publish']
+			},
+			fetchImpl
+		);
+		const url = new URL(seen[0].url);
+		expect(url.pathname.endsWith(`/${igMedia}`)).toBe(true);
+		expect(url.searchParams.get('fields')).toBe('like_count,comments_count');
+		expect(out.get(igMedia)).toEqual({ kind: 'ok', counts: { likes: 12, comments: 1 } });
+	});
+
+	it('marks a deleted post as not found', async () => {
+		const { fetchImpl } = fake(() => metaError(100, 33));
+		const out = await instagramMetrics([igMedia], igCreds, fetchImpl);
+		expect(out.get(igMedia)).toEqual({ kind: 'not_found' });
+	});
+
+	it('asks for a reconnect on a dead token or a missing permission', async () => {
+		const dead = fake(() => metaError(190));
+		expect((await failure(instagramMetrics([igMedia], igCreds, dead.fetchImpl))).kind).toBe(
+			'reconnect'
+		);
+		const denied = fake(() => metaError(10, undefined, 403));
+		const err = await failure(instagramMetrics([igMedia], igCreds, denied.fetchImpl));
+		expect(err.kind).toBe('reconnect');
+		expect(err.message).toMatch(/enable metrics/);
+	});
+
+	it('backs off when Meta throttles', async () => {
+		const { fetchImpl } = fake(() => metaError(4));
+		expect((await failure(instagramMetrics([igMedia], igCreds, fetchImpl))).kind).toBe(
+			'rate_limited'
+		);
+	});
+
+	it('does not call Instagram for a post without a media id', async () => {
+		const { fetchImpl, seen } = fake(() => Response.json({}));
+		const out = await instagramMetrics(['not-an-id'], igCreds, fetchImpl);
+		expect(seen).toHaveLength(0);
+		expect(out.get('not-an-id')?.kind).toBe('unavailable');
 	});
 });
 

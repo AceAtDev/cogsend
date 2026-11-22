@@ -10,8 +10,10 @@ import { singlePost } from './flatten';
 import { providerFetch } from './timed-fetch';
 import {
 	mediaByteLength,
+	MetricsError,
 	processingError,
 	ProviderError,
+	retryAfterFrom,
 	resumedVideoState,
 	unconfirmedPostError,
 	credentialsAfterRefreshFailure
@@ -21,6 +23,7 @@ import type {
 	ConnectionMeta,
 	FetchLike,
 	MediaAttachment,
+	MetricsOutcome,
 	PlatformProvider,
 	PublishResult,
 	ValidationIssue
@@ -29,7 +32,14 @@ import { isVideoAttachment, pollVideo, videoValidation } from './video';
 
 export const INSTAGRAM_API_VERSION = 'v26.0';
 const GRAPH = `https://graph.instagram.com/${INSTAGRAM_API_VERSION}`;
-const SCOPES = ['instagram_business_basic', 'instagram_business_content_publish'];
+export const INSTAGRAM_INSIGHTS_SCOPE = 'instagram_business_manage_insights';
+// The insights scope needs no App Review for accounts with a role on the app
+// (Standard access), so it is asked for along with posting.
+export const INSTAGRAM_SCOPES = [
+	'instagram_business_basic',
+	'instagram_business_content_publish',
+	INSTAGRAM_INSIGHTS_SCOPE
+];
 const PROFILE_FIELDS = 'user_id,username,name,account_type,profile_picture_url';
 /** The account kinds Instagram lets post through its API. */
 const POSTING_ACCOUNT_TYPES = new Set(['BUSINESS', 'MEDIA_CREATOR']);
@@ -432,8 +442,122 @@ export const instagramProvider: PlatformProvider = {
 			if ((err as { status?: number } | null)?.status === 401) throw err;
 			return credentialsAfterRefreshFailure('Instagram', creds);
 		}
-	}
+	},
+
+	// One media object per insights call: Graph has no batch read for them.
+	metricsBatchSize: 1,
+	fetchMetrics: (ids, creds, _meta, fetchImpl) => instagramMetrics(ids, creds, fetchImpl)
 };
+
+const INSIGHT_METRICS = ['views', 'likes', 'comments', 'shares'] as const;
+/** "Object does not exist": the post was deleted. */
+const MISSING_OBJECT_SUBCODE = 33;
+/** Code 10: the token lacks the permission the call needs. */
+const PERMISSION_CODE = 10;
+
+/**
+ * Views, likes, comments and shares of one published post from the media
+ * insights endpoint (instagram_business_manage_insights). A connection made
+ * before CogSend asked for that scope gets the like and comment counts on the
+ * media object instead, which instagram_business_basic covers, until it is
+ * connected again.
+ */
+export async function instagramMetrics(
+	ids: string[],
+	creds: ConnectionCredentials,
+	fetchImpl: FetchLike = providerFetch
+): Promise<Map<string, MetricsOutcome>> {
+	const token = creds.accessToken;
+	if (!token) throw new MetricsError('reconnect', 'Instagram sign-in is missing — reconnect');
+	const insights = Boolean(creds.scopes?.includes(INSTAGRAM_INSIGHTS_SCOPE));
+	const out = new Map<string, MetricsOutcome>();
+	for (const id of ids) {
+		if (!/^\d{5,30}$/.test(id)) {
+			out.set(id, { kind: 'unavailable', reason: 'Instagram gave no media id for this post.' });
+			continue;
+		}
+		const path = insights
+			? `${encodeURIComponent(id)}/insights?metric=${INSIGHT_METRICS.join(',')}`
+			: `${encodeURIComponent(id)}?fields=like_count,comments_count`;
+		const sep = path.includes('?') ? '&' : '?';
+		let res: Response;
+		try {
+			res = await fetchImpl(`${GRAPH}/${path}${sep}access_token=${encodeURIComponent(token)}`);
+		} catch (err) {
+			throw new MetricsError(
+				'transient',
+				`Instagram insights: ${err instanceof Error ? err.message : String(err)}`
+			);
+		}
+		const text = await res.text().catch(() => '');
+		if (!res.ok) {
+			const outcome = classifyMetricsFailure(res, text);
+			if (outcome) out.set(id, outcome);
+			continue;
+		}
+		let body: Record<string, unknown>;
+		try {
+			body = JSON.parse(text) as Record<string, unknown>;
+		} catch {
+			throw new MetricsError('transient', `Instagram insights returned no JSON for ${id}`);
+		}
+		out.set(id, { kind: 'ok', counts: insights ? insightCounts(body) : basicCounts(body) });
+	}
+	return out;
+}
+
+function count(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** Instagram leaves a metric out (rather than 0) while it has no data yet. */
+function insightCounts(body: Record<string, unknown>) {
+	const counts: Record<(typeof INSIGHT_METRICS)[number], number | null> = {
+		views: null,
+		likes: null,
+		comments: null,
+		shares: null
+	};
+	const rows = Array.isArray(body.data) ? (body.data as Array<Record<string, unknown>>) : [];
+	for (const row of rows) {
+		const name = row?.name;
+		if (typeof name !== 'string' || !(name in counts)) continue;
+		const values = Array.isArray(row.values) ? (row.values as Array<{ value?: unknown }>) : [];
+		const total = row.total_value as { value?: unknown } | undefined;
+		counts[name as keyof typeof counts] = count(values[0]?.value ?? total?.value);
+	}
+	return counts;
+}
+
+function basicCounts(body: Record<string, unknown>) {
+	return { likes: count(body.like_count), comments: count(body.comments_count) };
+}
+
+/**
+ * A failure that concerns this post alone becomes its outcome; one that says
+ * the token or the app is the problem is thrown, so the account's other posts
+ * are not tried with it.
+ */
+function classifyMetricsFailure(res: Response, body: string): MetricsOutcome | null {
+	const { code, subcode, message } = parseMetaError(body);
+	const said = `Instagram insights failed (${res.status})${code !== undefined ? ` [${code}${subcode !== undefined ? `/${subcode}` : ''}]` : ''}: ${message || body.slice(0, 200)}`;
+	if (res.status === 401 || (code !== undefined && AUTH_CODES.has(code)))
+		throw new MetricsError('reconnect', `${said} — reconnect`, { status: res.status });
+	if (code === PERMISSION_CODE)
+		throw new MetricsError('reconnect', `${said} — reconnect to enable metrics`, {
+			status: res.status
+		});
+	if (res.status === 429 || (code !== undefined && RATE_CODES.has(code)))
+		throw new MetricsError('rate_limited', said, {
+			status: res.status,
+			retryAfterMs: retryAfterFrom(res.headers)
+		});
+	if (res.status >= 500 || (code !== undefined && TRANSIENT_CODES.has(code)))
+		throw new MetricsError('transient', said, { status: res.status });
+	if (code === 100 && subcode === MISSING_OBJECT_SUBCODE) return { kind: 'not_found' };
+	if (res.status === 404) return { kind: 'not_found' };
+	return { kind: 'unavailable', reason: said };
+}
 
 /** The post's link, or null: the post is live either way, so a failure here is swallowed. */
 async function permalink(id: string, token: string, fetchImpl: FetchLike): Promise<string | null> {
@@ -474,7 +598,7 @@ export function instagramAuthorizeUrl(appId: string, appUrl: string, state: stri
 	const params = new URLSearchParams({
 		client_id: appId,
 		redirect_uri: instagramCallbackUrl(appUrl),
-		scope: SCOPES.join(','),
+		scope: INSTAGRAM_SCOPES.join(','),
 		response_type: 'code',
 		state
 	});
@@ -515,6 +639,17 @@ function profileFacts(profile: InstagramProfile) {
 	};
 }
 
+/** What the person granted, as Instagram reports it: a comma list or an array. */
+function grantedScopes(value: unknown): string[] | null {
+	const list = Array.isArray(value)
+		? value.filter((v): v is string => typeof v === 'string')
+		: typeof value === 'string'
+			? value.split(',')
+			: [];
+	const scopes = list.map((s) => s.trim()).filter(Boolean);
+	return scopes.length ? scopes : null;
+}
+
 export const PERSONAL_ACCOUNT_MESSAGE =
 	"Instagram only lets Business and Creator accounts post through its API — switch the account type in Instagram's settings, then connect again";
 
@@ -545,9 +680,11 @@ export async function instagramExchangeCode(
 	// get the same fields at the top level.
 	const raw = (await tokRes.json()) as {
 		access_token?: string;
-		data?: Array<{ access_token?: string }>;
+		permissions?: unknown;
+		data?: Array<{ access_token?: string; permissions?: unknown }>;
 	};
 	const shortToken = raw.data?.[0]?.access_token ?? raw.access_token;
+	const granted = grantedScopes(raw.data?.[0]?.permissions ?? raw.permissions);
 	if (!shortToken) throw new Error('Instagram exchange returned no access_token');
 
 	const longRes = await fetchImpl(
@@ -575,7 +712,7 @@ export async function instagramExchangeCode(
 		accessToken: long.access_token,
 		expiresAt: long.expires_in ? Date.now() + long.expires_in * 1000 : undefined,
 		tokenType: 'bearer',
-		scopes: SCOPES,
+		scopes: granted ?? INSTAGRAM_SCOPES,
 		clientId: args.appId,
 		clientSecret: args.appSecret,
 		igUserId: facts.userId,

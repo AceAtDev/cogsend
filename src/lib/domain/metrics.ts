@@ -33,7 +33,8 @@ export const PLATFORM_METRICS: Partial<Record<string, readonly MetricKey[]>> = {
 	bluesky: ['likes', 'shares', 'comments', 'quotes'],
 	mastodon: ['likes', 'shares', 'comments', 'quotes'],
 	tiktok: ['views', 'likes', 'comments', 'shares'],
-	linkedin: ['impressions', 'likes', 'comments', 'shares', 'clicks']
+	linkedin: ['impressions', 'likes', 'comments', 'shares', 'clicks'],
+	instagram: ['views', 'likes', 'comments', 'shares']
 };
 
 /** Platform words for a count where they differ from ours (a Bluesky share is a repost). */
@@ -90,6 +91,7 @@ export function metricsSupport(conn: {
 	switch (conn.platform) {
 		case 'bluesky':
 		case 'mastodon':
+		case 'instagram':
 			return { supported: true };
 		case 'tiktok':
 			// Stored scopes come from the token answer; an older row without any

@@ -246,7 +246,7 @@
 		</div>
 	{/if}
 	<p class="text-[12px] text-stone-500">
-		Counts from Bluesky, Mastodon, TikTok and LinkedIn company pages, read about 1 hour, 1 day and 7
-		days after publishing. Instagram, Threads and X: {NOT_COLLECTED_YET.toLowerCase()}
+		Counts from Bluesky, Mastodon, TikTok, Instagram and LinkedIn company pages, read about 1 hour,
+		1 day and 7 days after publishing. Threads and X: {NOT_COLLECTED_YET.toLowerCase()}
 	</p>
 </div>

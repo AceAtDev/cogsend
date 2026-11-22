@@ -172,7 +172,7 @@ describe('rendering', () => {
 		expect(body).toContain('data-testid="insights-performance"');
 		expect(body).toContain('measured post');
 		expect(body).toContain('21 likes · 4 reposts · 2 replies · 1 quotes');
-		expect(body).toContain('Instagram, Threads and X');
+		expect(body).toContain('Threads and X');
 	});
 
 	it('the Insights section says when there is nothing published', () => {

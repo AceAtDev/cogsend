@@ -59,9 +59,15 @@ import {
 import { refreshWithStoredRetry } from './publish';
 
 /** Platforms CogSend reads metrics from; the rest are shown "not collected yet". */
-export const COLLECTED_PLATFORMS = ['bluesky', 'mastodon', 'tiktok', 'linkedin'] as const;
+export const COLLECTED_PLATFORMS = [
+	'bluesky',
+	'mastodon',
+	'tiktok',
+	'linkedin',
+	'instagram'
+] as const;
 /** Platforms whose metrics read needs the account's token (and so a refresh first). */
-const TOKEN_REFRESH_PLATFORMS = new Set(['tiktok', 'linkedin']);
+const TOKEN_REFRESH_PLATFORMS = new Set(['tiktok', 'linkedin', 'instagram']);
 
 /** Deliveries looked at per tick at most. */
 export const METRICS_PER_TICK = 25;
@@ -98,7 +104,7 @@ class PendingWrites {
 /**
  * Per-platform pause after a 429, keyed by what the limit applies to: the
  * public Bluesky AppView limits by IP (so every account shares it), a Mastodon
- * server limits on its own, and TikTok and LinkedIn limit per app.
+ * server limits on its own, and TikTok, LinkedIn and Instagram limit per app.
  */
 export type Backoff = Record<string, number>;
 

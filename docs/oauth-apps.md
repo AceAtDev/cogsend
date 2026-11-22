@@ -82,8 +82,10 @@ Instagram only lets Business and Creator accounts post through its API. A person
    dashboard with the **Manage messaging & content on Instagram** use case. An
    app you already use for Threads works too: **Use cases → Add use cases**.
 2. Under that use case, open **Permissions and features** and add
-   `instagram_business_basic` and `instagram_business_content_publish`. The
-   messaging and comment permissions it suggests are not needed.
+   `instagram_business_basic`, `instagram_business_content_publish` and
+   `instagram_business_manage_insights` (for [performance
+   metrics](posts.md#performance-metrics)). The messaging and comment
+   permissions it suggests are not needed.
 3. Open **API setup with Instagram login**. Under **Set up Instagram business
    login**, press **Set up** and enter the redirect URI as the **Redirect URL**.
 4. Copy the **Instagram app ID** and **Instagram app secret** shown on the same
@@ -213,15 +215,15 @@ cannot succeed. Mastodon and Bluesky keep working either way.
 
 ## Platforms
 
-| Platform  | Auth                                                                     | Text                                         | Images                                                    | Video                                                                                                 | Threads                      |
-| --------- | ------------------------------------------------------------------------ | -------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------- |
-| Mastodon  | OAuth (per instance)                                                     | instance max (default 500)                   | 4, 16MB                                                   | instance max (default 99MB)                                                                           | yes                          |
-| Bluesky   | handle + app password                                                    | 300                                          | 4, 2MB                                                    | up to 10 min, 300MB                                                                                   | yes                          |
-| LinkedIn  | OAuth (`openid profile email w_member_social`)                           | 3000                                         | 4, 8MB (no WebP)                                          | 3 s to 30 min, 500MB                                                                                  | no — flattened into one post |
-| Threads   | OAuth (`threads_basic threads_content_publish` `threads_manage_replies`) | 500, max 5 links                             | 4 uploadable, 10 allowed, 8MB JPEG/PNG                    | up to 5 min, 1GB                                                                                      | yes                          |
-| Instagram | OAuth (`instagram_business_basic instagram_business_content_publish`)    | 2200, max 30 hashtags                        | required: 1 to 10, 8MB JPEG (PNG and WebP sent as a copy) | a Reel on its own: 3 s to 15 min, 300MB                                                               | no — flattened into one post |
-| TikTok    | OAuth (`user.info.basic video.publish video.list`)                       | 2200 (UTF-16 units: an emoji counts 2)       | not supported                                             | required: one video, up to the account's own limit (3 to 10 min), 23 to 60 fps, 360 to 4096 px a side | no — flattened into one post |
-| X         | OAuth 2.0 + PKCE                                                         | 280 (25,000 with a paid plan), max 1 cashtag | 4, 5MB (15MB GIF)                                         | 0.5 s to 2:20 (longer with X Premium), 512MB                                                          | yes                          |
+| Platform  | Auth                                                                                                     | Text                                         | Images                                                    | Video                                                                                                 | Threads                      |
+| --------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Mastodon  | OAuth (per instance)                                                                                     | instance max (default 500)                   | 4, 16MB                                                   | instance max (default 99MB)                                                                           | yes                          |
+| Bluesky   | handle + app password                                                                                    | 300                                          | 4, 2MB                                                    | up to 10 min, 300MB                                                                                   | yes                          |
+| LinkedIn  | OAuth (`openid profile email w_member_social`)                                                           | 3000                                         | 4, 8MB (no WebP)                                          | 3 s to 30 min, 500MB                                                                                  | no — flattened into one post |
+| Threads   | OAuth (`threads_basic threads_content_publish` `threads_manage_replies`)                                 | 500, max 5 links                             | 4 uploadable, 10 allowed, 8MB JPEG/PNG                    | up to 5 min, 1GB                                                                                      | yes                          |
+| Instagram | OAuth (`instagram_business_basic instagram_business_content_publish instagram_business_manage_insights`) | 2200, max 30 hashtags                        | required: 1 to 10, 8MB JPEG (PNG and WebP sent as a copy) | a Reel on its own: 3 s to 15 min, 300MB                                                               | no — flattened into one post |
+| TikTok    | OAuth (`user.info.basic video.publish video.list`)                                                       | 2200 (UTF-16 units: an emoji counts 2)       | not supported                                             | required: one video, up to the account's own limit (3 to 10 min), 23 to 60 fps, 360 to 4096 px a side | no — flattened into one post |
+| X         | OAuth 2.0 + PKCE                                                                                         | 280 (25,000 with a paid plan), max 1 cashtag | 4, 5MB (15MB GIF)                                         | 0.5 s to 2:20 (longer with X Premium), 512MB                                                          | yes                          |
 
 LinkedIn rejects WebP at publish time — upload JPEG, PNG or GIF.
 

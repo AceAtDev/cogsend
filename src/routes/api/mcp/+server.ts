@@ -657,7 +657,7 @@ function createServer(event: RequestEvent) {
 			annotation: annotations.read,
 			args: '{brand?, channels?: [key], from?, to?, sort?, limit?}',
 			description:
-				'How published posts performed over a range of publish dates (default: the last 30 days): totals per brand and per channel, and the top deliveries by the chosen count, each with its channel key, publish time, counts and text excerpt. Use it to learn which posts, channels and formats work before drafting new ones. Counts come from snapshots about 1h, 24h and 7d after publishing, so a post from the last hour may have none yet. Bluesky, Mastodon, TikTok and LinkedIn company pages report counts; Instagram, Threads and X are not collected yet. Use get_post for one post’s latest counts.',
+				'How published posts performed over a range of publish dates (default: the last 30 days): totals per brand and per channel, and the top deliveries by the chosen count, each with its channel key, publish time, counts and text excerpt. Use it to learn which posts, channels and formats work before drafting new ones. Counts come from snapshots about 1h, 24h and 7d after publishing, so a post from the last hour may have none yet. Bluesky, Mastodon, TikTok, Instagram and LinkedIn company pages report counts; Threads and X are not collected yet. Use get_post for one post’s latest counts.',
 			outputSchema: loose({
 				now: instant,
 				range: loose({ from: instant, to: instant }),

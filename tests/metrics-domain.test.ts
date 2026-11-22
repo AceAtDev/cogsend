@@ -127,8 +127,12 @@ describe('which accounts give metrics', () => {
 		);
 	});
 
-	it('says Instagram, Threads, X and Zernio accounts are not collected yet', () => {
-		for (const platform of ['instagram', 'threads', 'x'])
+	it('collects Instagram accounts', () => {
+		expect(metricsSupport({ platform: 'instagram' }).supported).toBe(true);
+	});
+
+	it('says Threads, X and Zernio accounts are not collected yet', () => {
+		for (const platform of ['threads', 'x'])
 			expect(metricsSupport({ platform })).toMatchObject({
 				supported: false,
 				reason: NOT_COLLECTED_YET

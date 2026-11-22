@@ -273,7 +273,7 @@ describe('connect routes', () => {
 			if (marker === 'instagram') {
 				expect(url.origin + url.pathname).toBe('https://www.instagram.com/oauth/authorize');
 				expect(url.searchParams.get('scope')).toBe(
-					'instagram_business_basic,instagram_business_content_publish'
+					'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights'
 				);
 				expect(url.searchParams.get('redirect_uri')).toMatch(
 					/\/api\/connections\/instagram\/callback$/

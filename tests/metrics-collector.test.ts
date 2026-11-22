@@ -132,10 +132,10 @@ describe('enrolment', () => {
 	it('enrols published deliveries of collected platforms inside the window, once', async () => {
 		const now = Date.UTC(2026, 9, 31, 12);
 		const bsky = await account('bluesky');
-		const insta = await account('instagram');
+		const x = await account('x');
 		const recent = await published(bsky, bskyUri(1), now - 2 * H);
 		const old = await published(bsky, bskyUri(2), now - 30 * D);
-		await published(insta, 'ig1', now - H);
+		await published(x, 'x1', now - H);
 		await enrollPublished(db, now);
 		await enrollPublished(db, now);
 		const rows = await db.select().from(deliveryMetrics);
@@ -319,6 +319,42 @@ describe('the tick metrics pass', () => {
 		expect(creds.accessToken).toBe('new');
 	});
 
+	it('reads an Instagram post’s insights in the tick', async () => {
+		const at = Date.UTC(2026, 9, 31, 9);
+		const ig = await account('instagram', {
+			accessToken: 'ig',
+			expiresAt: Date.now() + 50 * D,
+			scopes: [
+				'instagram_business_basic',
+				'instagram_business_content_publish',
+				'instagram_business_manage_insights'
+			]
+		});
+		const target = await published(ig, '17890000000000001', at);
+		const fetchImpl: FetchLike = async (input) => {
+			calls.push(String(input));
+			return Response.json({
+				data: [
+					{ name: 'views', period: 'lifetime', values: [{ value: 320 }] },
+					{ name: 'likes', period: 'lifetime', values: [{ value: 21 }] },
+					{ name: 'comments', period: 'lifetime', values: [{ value: 4 }] },
+					{ name: 'shares', period: 'lifetime', values: [{ value: 2 }] }
+				]
+			});
+		};
+		await collectDueMetrics(db, TEST_ENV, { fetchImpl, now: at + 2 * H });
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toContain('graph.instagram.com/');
+		expect(calls[0]).toContain('/17890000000000001/insights?metric=views,likes,comments,shares');
+		expect(await metricsRow(target.id)).toMatchObject({
+			state: 'ok',
+			views: 320,
+			likes: 21,
+			comments: 4,
+			shares: 2
+		});
+	});
+
 	it('records an expired Mastodon token as reconnect without touching the connection', async () => {
 		const at = Date.UTC(2026, 9, 31, 9);
 		const masto = await account(
@@ -453,9 +489,9 @@ describe('refresh on demand', () => {
 		});
 	});
 
-	it('says Instagram is not collected yet', async () => {
-		const ig = await account('instagram');
-		const target = await published(ig, '1789', Date.now() - H);
+	it('says X is not collected yet', async () => {
+		const x = await account('x');
+		const target = await published(x, '1789', Date.now() - H);
 		const view = await loadDeliveryMetrics(db, userId, target.id);
 		expect(view).toMatchObject({ state: 'unsupported', counts: null });
 		expect(view.message).toMatch(/not collected/);

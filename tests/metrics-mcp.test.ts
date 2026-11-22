@@ -9,7 +9,7 @@ const D = 24 * H;
 
 let h: Awaited<ReturnType<typeof createMcpHarness>>;
 let client: Client;
-let ids: { bsky: string; tiktok: string; ig: string; other: string };
+let ids: { bsky: string; tiktok: string; x: string; other: string };
 
 async function post(connectionId: string, body: string, publishedAt: number) {
 	const draft = newId();
@@ -65,7 +65,7 @@ beforeEach(async () => {
 	ids = {
 		bsky: await h.channel('bluesky', 'jobjob.bsky.social', jobjob),
 		tiktok: await h.channel('tiktok', '@cal', cal),
-		ig: await h.channel('instagram', 'jobjob_ig', jobjob),
+		x: await h.channel('x', 'jobjob_x', jobjob),
 		other: ''
 	};
 	client = await h.connect(['read']);
@@ -88,7 +88,7 @@ describe('get_post', () => {
 		expect(delivery.metrics.collectedAt.timeZone).toBe('Europe/Berlin');
 		expect(text(res)).toContain('12 likes, 3 reposts, 1 replies, 0 quotes');
 
-		const ig = await post(ids.ig, 'insta', at);
+		const ig = await post(ids.x, 'tweet', at);
 		const igRes = await call('get_post', { postId: ig.draft });
 		expect(data(igRes).post.deliveries[0].metrics).toMatchObject({
 			state: 'unsupported',
@@ -107,7 +107,7 @@ describe('get_performance', () => {
 		await measured(b.target, 'bluesky', { likes: 2, shares: 0, comments: 0, quotes: 0 }, at + H);
 		const c = await post(ids.tiktok, 'cal dance video', at + 2 * H);
 		await measured(c.target, 'tiktok', { views: 5000, likes: 30, comments: 4, shares: 6 }, at);
-		await post(ids.ig, 'instagram reel', at);
+		await post(ids.x, 'x thread', at);
 	});
 
 	it('totals per brand and channel and lists top posts, as a read-only key', async () => {
@@ -122,7 +122,7 @@ describe('get_performance', () => {
 		]);
 		expect(out.top[0]).toMatchObject({ channel: 'jobjob.bluesky', brand: 'JobJob' });
 		expect(out.brands.map((b: { slug: string }) => b.slug)).toEqual(['jobjob', '465cal']);
-		const ig = out.channels.find((c: { platform: string }) => c.platform === 'instagram');
+		const ig = out.channels.find((c: { platform: string }) => c.platform === 'x');
 		expect(ig.note).toMatch(/not collected/);
 		expect(out.range.from.timeZone).toBe('Europe/Berlin');
 		expect(text(res)).toContain('Top by engagement');
@@ -151,7 +151,7 @@ describe('get_performance', () => {
 		expect(brand.isError).toBe(true);
 		expect(text(brand)).toMatch(/No brand "nope"\. Brands: (465cal, jobjob|jobjob, 465cal)/);
 		expect(text(brand)).toContain('Example of a valid call');
-		const channel = await call('get_performance', { channels: ['jobjob.x'] });
+		const channel = await call('get_performance', { channels: ['jobjob.threads'] });
 		expect(channel.isError).toBe(true);
 		expect(text(channel)).toContain('jobjob.bluesky');
 		const range = await call('get_performance', { from: '2026-10-10', to: '2026-10-01' });
