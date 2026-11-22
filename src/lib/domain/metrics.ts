@@ -11,7 +11,9 @@ export const METRIC_KEYS = [
 	'quotes',
 	'views',
 	'impressions',
-	'clicks'
+	'clicks',
+	'saves',
+	'reach'
 ] as const;
 export type MetricKey = (typeof METRIC_KEYS)[number];
 
@@ -25,7 +27,9 @@ export const METRIC_LABEL: Record<MetricKey, string> = {
 	quotes: 'Quotes',
 	views: 'Views',
 	impressions: 'Impressions',
-	clicks: 'Clicks'
+	clicks: 'Clicks',
+	saves: 'Saves',
+	reach: 'Reach'
 };
 
 /** Which counts each collected platform reports, in display order. */
@@ -34,7 +38,16 @@ export const PLATFORM_METRICS: Partial<Record<string, readonly MetricKey[]>> = {
 	mastodon: ['likes', 'shares', 'comments', 'quotes'],
 	tiktok: ['views', 'likes', 'comments', 'shares'],
 	linkedin: ['impressions', 'likes', 'comments', 'shares', 'clicks'],
-	instagram: ['views', 'likes', 'comments', 'shares']
+	instagram: ['views', 'reach', 'likes', 'comments', 'shares', 'saves']
+};
+
+/**
+ * How late a platform can be with its counts, for agents and the UI: a count
+ * missing from an early reading is "not reported yet", not zero.
+ */
+export const PLATFORM_DELAY_NOTE: Partial<Record<string, string>> = {
+	instagram:
+		'Instagram can take up to 48 hours to report a count: one missing from a reading is not reported yet, not zero, and the 24h and 7d readings fill it in.'
 };
 
 /** Platform words for a count where they differ from ours (a Bluesky share is a repost). */

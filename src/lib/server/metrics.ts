@@ -23,6 +23,7 @@ import {
 import { isLocalAppUrl } from '#lib/domain/app-url.js';
 import {
 	MANUAL_REFRESH_MIN_MS,
+	METRIC_KEYS,
 	metricsSupport,
 	metricStateText,
 	nextAfterFailure,
@@ -31,6 +32,7 @@ import {
 	SNAPSHOT_OFFSETS_MS,
 	SNAPSHOT_WINDOW_MS,
 	type MetricCounts,
+	type MetricKey,
 	type MetricState,
 	type SnapshotKind
 } from '#lib/domain/metrics.js';
@@ -79,8 +81,8 @@ const METRICS_RESERVE_CALLS = 2;
 export const METRICS_MIN_CALLS = 8;
 export const METRICS_BACKOFF_SETTING = 'metrics_backoff';
 
-const SNAPSHOT_COLUMNS = 12;
-const METRIC_ROW_COLUMNS = 18;
+const SNAPSHOT_COLUMNS = 14;
+const METRIC_ROW_COLUMNS = 20;
 // D1 refuses a statement with more than 100 bound parameters.
 const SNAPSHOTS_PER_STATEMENT = Math.floor(100 / SNAPSHOT_COLUMNS);
 const METRIC_ROWS_PER_STATEMENT = Math.floor(100 / METRIC_ROW_COLUMNS);
@@ -270,6 +272,8 @@ function baseRow(row: WorkRow, now: number): MetricRowInsert {
 		views: null,
 		impressions: null,
 		clicks: null,
+		saves: null,
+		reach: null,
 		collectedAt: null,
 		updatedAt: new Date(now)
 	};
@@ -284,7 +288,9 @@ function recordSuccess(writes: PendingWrites, row: WorkRow, counts: MetricCounts
 		quotes: counts.quotes ?? null,
 		views: counts.views ?? null,
 		impressions: counts.impressions ?? null,
-		clicks: counts.clicks ?? null
+		clicks: counts.clicks ?? null,
+		saves: counts.saves ?? null,
+		reach: counts.reach ?? null
 	};
 	writes.rows.push({
 		...baseRow(row, now),
@@ -359,6 +365,8 @@ export async function flushWrites(db: AppDb, writes: PendingWrites) {
 					views: keep('views'),
 					impressions: keep('impressions'),
 					clicks: keep('clicks'),
+					saves: keep('saves'),
+					reach: keep('reach'),
 					collectedAt: keep('collected_at'),
 					updatedAt: sql.raw('excluded.updated_at')
 				}
@@ -687,6 +695,11 @@ export type DeliveryMetricsView = {
 	message: string | null;
 	counts: MetricCounts | null;
 	collectedAt: number | null;
+	/**
+	 * The counts the latest successful read reported. A count in `counts` but
+	 * not here was kept from an earlier read; null when that read is unknown.
+	 */
+	updatedKeys: MetricKey[] | null;
 	nextAt: number | null;
 	snapshots?: MetricsSnapshotView[];
 };
@@ -694,15 +707,7 @@ export type DeliveryMetricsView = {
 function countsOf(row: Record<string, unknown>): MetricCounts | null {
 	const counts: MetricCounts = {};
 	let any = false;
-	for (const key of [
-		'likes',
-		'comments',
-		'shares',
-		'quotes',
-		'views',
-		'impressions',
-		'clicks'
-	] as const) {
+	for (const key of METRIC_KEYS) {
 		const v = row[key];
 		if (typeof v === 'number') {
 			counts[key] = v;
@@ -730,7 +735,16 @@ function viewWithoutRow(
 			? 'Not read yet. Refresh to read it now.'
 			: 'Metrics start once the post is published.'
 		: support.reason;
-	return { targetId, platform, state, message, counts: null, collectedAt: null, nextAt: null };
+	return {
+		targetId,
+		platform,
+		state,
+		message,
+		counts: null,
+		collectedAt: null,
+		updatedKeys: null,
+		nextAt: null
+	};
 }
 
 /**
@@ -750,12 +764,21 @@ export async function latestMetricsFor(
 				status: publishTargets.status,
 				platform: connections.platform,
 				metaJson: connections.metaJson,
-				m: deliveryMetrics
+				m: deliveryMetrics,
+				last: deliveryMetricSnapshots
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(drafts.id, publishTargets.draftId))
 			.innerJoin(connections, eq(connections.id, publishTargets.connectionId))
 			.leftJoin(deliveryMetrics, eq(deliveryMetrics.targetId, publishTargets.id))
+			// The reading the latest counts came from, to say which it refreshed.
+			.leftJoin(
+				deliveryMetricSnapshots,
+				and(
+					eq(deliveryMetricSnapshots.targetId, publishTargets.id),
+					eq(deliveryMetricSnapshots.collectedAt, deliveryMetrics.collectedAt)
+				)
+			)
 			.where(and(eq(drafts.userId, userId), inArray(publishTargets.id, chunk)));
 		for (const row of rows) {
 			if (!row.m) {
@@ -771,6 +794,7 @@ export async function latestMetricsFor(
 				message: state === 'ok' ? null : metricStateText(state, row.m.stateDetail),
 				counts,
 				collectedAt: row.m.collectedAt?.getTime() ?? null,
+				updatedKeys: row.last ? METRIC_KEYS.filter((k) => typeof row.last![k] === 'number') : null,
 				nextAt: row.m.nextDueAt?.getTime() ?? null
 			});
 		}

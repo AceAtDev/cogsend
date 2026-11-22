@@ -278,14 +278,16 @@ describe('Instagram metrics', () => {
 		expect(url.searchParams.get('scope')?.split(',')).toContain(INSTAGRAM_INSIGHTS_SCOPE);
 	});
 
-	it('reads views, likes, comments and shares from the media insights', async () => {
+	it('reads views, reach, likes, comments, shares and saves from the media insights', async () => {
 		const { fetchImpl, seen } = fake(() =>
 			Response.json({
 				data: [
 					{ name: 'views', period: 'lifetime', values: [{ value: 900 }] },
 					{ name: 'likes', period: 'lifetime', values: [{ value: 40 }] },
 					{ name: 'comments', period: 'lifetime', values: [{ value: 6 }] },
-					{ name: 'shares', period: 'lifetime', values: [{ value: 3 }] }
+					{ name: 'shares', period: 'lifetime', values: [{ value: 3 }] },
+					{ name: 'saved', period: 'lifetime', values: [{ value: 11 }] },
+					{ name: 'reach', period: 'lifetime', values: [{ value: 700 }] }
 				]
 			})
 		);
@@ -293,11 +295,11 @@ describe('Instagram metrics', () => {
 		const url = new URL(seen[0].url);
 		expect(url.origin).toBe('https://graph.instagram.com');
 		expect(url.pathname).toMatch(new RegExp(`/v\\d+\\.0/${igMedia}/insights$`));
-		expect(url.searchParams.get('metric')).toBe('views,likes,comments,shares');
+		expect(url.searchParams.get('metric')).toBe('views,reach,likes,comments,shares,saved');
 		expect(url.searchParams.get('access_token')).toBe('ig');
 		expect(out.get(igMedia)).toEqual({
 			kind: 'ok',
-			counts: { views: 900, likes: 40, comments: 6, shares: 3 }
+			counts: { views: 900, reach: 700, likes: 40, comments: 6, shares: 3, saves: 11 }
 		});
 	});
 
@@ -308,7 +310,7 @@ describe('Instagram metrics', () => {
 		const out = await instagramMetrics([igMedia], igCreds, fetchImpl);
 		expect(out.get(igMedia)).toEqual({
 			kind: 'ok',
-			counts: { views: null, likes: 2, comments: null, shares: null }
+			counts: { views: null, reach: null, likes: 2, comments: null, shares: null, saves: null }
 		});
 	});
 

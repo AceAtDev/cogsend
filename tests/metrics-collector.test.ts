@@ -353,21 +353,31 @@ describe('the tick metrics pass', () => {
 					{ name: 'views', period: 'lifetime', values: [{ value: 320 }] },
 					{ name: 'likes', period: 'lifetime', values: [{ value: 21 }] },
 					{ name: 'comments', period: 'lifetime', values: [{ value: 4 }] },
-					{ name: 'shares', period: 'lifetime', values: [{ value: 2 }] }
+					{ name: 'shares', period: 'lifetime', values: [{ value: 2 }] },
+					{ name: 'saved', period: 'lifetime', values: [{ value: 9 }] },
+					{ name: 'reach', period: 'lifetime', values: [{ value: 250 }] }
 				]
 			});
 		};
 		await collectDueMetrics(db, TEST_ENV, { fetchImpl, now: at + 2 * H });
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toContain('graph.instagram.com/');
-		expect(calls[0]).toContain('/17890000000000001/insights?metric=views,likes,comments,shares');
+		expect(calls[0]).toContain(
+			'/17890000000000001/insights?metric=views,reach,likes,comments,shares,saved'
+		);
 		expect(await metricsRow(target.id)).toMatchObject({
 			state: 'ok',
 			views: 320,
 			likes: 21,
 			comments: 4,
-			shares: 2
+			shares: 2,
+			saves: 9,
+			reach: 250
 		});
+		const view = (await latestMetricsFor(db, userId, [target.id])).get(target.id);
+		expect(view?.updatedKeys).toEqual(
+			expect.arrayContaining(['views', 'reach', 'likes', 'comments', 'shares', 'saves'])
+		);
 	});
 
 	it('records an expired Mastodon token as reconnect without touching the connection', async () => {

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Client } from '@modelcontextprotocol/client';
 import { newId } from '#lib/server/db/client.js';
-import { deliveryMetrics, drafts, publishTargets } from '#lib/server/db/schema.js';
+import {
+	deliveryMetrics,
+	deliveryMetricSnapshots,
+	drafts,
+	publishTargets
+} from '#lib/server/db/schema.js';
 import { createMcpHarness, data, text, type McpResult } from './mcp-harness';
 
 const H = 3_600_000;
@@ -9,7 +14,7 @@ const D = 24 * H;
 
 let h: Awaited<ReturnType<typeof createMcpHarness>>;
 let client: Client;
-let ids: { bsky: string; tiktok: string; x: string; other: string };
+let ids: { bsky: string; tiktok: string; x: string; ig: string; other: string };
 
 async function post(connectionId: string, body: string, publishedAt: number) {
 	const draft = newId();
@@ -66,6 +71,7 @@ beforeEach(async () => {
 		bsky: await h.channel('bluesky', 'jobjob.bsky.social', jobjob),
 		tiktok: await h.channel('tiktok', '@cal', cal),
 		x: await h.channel('x', 'jobjob_x', jobjob),
+		ig: await h.channel('instagram', 'cal_ig', cal),
 		other: ''
 	};
 	client = await h.connect(['read']);
@@ -85,7 +91,7 @@ describe('get_post', () => {
 			counts: { likes: 12, shares: 3, comments: 1, quotes: 0 },
 			engagement: 16
 		});
-		expect(delivery.metrics.collectedAt.timeZone).toBe('Europe/Berlin');
+		expect(delivery.metrics.lastReadAt.timeZone).toBe('Europe/Berlin');
 		expect(text(res)).toContain('12 likes, 3 reposts, 1 replies, 0 quotes');
 
 		const ig = await post(ids.x, 'tweet', at);
@@ -95,6 +101,33 @@ describe('get_post', () => {
 			counts: null
 		});
 		expect(text(igRes)).toMatch(/not collected/);
+	});
+});
+
+describe('get_post on Instagram', () => {
+	it('says which counts the last read refreshed, which are older and which are not reported yet', async () => {
+		const at = Date.now() - 2 * D;
+		const p = await post(ids.ig, 'cut vs bulk', at);
+		// The latest read reported likes and comments; saves came from an earlier one.
+		await measured(p.target, 'instagram', { likes: 5, comments: 1, saves: 2 }, at);
+		await h.db.insert(deliveryMetricSnapshots).values({
+			id: newId(),
+			targetId: p.target,
+			userId: h.user.id,
+			kind: '24h',
+			collectedAt: new Date(at + H),
+			likes: 5,
+			comments: 1
+		});
+		const res = await call('get_post', { postId: p.draft });
+		expect(res.isError, text(res)).toBeFalsy();
+		const m = data(res).post.deliveries[0].metrics;
+		expect(m.updatedInLastRead).toEqual(['likes', 'comments']);
+		expect(m.fromEarlierRead).toEqual(['saves']);
+		expect(m.notReportedYet).toEqual(['views', 'reach', 'shares']);
+		expect(m.lastReadAt.timeZone).toBe('Europe/Berlin');
+		expect(m.note).toMatch(/48 hours/);
+		expect(text(res)).toMatch(/saves from an earlier read; views, reach, shares not reported yet/);
 	});
 });
 

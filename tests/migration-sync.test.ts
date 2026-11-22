@@ -81,6 +81,7 @@ describe('satisfiedMigrations', () => {
 		expect([...satisfied]).toContain('0016_mfa_challenges_expires_idx.sql');
 		expect([...satisfied]).toContain('0024_approvals.sql');
 		expect([...satisfied]).toContain('0029_notification_recovery.sql');
+		expect([...satisfied]).toContain('0030_metric_saves_reach.sql');
 	});
 
 	it('keeps the 0001 table list in step with the migration', () => {
@@ -139,6 +140,18 @@ describe('satisfiedMigrations', () => {
 			state.columns.get(table)!.delete(column);
 			expect(satisfiedMigrations(state)).not.toContain('0029_notification_recovery.sql');
 			state.columns.get(table)!.add(column);
+		}
+	});
+
+	it('records saves and reach only when both metrics tables have them', async () => {
+		const state = await introspectionOnBootstrap();
+		expect(satisfiedMigrations(state)).toContain('0030_metric_saves_reach.sql');
+		for (const table of ['delivery_metrics', 'delivery_metric_snapshots']) {
+			for (const column of ['saves', 'reach']) {
+				state.columns.get(table)!.delete(column);
+				expect(satisfiedMigrations(state)).not.toContain('0030_metric_saves_reach.sql');
+				state.columns.get(table)!.add(column);
+			}
 		}
 	});
 });

@@ -380,6 +380,8 @@ CREATE TABLE IF NOT EXISTS \`delivery_metrics\` (
 	\`views\` integer,
 	\`impressions\` integer,
 	\`clicks\` integer,
+	\`saves\` integer,
+	\`reach\` integer,
 	\`collected_at\` integer,
 	\`updated_at\` integer NOT NULL
 );
@@ -397,7 +399,9 @@ CREATE TABLE IF NOT EXISTS \`delivery_metric_snapshots\` (
 	\`quotes\` integer,
 	\`views\` integer,
 	\`impressions\` integer,
-	\`clicks\` integer
+	\`clicks\` integer,
+	\`saves\` integer,
+	\`reach\` integer
 );
 CREATE INDEX IF NOT EXISTS \`delivery_metric_snapshots_target_idx\` ON \`delivery_metric_snapshots\` (\`target_id\`, \`collected_at\`);
 CREATE INDEX IF NOT EXISTS \`delivery_metric_snapshots_user_idx\` ON \`delivery_metric_snapshots\` (\`user_id\`);
@@ -491,6 +495,20 @@ const COLUMN_BACKFILLS: Array<{ table: string; columns: { name: string; ddl: str
 	{
 		table: 'notification_alerts',
 		columns: [{ name: 'cursor_id', ddl: "cursor_id text NOT NULL DEFAULT ''" }]
+	},
+	{
+		table: 'delivery_metrics',
+		columns: [
+			{ name: 'saves', ddl: 'saves integer' },
+			{ name: 'reach', ddl: 'reach integer' }
+		]
+	},
+	{
+		table: 'delivery_metric_snapshots',
+		columns: [
+			{ name: 'saves', ddl: 'saves integer' },
+			{ name: 'reach', ddl: 'reach integer' }
+		]
 	},
 	{
 		table: 'users',
@@ -743,6 +761,8 @@ CREATE TABLE IF NOT EXISTS delivery_metrics (
 	views integer,
 	impressions integer,
 	clicks integer,
+	saves integer,
+	reach integer,
 	collected_at integer,
 	updated_at integer NOT NULL
 );
@@ -760,7 +780,9 @@ CREATE TABLE IF NOT EXISTS delivery_metric_snapshots (
 	quotes integer,
 	views integer,
 	impressions integer,
-	clicks integer
+	clicks integer,
+	saves integer,
+	reach integer
 );
 CREATE INDEX IF NOT EXISTS delivery_metric_snapshots_target_idx ON delivery_metric_snapshots (target_id, collected_at);
 CREATE INDEX IF NOT EXISTS delivery_metric_snapshots_user_idx ON delivery_metric_snapshots (user_id);

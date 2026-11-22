@@ -521,7 +521,9 @@ const metricColumns = () => ({
 	quotes: integer('quotes'),
 	views: integer('views'),
 	impressions: integer('impressions'),
-	clicks: integer('clicks')
+	clicks: integer('clicks'),
+	saves: integer('saves'),
+	reach: integer('reach')
 });
 
 /** One row per published delivery: latest counts and the snapshot plan (0027). */

@@ -1,4 +1,8 @@
-import { NOT_COLLECTED_YET, type PerformanceSort } from '#lib/domain/metrics.js';
+import {
+	NOT_COLLECTED_YET,
+	PLATFORM_DELAY_NOTE,
+	type PerformanceSort
+} from '#lib/domain/metrics.js';
 import { describeInstant } from '#lib/domain/zoned-time.js';
 import type { ChannelRef } from '#lib/domain/channel-keys.js';
 import { UNBRANDED_SLUG } from '#lib/domain/channel-keys.js';
@@ -85,9 +89,8 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 		counts: p.counts,
 		engagement: p.engagement,
 		excerpt: detailed ? p.excerpt : p.excerpt.slice(0, 80),
-		...(detailed
-			? { permalink: p.permalink, collectedAt: p.collectedAt ? at(p.collectedAt) : null }
-			: {})
+		lastReadAt: p.collectedAt ? at(p.collectedAt) : null,
+		...(detailed ? { permalink: p.permalink } : {})
 	}));
 	const channels = report.channels.map((c) => ({
 		channel: c.key,
@@ -104,9 +107,12 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 			quotes: c.quotes,
 			views: c.views,
 			impressions: c.impressions,
-			clicks: c.clicks
+			clicks: c.clicks,
+			saves: c.saves,
+			reach: c.reach
 		},
-		note: c.notice
+		lastReadAt: c.lastCollectedAt ? at(c.lastCollectedAt) : null,
+		note: c.notice ?? PLATFORM_DELAY_NOTE[c.platform] ?? null
 	}));
 	const brands = report.brands.map((b) => ({
 		brand: b.name,
@@ -123,7 +129,9 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 						quotes: b.quotes,
 						views: b.views,
 						impressions: b.impressions,
-						clicks: b.clicks
+						clicks: b.clicks,
+						saves: b.saves,
+						reach: b.reach
 					}
 				}
 			: {})
@@ -134,12 +142,12 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 		...brands.map((b) => `  Brand ${b.slug}: ${b.posts} posts, engagement ${b.engagement}`),
 		...channels.map(
 			(c) =>
-				`  ${c.channel || '(disconnected)'} ${c.handle ?? ''}: ${c.posts} posts, engagement ${c.engagement}${c.note ? ` — ${c.note}` : ''}`
+				`  ${c.channel || '(disconnected)'} ${c.handle ?? ''}: ${c.posts} posts, engagement ${c.engagement}${c.lastReadAt ? `, last read ${c.lastReadAt.display}` : ''}${c.note ? ` — ${c.note}` : ''}`
 		),
 		top.length ? `Top by ${report.sort}:` : 'No measured posts in this range yet.',
 		...top.map(
 			(p, i) =>
-				`  ${i + 1}. ${p.channel} ${p.publishedAt.display}: ${countsLine(p.platform, p.counts)} — "${p.excerpt}" (post ${p.postId})`
+				`  ${i + 1}. ${p.channel} ${p.publishedAt.display}: ${countsLine(p.platform, p.counts)}${p.lastReadAt ? ` (last read ${p.lastReadAt.display})` : ''} — "${p.excerpt}" (post ${p.postId})`
 		),
 		`Threads and X: ${NOT_COLLECTED_YET.toLowerCase()}`
 	];
@@ -157,7 +165,7 @@ export async function getPerformanceOp(agent: AgentContext, input: PerformanceIn
 			tiktok: 'views, likes, comments, shares (public videos; needs the video.list permission)',
 			linkedin: 'company pages only: impressions, likes, comments, shares, clicks',
 			instagram:
-				'views, likes, comments, shares (needs instagram_business_manage_insights; accounts connected before it give likes and comments only)',
+				'views, reach, likes, comments, shares, saves (needs instagram_business_manage_insights; accounts connected before it give likes and comments only). Up to 48 hours late: a missing count is not reported yet, not zero.',
 			threads: NOT_COLLECTED_YET,
 			x: NOT_COLLECTED_YET
 		},

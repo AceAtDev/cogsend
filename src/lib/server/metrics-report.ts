@@ -20,6 +20,7 @@ import {
 	engagementOf,
 	metricLabel,
 	metricsSupport,
+	PLATFORM_DELAY_NOTE,
 	PLATFORM_METRICS,
 	type MetricCounts,
 	type MetricKey,
@@ -40,7 +41,9 @@ const TOTAL_KEYS = [
 	'quotes',
 	'views',
 	'impressions',
-	'clicks'
+	'clicks',
+	'saves',
+	'reach'
 ] as const;
 
 export type PerformanceTotals = Record<(typeof TOTAL_KEYS)[number], number> & {
@@ -63,6 +66,8 @@ export type PerformanceChannel = PerformanceTotals & {
 	notice: string | null;
 	/** Deliveries waiting on a reconnect before they can be read. */
 	needsReconnect: number;
+	/** When any of the channel's posts in the range was last read (epoch ms). */
+	lastCollectedAt: number | null;
 };
 
 export type PerformanceBrand = PerformanceTotals & {
@@ -114,7 +119,9 @@ function emptyTotals(): PerformanceTotals {
 		quotes: 0,
 		views: 0,
 		impressions: 0,
-		clicks: 0
+		clicks: 0,
+		saves: 0,
+		reach: 0
 	};
 }
 
@@ -198,7 +205,12 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 				quotes: sum(deliveryMetrics.quotes, 'quotes'),
 				views: sum(deliveryMetrics.views, 'views'),
 				impressions: sum(deliveryMetrics.impressions, 'impressions'),
-				clicks: sum(deliveryMetrics.clicks, 'clicks')
+				clicks: sum(deliveryMetrics.clicks, 'clicks'),
+				saves: sum(deliveryMetrics.saves, 'saves'),
+				reach: sum(deliveryMetrics.reach, 'reach'),
+				lastCollectedAt: sql<number | null>`max(${deliveryMetrics.collectedAt})`.as(
+					'last_collected_at'
+				)
 			})
 			.from(publishTargets)
 			.innerJoin(drafts, eq(drafts.id, publishTargets.draftId))
@@ -269,6 +281,7 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 			)
 		});
 		const needsReconnect = num(row.reconnect);
+		const last = Number(row.lastCollectedAt);
 		return {
 			...totals,
 			connectionId: row.connectionId,
@@ -283,7 +296,8 @@ export async function performanceReport(db: AppDb, userId: string, filter: Perfo
 					? 'Reconnect this account to collect metrics.'
 					: null
 				: support.reason,
-			needsReconnect
+			needsReconnect,
+			lastCollectedAt: Number.isFinite(last) && last > 0 ? last : null
 		};
 	});
 	channels.sort((a, b) => b.engagement - a.engagement || b.posts - a.posts);
@@ -390,20 +404,38 @@ export function countsLine(platform: string, counts: MetricCounts): string {
 	return parts.join(', ');
 }
 
-/** A delivery's metrics as an agent reads them: counts, when read, and why not when not. */
+/**
+ * A delivery's metrics as an agent reads them: counts, when they were last
+ * read, which counts that read refreshed, which are older or not reported yet,
+ * and why there are none when there are none.
+ */
 export function metricsOut(m: DeliveryMetricsView, timeZone: string) {
 	const counts = m.counts ?? null;
-	const summary =
-		counts && m.collectedAt
-			? `${countsLine(m.platform, counts)} (read ${describeInstant(m.collectedAt, timeZone).display})`
-			: (m.message ?? m.state);
+	const keys = PLATFORM_METRICS[m.platform] ?? [];
+	const has = (k: MetricKey) => typeof counts?.[k] === 'number';
+	const updated = m.updatedKeys ? keys.filter((k) => m.updatedKeys!.includes(k)) : null;
+	const carried = updated ? keys.filter((k) => has(k) && !updated.includes(k)) : [];
+	const notReportedYet = counts || m.state === 'ok' ? keys.filter((k) => !has(k)) : [];
+	const delayNote = PLATFORM_DELAY_NOTE[m.platform] ?? null;
+	const label = (k: MetricKey) => metricLabel(m.platform, k).toLowerCase();
+	const readAt = m.collectedAt ? describeInstant(m.collectedAt, timeZone) : null;
+	let summary = m.message ?? m.state;
+	if (counts && readAt) {
+		summary = `${countsLine(m.platform, counts)} (last read ${readAt.display})`;
+		if (carried.length) summary += `; ${carried.map(label).join(', ')} from an earlier read`;
+		if (notReportedYet.length)
+			summary += `; ${notReportedYet.map(label).join(', ')} not reported yet`;
+	}
 	return {
 		state: m.state,
 		counts,
 		engagement: counts ? engagementOf(counts) : null,
-		collectedAt: m.collectedAt ? describeInstant(m.collectedAt, timeZone) : null,
+		lastReadAt: readAt,
+		updatedInLastRead: updated,
+		fromEarlierRead: carried,
+		notReportedYet,
 		nextReadAt: m.nextAt ? describeInstant(m.nextAt, timeZone) : null,
-		note: m.state === 'ok' ? null : m.message,
+		note: m.state === 'ok' ? delayNote : m.message,
 		summary
 	};
 }

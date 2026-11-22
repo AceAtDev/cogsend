@@ -70,6 +70,8 @@ export const INTROSPECTION_SQL = `SELECT
   (SELECT group_concat(name, ' ') FROM pragma_table_info('publish_targets')) AS publish_targets_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('notification_settings')) AS notification_settings_cols,
   (SELECT group_concat(name, ' ') FROM pragma_table_info('notification_alerts')) AS notification_alerts_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('delivery_metrics')) AS delivery_metrics_cols,
+  (SELECT group_concat(name, ' ') FROM pragma_table_info('delivery_metric_snapshots')) AS delivery_metric_snapshots_cols,
   (SELECT group_concat(name || ':' || "unique", ' ') FROM pragma_index_list('publish_targets')) AS publish_targets_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('oauth_pending')) AS oauth_pending_idx,
   (SELECT group_concat(name, ' ') FROM pragma_index_list('mfa_challenges')) AS mfa_challenges_idx,
@@ -103,7 +105,9 @@ export function readState(row) {
 		'brands',
 		'publish_targets',
 		'notification_settings',
-		'notification_alerts'
+		'notification_alerts',
+		'delivery_metrics',
+		'delivery_metric_snapshots'
 	]) {
 		columns.set(table, new Set(list(row?.[`${table}_cols`])));
 	}
@@ -229,6 +233,15 @@ export function satisfiedMigrations(state) {
 				col('notification_settings', 'digest_sent_to'),
 				col('notification_settings', 'digest_claim_token'),
 				col('notification_settings', 'digest_claimed_at')
+			)
+		],
+		[
+			'0030_metric_saves_reach.sql',
+			all(
+				col('delivery_metrics', 'saves'),
+				col('delivery_metrics', 'reach'),
+				col('delivery_metric_snapshots', 'saves'),
+				col('delivery_metric_snapshots', 'reach')
 			)
 		]
 	]

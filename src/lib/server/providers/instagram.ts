@@ -449,14 +449,15 @@ export const instagramProvider: PlatformProvider = {
 	fetchMetrics: (ids, creds, _meta, fetchImpl) => instagramMetrics(ids, creds, fetchImpl)
 };
 
-const INSIGHT_METRICS = ['views', 'likes', 'comments', 'shares'] as const;
+// Instagram's names; `saved` is stored as saves.
+const INSIGHT_METRICS = ['views', 'reach', 'likes', 'comments', 'shares', 'saved'] as const;
 /** "Object does not exist": the post was deleted. */
 const MISSING_OBJECT_SUBCODE = 33;
 /** Code 10: the token lacks the permission the call needs. */
 const PERMISSION_CODE = 10;
 
 /**
- * Views, likes, comments and shares of one published post from the media
+ * Views, reach, likes, comments, shares and saves of one published post from the media
  * insights endpoint (instagram_business_manage_insights). A connection made
  * before CogSend asked for that scope gets the like and comment counts on the
  * media object instead, which instagram_business_basic covers, until it is
@@ -512,21 +513,24 @@ function count(value: unknown): number | null {
 
 /** Instagram leaves a metric out (rather than 0) while it has no data yet. */
 function insightCounts(body: Record<string, unknown>) {
-	const counts: Record<(typeof INSIGHT_METRICS)[number], number | null> = {
-		views: null,
-		likes: null,
-		comments: null,
-		shares: null
-	};
+	const read: Partial<Record<(typeof INSIGHT_METRICS)[number], number | null>> = {};
 	const rows = Array.isArray(body.data) ? (body.data as Array<Record<string, unknown>>) : [];
 	for (const row of rows) {
 		const name = row?.name;
-		if (typeof name !== 'string' || !(name in counts)) continue;
+		if (typeof name !== 'string' || !(INSIGHT_METRICS as readonly string[]).includes(name))
+			continue;
 		const values = Array.isArray(row.values) ? (row.values as Array<{ value?: unknown }>) : [];
 		const total = row.total_value as { value?: unknown } | undefined;
-		counts[name as keyof typeof counts] = count(values[0]?.value ?? total?.value);
+		read[name as (typeof INSIGHT_METRICS)[number]] = count(values[0]?.value ?? total?.value);
 	}
-	return counts;
+	return {
+		views: read.views ?? null,
+		reach: read.reach ?? null,
+		likes: read.likes ?? null,
+		comments: read.comments ?? null,
+		shares: read.shares ?? null,
+		saves: read.saved ?? null
+	};
 }
 
 function basicCounts(body: Record<string, unknown>) {
