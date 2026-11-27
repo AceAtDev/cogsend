@@ -160,7 +160,7 @@ describe('MCP v2 catalog', () => {
 		const schedule = tools.find((t) => t.name === 'schedule_posts')!;
 		for (const name of ['schedule_posts', 'save_draft', 'publish_now', 'move_post'])
 			expect(tools.find((t) => t.name === name)!.description!.split('\n')[0], name).toContain(
-				'tiktok?:{draft:true}'
+				'tiktok?:{privacy|draft}'
 			);
 		const examples = (schedule._meta as Record<string, unknown[]>)['cogsend/inputExamples'];
 		expect(examples.length).toBeGreaterThanOrEqual(2);

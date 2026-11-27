@@ -292,7 +292,7 @@ export function nowView(agent: AgentContext) {
 // Agents behind clients that hide tool schemas guess where TikTok's choices go
 // (options, variants); spelling out the field path here, in the first call, ends that.
 const TIKTOK_CALL_SHAPE =
-	'TikTok channels need the post-level field tiktok, never inside variants or options: schedule_posts {"posts":[{"channels":["<tiktok key>"],"draftId":"<id>","runAt":"<time>","tiktok":{"draft":true}}]}; save_draft, publish_now and move_post take the same tiktok at the top level.';
+	'TikTok channels need the post-level field tiktok, never inside variants or options: schedule_posts {"posts":[{"channels":["<tiktok key>"],"draftId":"<id>","runAt":"<time>","tiktok":{"privacy":"PUBLIC_TO_EVERYONE","allowComment":true,"allowDuet":false,"allowStitch":false,"disclose":false}}]} for Direct Post, or "tiktok":{"draft":true} to send it to the TikTok inbox; ask the operator which; save_draft, publish_now and move_post take the same tiktok at the top level.';
 
 export async function listChannelsOp(agent: AgentContext) {
 	const { ctx, userId, timeZone } = agent;
