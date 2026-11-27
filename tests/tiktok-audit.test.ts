@@ -199,7 +199,7 @@ describe('TikTok post choices', () => {
 		);
 	});
 
-	it('tells an agent missing a choice that a draft is the way to a public post', () => {
+	it('tells an agent missing a choice to ask between Direct Post and the inbox', () => {
 		const channel = {
 			key: 'acme.tiktok',
 			platform: 'tiktok',

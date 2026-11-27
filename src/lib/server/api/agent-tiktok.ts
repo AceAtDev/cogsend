@@ -200,7 +200,7 @@ export function planTiktokChoices(opts: {
 }
 
 export const TIKTOK_AUDIT_NOTE =
-	'Until TikTok audits the app, Direct Post can only post as Only me (SELF_ONLY). For a post anyone can see, send {"draft": true}: the video lands in the account\'s TikTok inbox and the operator posts it publicly from the TikTok app.';
+	'Ask whether to post directly or send it to the TikTok inbox. Direct Post publishes with the privacy chosen and can be public on a TikTok-audited app; an unaudited app is limited to Only me (SELF_ONLY). {"draft": true} sends the video to the account\'s TikTok inbox, where the operator finishes it and posts it from the TikTok app.';
 
 /**
  * What a delivered TikTok draft still needs, or null. TikTok's publish id for

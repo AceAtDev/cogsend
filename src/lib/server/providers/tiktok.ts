@@ -644,8 +644,8 @@ export const tiktokProvider: PlatformProvider = {
 			'One video on its own, or a photo post (carousel) of 1 to 20 JPEG or WebP images in order, the first one the cover; TikTok wants photos at most 1080p',
 			'Photo posts are pulled from the CogSend address TikTok verified for the app; TikTok adds a recommended sound to a direct photo post',
 			'Who can see it, comments, Duet, Stitch and the commercial-content disclosure are chosen for each post, from what TikTok offers the account, with no default',
-			'Until TikTok audits the app, Direct Post can only post as Only me',
-			'For a public post before then, send it as a draft (draft: true): the video lands in the TikTok inbox without the caption, and the creator chooses who can see it and posts it in the TikTok app'
+			'Direct Post publishes straight to the profile; an app TikTok has not audited can only post as Only me',
+			'A draft (draft: true) goes to the TikTok inbox instead: the video lands without the caption, and the creator chooses who can see it and posts it in the TikTok app'
 		]
 	},
 

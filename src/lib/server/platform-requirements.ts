@@ -222,7 +222,7 @@ function summarize(r: Omit<PlatformRequirements, 'summary'>): string {
 	else parts.push('no threads (segments are joined into one post)');
 	if (r.tiktok)
 		parts.push(
-			'each post needs its privacy, comments, Duet, Stitch and disclosure chosen, no default, or draft: true to send it to the TikTok inbox (until TikTok audits the app, Direct Post is Only me and a draft is the way to a public post), sent as a top-level tiktok field of the post such as "tiktok": {"draft": true}, never inside variants or options'
+			'each post needs its privacy, comments, Duet, Stitch and disclosure chosen, no default, or draft: true to send it to the TikTok inbox (Direct Post posts straight to the profile and can be public on a TikTok-audited app; an unaudited app is limited to Only me, and then a draft is the way to a public post), sent as a top-level tiktok field of the post such as "tiktok": {"draft": true}, never inside variants or options'
 		);
 	return `${r.name}: ${parts.join('; ')}.`;
 }
