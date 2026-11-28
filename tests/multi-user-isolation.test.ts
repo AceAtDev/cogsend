@@ -55,6 +55,7 @@ import * as briefRoute from '../src/routes/api/brands/[id]/brief/+server';
 import * as slotsRoute from '../src/routes/api/connections/[id]/slots/+server';
 import * as brandSettingsPage from '../src/routes/accounts/[slug]/+page.server';
 import * as calendarPage from '../src/routes/calendar/+page.server';
+import * as calendarRoute from '../src/routes/api/calendar/+server';
 import * as verifyRoute from '../src/routes/api/connections/[id]/verify/+server';
 import * as cancelRoute from '../src/routes/api/targets/[id]/cancel/+server';
 import * as retryRoute from '../src/routes/api/targets/[id]/retry/+server';
@@ -1026,6 +1027,21 @@ describe.each(['session', 'key'] as const)('Bob, signed in by %s, against Alice'
 		expect(text).not.toContain(a.brand);
 		expect(text).not.toContain('secret words of alice');
 		expect(text).toContain(b.connection);
+	});
+
+	it('gets only his own posts from the calendar range route', async () => {
+		const day = (offset: number) =>
+			new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+		const res = await call(calendarRoute.GET, bobAs(), {
+			method: 'GET',
+			search: `?start=${day(-30)}&end=${day(60)}`
+		});
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text).toContain(b.draft);
+		expect(text).not.toContain(a.draft);
+		expect(text).not.toContain(a.connection);
+		expect(text).not.toContain('secret words of alice');
 	});
 });
 
