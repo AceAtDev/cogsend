@@ -462,20 +462,36 @@ async function addMissingColumns(
 // Memoized per binding: Workers isolates reuse the same D1 binding across
 // requests, so the (idempotent) schema check runs once per isolate. A fresh
 // binding (tests, new deployment) is ensured again. Failures are not cached.
-const ensuredBindings = new WeakMap<object, Promise<void>>();
+//
+// Only a finished check is remembered. A check still running is shared, but on
+// Workers a promise belongs to the request that created it: when that request
+// ends first (a cancelled image load, say), every other request awaiting it
+// throws instead of waiting. A waiter that sees that runs the check itself.
+const ensuredBindings = new WeakSet<object>();
+const runningChecks = new WeakMap<object, Promise<void>>();
 
-export function ensureSchemaOnce(d1: D1Database): Promise<void> {
+export async function ensureSchemaOnce(d1: D1Database): Promise<void> {
 	// Keyed on the real binding: each request hands in its own counting
 	// wrapper around it (see #lib/server/budget).
 	const key = rawBinding(d1);
-	const existing = ensuredBindings.get(key);
-	if (existing) return existing;
-	const run = ensureSchema(d1).catch((err) => {
-		ensuredBindings.delete(key);
-		throw err;
-	});
-	ensuredBindings.set(key, run);
-	return run;
+	if (ensuredBindings.has(key)) return;
+	const running = runningChecks.get(key);
+	if (running) {
+		try {
+			await running;
+			return;
+		} catch {
+			// Its request ended, or the check failed: try again from this request.
+		}
+	}
+	const run = ensureSchema(d1);
+	runningChecks.set(key, run);
+	try {
+		await run;
+		ensuredBindings.add(key);
+	} finally {
+		if (runningChecks.get(key) === run) runningChecks.delete(key);
+	}
 }
 
 /**

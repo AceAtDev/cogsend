@@ -205,6 +205,34 @@ describe('ensureSchema', () => {
 		expect(attempts).toBeGreaterThan(1);
 	});
 
+	it('lets a request waiting on a check that died run the check itself', async () => {
+		// On Workers a shared promise dies with the request that made it, and a
+		// waiter then throws. The first request here talks to the same database
+		// through a wrapper whose every statement fails, standing in for that.
+		const { client, binding } = await freshDb();
+		const dying = {
+			// The same database underneath, as the per-request counting wrapper reports it.
+			[Symbol.for('cogsend.rawBinding')]: binding,
+			exec: async () => {
+				throw new Error('This promise was created by a request that has since ended');
+			},
+			prepare: () => ({
+				run: async () => {},
+				all: async () => ({ results: [] }),
+				first: async () => {
+					throw new Error('This promise was created by a request that has since ended');
+				},
+				bind: () => ({ run: async () => {}, all: async () => ({ results: [] }) })
+			})
+		} as unknown as D1Database;
+
+		const first = ensureSchemaOnce(dying);
+		const waiter = ensureSchemaOnce(binding);
+		await expect(first).rejects.toThrow(/request that has since ended/);
+		await expect(waiter).resolves.toBeUndefined();
+		client.close();
+	});
+
 	/**
 	 * The bootstrap is the *only* schema step a database created by it ever
 	 * takes, so an index that arrives later as a migration has to be mirrored
