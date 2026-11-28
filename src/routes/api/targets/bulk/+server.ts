@@ -175,8 +175,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					results.push({ id, ok: false, error: 'Rejected in review — resubmit it instead' });
 					continue;
 				}
-				// An agent's new time is not an approval; the operator's is.
-				const keepHeld = target.status === 'awaiting_review' && agent;
+				// An agent's new time is not an approval. The operator's is, unless
+				// they only moved it (a calendar drag sends keepHeld) and still mean to review it.
+				const keepHeld = target.status === 'awaiting_review' && (agent || body.keepHeld === true);
 				const conn = connById.get(target.connectionId);
 				if (!conn || conn.userId !== user.id) {
 					results.push({ id, ok: false, error: 'Not found' });

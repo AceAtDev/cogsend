@@ -254,6 +254,14 @@ export function canDrag(status: CalendarStatus): boolean {
 	return status === 'scheduled' || status === 'due';
 }
 
+/**
+ * What the calendar lets you drag: a waiting post, and one held for review,
+ * which moves without being approved (the drag sends keepHeld).
+ */
+export function canMove(status: CalendarStatus): boolean {
+	return canDrag(status) || status === 'review';
+}
+
 /** What the detail panel offers, matching the Posts page for the same state. */
 export function itemActions(
 	status: CalendarStatus
@@ -281,8 +289,13 @@ export function droppedInstant(
 }
 
 /** The body `POST /api/targets/bulk` takes to move targets, as the Posts page sends it. */
-export function reschedulePayload(ids: string[], runAtMs: number) {
-	return { op: 'reschedule' as const, ids, runAt: new Date(runAtMs).toISOString() };
+export function reschedulePayload(ids: string[], runAtMs: number, keepHeld = false) {
+	return {
+		op: 'reschedule' as const,
+		ids,
+		runAt: new Date(runAtMs).toISOString(),
+		...(keepHeld ? { keepHeld: true } : {})
+	};
 }
 
 /** `YYYY-MM-DDTHH:MM` for an `<input type="datetime-local">` showing the operator's wall time. */

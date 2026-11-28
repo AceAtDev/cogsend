@@ -447,4 +447,40 @@ describe('calendar load', () => {
 		});
 		expect(row.status).toBe('scheduled');
 	});
+
+	it('moves a held post without approving it when the drag asks to keep it held', async () => {
+		const id = ids['late:caltt'];
+		await db
+			.update(publishTargets)
+			.set({ status: 'awaiting_review', reviewedAt: null })
+			.where(eq(publishTargets.id, id));
+		const runAt = Date.now() + 4 * DAY_MS;
+		const move = (keepHeld: boolean) =>
+			bulkPOST({
+				request: new Request('http://localhost/api/targets/bulk', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(reschedulePayload([id], runAt, keepHeld))
+				}),
+				locals: {
+					db,
+					user: {
+						id: userId,
+						email: 'cal@localhost',
+						timezone: TORONTO,
+						totpEnabled: true,
+						mfaVerified: true
+					}
+				}
+			} as never);
+		expect((await move(true)).status).toBe(200);
+		let [row] = await db.select().from(publishTargets).where(eq(publishTargets.id, id));
+		expect(row.status).toBe('awaiting_review');
+		expect(row.reviewedAt).toBeNull();
+		expect(Math.floor(row.scheduledFor!.getTime() / 60_000)).toBe(Math.floor(runAt / 60_000));
+
+		expect((await move(false)).status).toBe(200);
+		[row] = await db.select().from(publishTargets).where(eq(publishTargets.id, id));
+		expect(row.status).toBe('scheduled');
+	});
 });
