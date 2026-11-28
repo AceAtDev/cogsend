@@ -29,11 +29,12 @@
 </script>
 
 <script lang="ts">
-	import { Check, Image, ShieldCheck } from '@lucide/svelte';
+	import { Check, Play, ShieldCheck } from '@lucide/svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
-	import { canDrag, formatDateTime, formatTime, STATUS_LABEL } from '#lib/domain/calendar.js';
+	import { canMove, formatDateTime, formatTime, STATUS_LABEL } from '#lib/domain/calendar.js';
 	import { displayAt } from '#lib/domain/channel-keys.js';
 	import { draftExcerpt } from '#lib/domain/excerpt.js';
+	import type { Thumb } from './thumb.js';
 	import type { ViewItem } from './types.js';
 
 	let {
@@ -42,14 +43,17 @@
 		compact = false,
 		dragging = false,
 		selected = false,
+		thumb = null,
 		onOpen,
 		onMenu,
 		onPointerDown
 	}: {
 		item: ViewItem;
 		timeZone: string;
-		/** Month cells: one line, no text. */
+		/** Month cells: a smaller picture and one line of caption. */
 		compact?: boolean;
+		/** The first attachment, so a post is recognised by its picture. */
+		thumb?: Thumb | null;
 		dragging?: boolean;
 		selected?: boolean;
 		onOpen: (item: ViewItem, trigger: HTMLElement, event: MouseEvent) => void;
@@ -58,8 +62,16 @@
 		onPointerDown?: (item: ViewItem, event: PointerEvent) => void;
 	} = $props();
 
-	const movable = $derived(canDrag(item.status) && item.channel.status === 'active');
+	const movable = $derived(canMove(item.status) && item.channel.status === 'active');
 	const handle = $derived(item.channel.handle ? displayAt(item.channel.handle) : '');
+	const caption = $derived(
+		draftExcerpt((item.previewTitle || item.text).split('\n')[0], 80) ||
+			handle ||
+			item.channel.platformName
+	);
+	const struck = $derived(
+		item.status === 'cancelled' || item.status === 'rejected' ? 'line-through' : ''
+	);
 	const label = $derived(
 		[
 			item.channel.brand.name,
@@ -81,7 +93,7 @@
 	aria-label={label}
 	title={label}
 	data-selected={selected ? '' : undefined}
-	class="group @container relative flex w-full min-w-0 flex-col rounded-md border border-l-4 border-stone-200/80 px-1.5 py-1 text-left text-[11px] leading-tight shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-shadow select-none hover:shadow-md {STATUS_TONE[
+	class="group @container relative flex w-full min-w-0 flex-col overflow-hidden rounded-md border border-l-4 border-stone-200/80 px-1.5 py-1 text-left text-[11px] leading-tight shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-shadow select-none hover:shadow-md {STATUS_TONE[
 		item.status
 	]} {movable ? 'cursor-grab touch-none' : ''} {dragging ? 'opacity-40' : ''} {selected
 		? 'ring-2 ring-stone-900 ring-inset'
@@ -95,43 +107,60 @@
 	}}
 	onpointerdown={(event) => onPointerDown?.(item, event)}
 >
-	<span class="flex w-full min-w-0 items-center gap-1">
-		<span class="shrink-0 font-bold tabular-nums">{formatTime(item.at, timeZone)}</span>
-		<span class="shrink-0" style="color: {item.channel.brand.color}">
-			<PlatformLogo platform={item.channel.platform} size={11} />
-		</span>
-		<!-- A narrow day column has no room for the handle; the brand edge and logo carry it. -->
-		<span
-			class="hidden min-w-0 flex-1 truncate font-semibold @[9.5rem]:inline {item.status ===
-				'cancelled' || item.status === 'rejected'
-				? 'line-through'
-				: ''}">{handle || item.channel.platformName}</span
-		>
-		<span class="flex-1 @[9.5rem]:hidden" aria-hidden="true"></span>
-		{#if item.status === 'review'}
-			<ShieldCheck class="h-3 w-3 shrink-0 text-violet-600" aria-hidden="true" />
-		{/if}
-		{#if item.mediaCount}
-			<Image class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
-		{/if}
-		{#if selected}
+	<span class="flex w-full min-w-0 items-center gap-1.5">
+		{#if thumb}
 			<span
-				class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-stone-900 text-white"
+				class="relative shrink-0 overflow-hidden rounded bg-stone-800 {compact
+					? 'h-8 w-8'
+					: 'h-9 w-9'}"
 				aria-hidden="true"
 			>
-				<Check class="h-2.5 w-2.5" strokeWidth={3} />
+				{#if thumb.url}
+					<img
+						src={thumb.url}
+						alt=""
+						loading="lazy"
+						draggable="false"
+						class="h-full w-full object-cover"
+					/>
+				{/if}
+				{#if thumb.video}
+					<span class="absolute inset-0 flex items-center justify-center text-white">
+						<Play class="h-2.5 w-2.5 fill-current drop-shadow" />
+					</span>
+				{/if}
 			</span>
-		{:else}
-			<span class="h-1.5 w-1.5 shrink-0 rounded-full {STATUS_DOT[item.status]}" aria-hidden="true"
-			></span>
 		{/if}
+		<span class="flex min-w-0 flex-1 flex-col">
+			<span class="flex w-full min-w-0 items-center gap-1">
+				<span class="shrink-0 font-bold tabular-nums">{formatTime(item.at, timeZone)}</span>
+				<span class="shrink-0" style="color: {item.channel.brand.color}">
+					<PlatformLogo platform={item.channel.platform} size={11} />
+				</span>
+				<span class="flex-1" aria-hidden="true"></span>
+				{#if item.status === 'review' && !compact}
+					<ShieldCheck class="h-3 w-3 shrink-0 text-violet-600" aria-hidden="true" />
+				{/if}
+				{#if selected}
+					<span
+						class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-stone-900 text-white"
+						aria-hidden="true"
+					>
+						<Check class="h-2.5 w-2.5" strokeWidth={3} />
+					</span>
+				{:else}
+					<span
+						class="h-1.5 w-1.5 shrink-0 rounded-full {STATUS_DOT[item.status]}"
+						aria-hidden="true"
+					></span>
+				{/if}
+			</span>
+			<!-- The caption is what tells posts apart; a month cell has room for one line of it. -->
+			<span
+				class="mt-0.5 w-full font-medium break-words opacity-80 {compact
+					? 'truncate'
+					: 'line-clamp-2'} {struck}">{caption}</span
+			>
+		</span>
 	</span>
-
-	{#if !compact}
-		<span
-			class="mt-0.5 block w-full truncate font-medium opacity-80 {item.status === 'cancelled'
-				? 'line-through'
-				: ''}">{draftExcerpt(item.text.split('\n')[0], 60)}</span
-		>
-	{/if}
 </button>

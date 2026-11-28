@@ -9,6 +9,8 @@
 		ChevronRight,
 		Copy,
 		Ellipsis,
+		FileText,
+		Play,
 		ExternalLink,
 		Eye,
 		Image,
@@ -23,6 +25,8 @@
 		Trash2,
 		X
 	} from '@lucide/svelte';
+	import CalendarPreview from '#lib/components/calendar/CalendarPreview.svelte';
+	import { thumbOf } from '#lib/components/calendar/thumb.js';
 	import CalendarActionMenu, {
 		type MenuAction
 	} from '#lib/components/calendar/CalendarActionMenu.svelte';
@@ -37,7 +41,6 @@
 		bulkPlan,
 		rangeBetween,
 		rescheduleCalls,
-		shiftLabel,
 		spreadMoves
 	} from '#lib/domain/calendar-selection.js';
 	import { sessionExpiredIfUnauthorized } from '#lib/components/session-expired.js';
@@ -46,7 +49,7 @@
 		addDays,
 		CALENDAR_STATUSES,
 		calendarHref,
-		canDrag,
+		canMove,
 		droppedInstant,
 		formatDateTime,
 		formatDay,
@@ -172,6 +175,41 @@
 			`[data-hour-row="${Math.min(earliest, 8)}"]`
 		);
 		if (row) weekScroller.scrollTop = row.offsetTop - 44;
+	});
+
+	// Over the month grid the wheel turns the month, like a desk calendar. One step
+	// per gesture: after a turn the wheel has to go quiet before the next, so a
+	// trackpad's momentum cannot skip several months.
+	// Kept outside the effect: it re-runs on every turn, and must not reset the lock.
+	let wheelTotal = 0;
+	let wheelLocked = false;
+	let wheelQuiet: ReturnType<typeof setTimeout> | null = null;
+	onDestroy(() => {
+		if (wheelQuiet) clearTimeout(wheelQuiet);
+	});
+	$effect(() => {
+		const el = gridEl;
+		if (!el || query.view !== 'month') return;
+		const onWheel = (event: WheelEvent) => {
+			if (event.ctrlKey || drag || marquee) return;
+			const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+			if (!delta) return;
+			event.preventDefault();
+			if (wheelQuiet) clearTimeout(wheelQuiet);
+			wheelQuiet = setTimeout(() => {
+				wheelTotal = 0;
+				wheelLocked = false;
+			}, 250);
+			if (wheelLocked) return;
+			wheelTotal += event.deltaMode === 1 ? delta * 40 : delta;
+			if (Math.abs(wheelTotal) < 60) return;
+			wheelLocked = true;
+			const step = wheelTotal > 0 ? 1 : -1;
+			wheelTotal = 0;
+			void go({ date: shiftAnchor('month', query.date, step) });
+		};
+		el.addEventListener('wheel', onWheel, { passive: false });
+		return () => el.removeEventListener('wheel', onWheel);
 	});
 
 	let focusedDay = $state<string | null>(null);
@@ -328,16 +366,17 @@
 		busy = true;
 		detailError = null;
 		const from = item.at;
-		const problem = await bulk(reschedulePayload([item.id], runAt), 'Could not reschedule').finally(
-			() => (busy = false)
-		);
+		const problem = await bulk(
+			reschedulePayload([item.id], runAt, true),
+			'Could not reschedule'
+		).finally(() => (busy = false));
 		if (problem) {
 			if (fromDrag) showToast(problem, 'error');
 			else detailError = problem;
 			return false;
 		}
 		// Moving back is itself a reschedule, so it needs the old time to still be ahead.
-		const undoable = item.status === 'scheduled' && from > Date.now() + 60_000;
+		const undoable = canMove(item.status) && from > Date.now() + 60_000;
 		offerUndo(
 			undoable
 				? {
@@ -370,7 +409,7 @@
 	async function applyMoves(moves: Move[], fallback: string): Promise<string | null> {
 		let problem: string | null = null;
 		for (const call of rescheduleCalls(moves)) {
-			problem = (await bulk(reschedulePayload(call.ids, call.runAt), fallback)) ?? problem;
+			problem = (await bulk(reschedulePayload(call.ids, call.runAt, true), fallback)) ?? problem;
 		}
 		return problem;
 	}
@@ -421,7 +460,7 @@
 	type Drop = { day: string; hour: number | null };
 	type Drag = { item: ViewItem; x: number; y: number; over: Drop | null };
 	let drag = $state<Drag | null>(null);
-	let pendingMove = $state<{ item: ViewItem; from: number; to: number } | null>(null);
+
 	let press: {
 		item: ViewItem;
 		pointerId: number;
@@ -443,7 +482,7 @@
 	}
 
 	function startPress(item: ViewItem, event: PointerEvent) {
-		if (!canDrag(item.status) || item.channel.status !== 'active') return;
+		if (!canMove(item.status) || item.channel.status !== 'active') return;
 		if (event.pointerType === 'mouse' && event.button !== 0) return;
 		endPress();
 		const touch = event.pointerType !== 'mouse';
@@ -524,15 +563,10 @@
 			showToast('That time has already passed', 'warn');
 			return;
 		}
-		pendingMove = { item, from: item.at, to };
-	}
-
-	async function confirmMove() {
-		const move = pendingMove;
-		if (!move) return;
-		const done = await reschedule(move.item, move.to, true);
-		pendingMove = null;
-		if (done) openId = null;
+		// No confirmation: the move is instant and Undo stays up for a few seconds.
+		void reschedule(item, to, true).then((done) => {
+			if (done) openId = null;
+		});
 	}
 
 	function onWindowKeydown(event: KeyboardEvent) {
@@ -551,7 +585,7 @@
 			filterMenuOpen = false;
 			return;
 		}
-		const dialogOpen = openItem || pendingMove || pendingCancel || pendingShift || bulkConfirm;
+		const dialogOpen = openItem || previewItem || pendingCancel || bulkConfirm;
 		if (event.key === 'Escape' && selected.size && !dialogOpen) {
 			event.preventDefault();
 			clearSelection();
@@ -640,7 +674,29 @@
 			toggleSelected(item.id);
 			return;
 		}
-		openItemMenu(item, event, trigger);
+		previewId = item.id;
+	}
+
+	// A plain click shows the post the way a viewer sees it; its actions sit under it.
+	let previewId = $state<string | null>(null);
+	const previewItem = $derived(previewId ? (items.find((i) => i.id === previewId) ?? null) : null);
+
+	const SHORT_LABEL: Record<string, string> = { edit: 'Edit', view: 'Open post' };
+
+	function previewActions(item: ViewItem): MenuAction[] {
+		const all = itemMenuActions(item);
+		return ['edit', 'approve', 'retry', 'view', 'details']
+			.map((key) => all.find((a) => a.key === key))
+			.filter((a): a is MenuAction => Boolean(a))
+			.slice(0, 3)
+			.map((a) => ({
+				...a,
+				label: SHORT_LABEL[a.key] ?? a.label,
+				onSelect: () => {
+					previewId = null;
+					a.onSelect();
+				}
+			}));
 	}
 
 	// A click on one post offers what can be done with it, each with an icon, instead of
@@ -805,7 +861,7 @@
 	let bulkBusy = $state(false);
 	let moveMenuOpen = $state(false);
 	let moveDate = $state('');
-	let pendingShift = $state<{ moves: Move[]; delta: number; spread?: boolean } | null>(null);
+
 	type BulkConfirm = { kind: 'approve-now' | 'reject' | 'cancel'; ids: string[] };
 	let bulkConfirm = $state<BulkConfirm | null>(null);
 	let rejectNote = $state('');
@@ -823,7 +879,7 @@
 			return;
 		}
 		moveMenuOpen = false;
-		pendingShift = { moves, delta };
+		void runMoves(moves);
 	}
 
 	function proposeMoveToDay(day: string) {
@@ -835,24 +891,25 @@
 			return;
 		}
 		moveMenuOpen = false;
-		pendingShift = { moves, delta: NaN };
+		void runMoves(moves);
 	}
 
-	async function confirmShift() {
-		const shift = pendingShift;
-		if (!shift) return;
+	/** Moves at once, with Undo for whatever can still go back to a time that has not passed. */
+	async function runMoves(moves: Move[], verb = 'Moved') {
+		if (!moves.length) return;
 		bulkBusy = true;
 		const before = new Map(items.map((i) => [i.id, i.at]));
-		const problem = await applyMoves(shift.moves, 'Could not reschedule').finally(
+		const problem = await applyMoves(moves, 'Could not reschedule').finally(
 			() => (bulkBusy = false)
 		);
-		pendingShift = null;
 		if (problem) showToast(problem, 'error');
-		else
-			offerUndo({
-				moves: shift.moves.map((m) => ({ id: m.id, to: before.get(m.id)! })),
-				label: `Moved ${count(shift.moves.length)}`
-			});
+		else {
+			const back = moves
+				.map((m) => ({ id: m.id, to: before.get(m.id)! }))
+				.filter((m) => m.to > Date.now() + 60_000);
+			offerUndo(back.length ? { moves: back, label: `${verb} ${count(moves.length)}` } : null);
+			if (!back.length) showToast(`${verb} ${count(moves.length)}`);
+		}
 		await invalidateAll();
 	}
 
@@ -917,7 +974,7 @@
 			showToast('That would put a post in the past', 'warn');
 			return;
 		}
-		pendingShift = { moves, delta: NaN, spread: true };
+		void runMoves(moves, 'Spread out');
 	}
 
 	// The bar keeps at most two actions in view; the rest sit under More, with icons.
@@ -1170,20 +1227,42 @@
 		{#if data.unscheduled.length}
 			<ul class="mt-3 space-y-2">
 				{#each data.unscheduled as draft (draft.id)}
+					{@const thumb = thumbOf(data.media[draft.id])}
 					<li>
 						<a
 							href="/compose?id={encodeURIComponent(draft.id)}"
-							class="block rounded-2xl border border-stone-200/80 bg-white px-3 py-2.5 shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-colors hover:border-stone-300"
+							class="flex gap-3 rounded-2xl border border-stone-200/80 bg-white p-2.5 shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-colors hover:border-stone-300"
 						>
-							<span class="line-clamp-2 text-[13px] font-semibold text-stone-800"
-								>{draft.title || draftExcerpt(draft.body, 90)}</span
+							<span
+								class="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-stone-100 text-stone-400"
+								aria-hidden="true"
 							>
-							<span class="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
-								{#if draft.mediaCount}
-									<Image class="h-3 w-3" aria-hidden="true" />
-									<span class="sr-only">Has media,</span>
+								{#if thumb?.url}
+									<img src={thumb.url} alt="" loading="lazy" class="h-full w-full object-cover" />
+								{:else}
+									<FileText class="h-5 w-5" />
 								{/if}
-								Edited {formatRelativeTime(new Date(draft.updatedAt))}
+								{#if thumb?.video}
+									<span class="absolute inset-0 flex items-center justify-center text-white">
+										<Play class="h-3.5 w-3.5 fill-current drop-shadow" />
+									</span>
+								{/if}
+							</span>
+							<span class="min-w-0 flex-1">
+								{#if draft.title}
+									<span class="line-clamp-1 text-[13px] font-bold text-stone-900"
+										>{draft.title}</span
+									>
+								{/if}
+								<span
+									class="line-clamp-2 text-[12px] {draft.title
+										? 'text-stone-500'
+										: 'font-semibold text-stone-800'}"
+									>{draftExcerpt(draft.body, 120) || 'No text yet'}</span
+								>
+								<span class="mt-0.5 block text-[11px] font-medium text-stone-400"
+									>Edited {formatRelativeTime(new Date(draft.updatedAt))}</span
+								>
 							</span>
 						</a>
 					</li>
@@ -1408,6 +1487,7 @@
 												dragging={drag?.item.id === item.id ||
 													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
 												selected={selected.has(item.id)}
+												thumb={thumbOf(data.media[item.draftId])}
 												onOpen={onItemClick}
 												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
@@ -1486,6 +1566,7 @@
 												dragging={drag?.item.id === item.id ||
 													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
 												selected={selected.has(item.id)}
+												thumb={thumbOf(data.media[item.draftId])}
 												onOpen={onItemClick}
 												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
@@ -1513,8 +1594,10 @@
 					</div>
 				{/if}
 				<p class="mt-3 text-[11px] font-medium text-stone-500">
-					Click a post for its actions. Drag across empty space, or Shift-click, to select several.
-					Drag a scheduled post to reschedule it.
+					Click a post to preview it; right-click for everything else.{query.view === 'month'
+						? ' Scroll over the month to change it.'
+						: ''} Drag a post to move it (held posts stay held), and Undo puts it back. Drag across empty
+					space or Shift-click to select several.
 				</p>
 			</div>
 
@@ -1617,7 +1700,7 @@
 					</p>
 				{/if}
 				<p class="mt-4 text-[11px] font-medium text-stone-500">
-					Tap a post for its actions. Press Select to act on several at once.
+					Tap a post to preview it. Press Select to act on several at once.
 				</p>
 			</div>
 			{#if openSlots.length}
@@ -1669,40 +1752,6 @@
 		onRetry={retry}
 	/>
 {/if}
-
-{#snippet moveDetails()}
-	{#if pendingMove}
-		<dl class="space-y-1.5 rounded-2xl bg-stone-50 px-3 py-2.5 text-[13px]">
-			<div class="flex items-center gap-2 font-bold text-stone-800">
-				<span style="color: {pendingMove.item.channel.brand.color}">
-					<PlatformLogo platform={pendingMove.item.channel.platform} size={13} />
-				</span>
-				{channelName(pendingMove.item)}
-			</div>
-			<div class="flex gap-2">
-				<dt class="w-10 shrink-0 font-bold text-stone-500">From</dt>
-				<dd class="text-stone-500 line-through">{formatDateTime(pendingMove.from, tz)}</dd>
-			</div>
-			<div class="flex gap-2">
-				<dt class="w-10 shrink-0 font-bold text-stone-500">To</dt>
-				<dd class="font-bold text-stone-900">{formatDateTime(pendingMove.to, tz)}</dd>
-			</div>
-		</dl>
-	{/if}
-{/snippet}
-
-<ConfirmDialog
-	open={pendingMove !== null}
-	title="Reschedule this post?"
-	details={moveDetails}
-	confirmLabel="Reschedule"
-	cancelLabel="Keep time"
-	tone="primary"
-	{busy}
-	idPrefix="calendar-move"
-	onConfirm={confirmMove}
-	onCancel={() => (pendingMove = null)}
-/>
 
 <ConfirmDialog
 	open={pendingCancel !== null}
@@ -1846,6 +1895,21 @@
 	/>
 {/if}
 
+{#if previewItem}
+	<CalendarPreview
+		item={previewItem}
+		media={data.media[previewItem.draftId] ?? []}
+		timeZone={tz}
+		actions={previewActions(previewItem)}
+		onClose={() => (previewId = null)}
+		onMore={(x, y) => {
+			const item = previewItem;
+			previewId = null;
+			if (item) itemMenu = { item, x, y };
+		}}
+	/>
+{/if}
+
 {#if itemMenu}
 	<CalendarActionMenu
 		x={itemMenu.x}
@@ -1856,28 +1920,6 @@
 		onClose={() => (itemMenu = null)}
 	/>
 {/if}
-
-<ConfirmDialog
-	open={pendingShift !== null}
-	title={pendingShift ? `Move ${count(pendingShift.moves.length)}?` : ''}
-	body={pendingShift
-		? (pendingShift.spread
-				? 'One post a day from the first, each at its own time.'
-				: Number.isNaN(pendingShift.delta)
-					? 'Each keeps its time of day.'
-					: `Each moves ${shiftLabel(pendingShift.delta)}.`) +
-			(pendingShift.moves.length < selected.size
-				? ` ${count(selected.size - pendingShift.moves.length)} in the selection cannot move and stay where they are.`
-				: '')
-		: null}
-	confirmLabel="Move"
-	cancelLabel="Keep times"
-	tone="primary"
-	busy={bulkBusy}
-	idPrefix="calendar-shift"
-	onConfirm={confirmShift}
-	onCancel={() => (pendingShift = null)}
-/>
 
 {#snippet rejectDetails()}
 	<label for="calendar-reject-note" class="block text-[12px] font-bold text-stone-600"

@@ -257,13 +257,13 @@ test('thumbnail opens carousel, reaches hidden slides, restores focus on close',
 test('Calendar uses same viewer and Escape leaves the detail drawer open', async ({ page }) => {
 	await page.goto('/calendar');
 	const detail = page.getByTestId('calendar-detail');
-	// A click on a post opens its action menu; Details opens the drawer.
+	// A click on a post opens its preview; Details there opens the drawer.
 	await clickUntilVisible(
 		page,
 		page.locator(`[data-cal-item="${ids.get('tiktok')!.target}"]`).first(),
-		page.getByTestId('menu-details')
+		page.getByTestId('calendar-preview')
 	);
-	await page.getByTestId('menu-details').click();
+	await page.getByTestId('preview-details').click();
 	await expect(detail).toBeVisible();
 	await detail
 		.getByRole('button', { name: /Open post preview,/i })

@@ -29,7 +29,8 @@ describe('bulk plan', () => {
 		expect(plan.approve).toEqual(['held-past', 'held-future', 'rejected']);
 		expect(plan.approveNow).toEqual(['held-past']);
 		expect(plan.reject).toEqual(['held-past', 'held-future']);
-		expect(plan.move).toEqual(['scheduled']);
+		// A held post moves too: the drag keeps it held instead of approving it.
+		expect(plan.move).toEqual(['held-past', 'held-future', 'scheduled']);
 		expect(plan.retry).toEqual(['failed']);
 		expect(plan.cancel).toEqual([
 			'held-past',

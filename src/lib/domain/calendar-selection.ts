@@ -1,6 +1,6 @@
 import {
 	addDays,
-	canDrag,
+	canMove,
 	droppedInstant,
 	itemActions,
 	zonedParts,
@@ -42,7 +42,7 @@ export function bulkPlan(items: SelectableItem[], now: number): BulkPlan {
 			if (item.at <= now) plan.approveNow.push(item.id);
 		}
 		if (actions.includes('review')) plan.reject.push(item.id);
-		if (canDrag(item.status) && item.channelStatus === 'active') plan.move.push(item.id);
+		if (canMove(item.status) && item.channelStatus === 'active') plan.move.push(item.id);
 		if (actions.includes('retry')) plan.retry.push(item.id);
 		if (actions.includes('cancel')) plan.cancel.push(item.id);
 	}
