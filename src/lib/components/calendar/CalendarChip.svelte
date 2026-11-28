@@ -29,7 +29,7 @@
 </script>
 
 <script lang="ts">
-	import { Image, ShieldCheck } from '@lucide/svelte';
+	import { Check, Image, ShieldCheck } from '@lucide/svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import { canDrag, formatDateTime, formatTime, STATUS_LABEL } from '#lib/domain/calendar.js';
 	import { displayAt } from '#lib/domain/channel-keys.js';
@@ -41,7 +41,9 @@
 		timeZone,
 		compact = false,
 		dragging = false,
+		selected = false,
 		onOpen,
+		onMenu,
 		onPointerDown
 	}: {
 		item: ViewItem;
@@ -49,7 +51,10 @@
 		/** Month cells: one line, no text. */
 		compact?: boolean;
 		dragging?: boolean;
-		onOpen: (item: ViewItem, trigger: HTMLElement) => void;
+		selected?: boolean;
+		onOpen: (item: ViewItem, trigger: HTMLElement, event: MouseEvent) => void;
+		/** Right-click: the post's actions without opening it. */
+		onMenu?: (item: ViewItem, event: MouseEvent) => void;
 		onPointerDown?: (item: ViewItem, event: PointerEvent) => void;
 	} = $props();
 
@@ -62,7 +67,9 @@
 			item.retrying ? 'Retrying' : STATUS_LABEL[item.status],
 			formatDateTime(item.at, timeZone),
 			draftExcerpt(item.text, 80)
-		].join(', ') + (movable ? '. Drag to reschedule.' : '')
+		].join(', ') +
+			(selected ? ', selected' : '') +
+			(movable ? '. Drag to reschedule.' : '')
 	);
 </script>
 
@@ -73,11 +80,19 @@
 	data-at={item.at}
 	aria-label={label}
 	title={label}
-	class="group flex w-full min-w-0 flex-col rounded-md border border-l-4 border-stone-200/80 px-1.5 py-1 text-left text-[11px] leading-tight shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-shadow hover:shadow-md {STATUS_TONE[
+	data-selected={selected ? '' : undefined}
+	class="group @container relative flex w-full min-w-0 flex-col rounded-md border border-l-4 border-stone-200/80 px-1.5 py-1 text-left text-[11px] leading-tight shadow-[0_1px_2px_rgb(28_25_23/0.04)] transition-shadow select-none hover:shadow-md {STATUS_TONE[
 		item.status
-	]} {movable ? 'cursor-grab touch-none select-none' : ''} {dragging ? 'opacity-40' : ''}"
+	]} {movable ? 'cursor-grab touch-none' : ''} {dragging ? 'opacity-40' : ''} {selected
+		? 'ring-2 ring-stone-900 ring-inset'
+		: ''}"
 	style="border-left-color: {item.channel.brand.color}"
-	onclick={(event) => onOpen(item, event.currentTarget)}
+	onclick={(event) => onOpen(item, event.currentTarget, event)}
+	oncontextmenu={(event) => {
+		if (!onMenu) return;
+		event.preventDefault();
+		onMenu(item, event);
+	}}
 	onpointerdown={(event) => onPointerDown?.(item, event)}
 >
 	<span class="flex w-full min-w-0 items-center gap-1">
@@ -85,24 +100,36 @@
 		<span class="shrink-0" style="color: {item.channel.brand.color}">
 			<PlatformLogo platform={item.channel.platform} size={11} />
 		</span>
+		<!-- A narrow day column has no room for the handle; the brand edge and logo carry it. -->
 		<span
-			class="min-w-0 flex-1 truncate font-semibold {item.status === 'cancelled' ||
-			item.status === 'rejected'
+			class="hidden min-w-0 flex-1 truncate font-semibold @[9.5rem]:inline {item.status ===
+				'cancelled' || item.status === 'rejected'
 				? 'line-through'
 				: ''}">{handle || item.channel.platformName}</span
 		>
+		<span class="flex-1 @[9.5rem]:hidden" aria-hidden="true"></span>
 		{#if item.status === 'review'}
 			<ShieldCheck class="h-3 w-3 shrink-0 text-violet-600" aria-hidden="true" />
 		{/if}
 		{#if item.mediaCount}
 			<Image class="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
 		{/if}
-		<span class="h-1.5 w-1.5 shrink-0 rounded-full {STATUS_DOT[item.status]}" aria-hidden="true"
-		></span>
+		{#if selected}
+			<span
+				class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-stone-900 text-white"
+				aria-hidden="true"
+			>
+				<Check class="h-2.5 w-2.5" strokeWidth={3} />
+			</span>
+		{:else}
+			<span class="h-1.5 w-1.5 shrink-0 rounded-full {STATUS_DOT[item.status]}" aria-hidden="true"
+			></span>
+		{/if}
 	</span>
+
 	{#if !compact}
 		<span
-			class="mt-0.5 block w-full truncate opacity-75 {item.status === 'cancelled'
+			class="mt-0.5 block w-full truncate font-medium opacity-80 {item.status === 'cancelled'
 				? 'line-through'
 				: ''}">{draftExcerpt(item.text.split('\n')[0], 60)}</span
 		>

@@ -1,12 +1,45 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { ChevronLeft, ChevronRight, Image, PenLine, SlidersHorizontal } from '@lucide/svelte';
+	import {
+		CalendarClock,
+		CalendarRange,
+		ChevronLeft,
+		ChevronRight,
+		Copy,
+		Ellipsis,
+		ExternalLink,
+		Eye,
+		Image,
+		ListChecks,
+		PenLine,
+		RotateCcw,
+		ShieldCheck,
+		ShieldX,
+		SlidersHorizontal,
+		Check,
+		SquareCheck,
+		Trash2,
+		X
+	} from '@lucide/svelte';
+	import CalendarActionMenu, {
+		type MenuAction
+	} from '#lib/components/calendar/CalendarActionMenu.svelte';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import PlatformLogo from '#lib/components/PlatformLogo.svelte';
 	import CalendarChip, { STATUS_DOT } from '#lib/components/calendar/CalendarChip.svelte';
 	import CalendarDetail from '#lib/components/calendar/CalendarDetail.svelte';
 	import type { ViewItem } from '#lib/components/calendar/types.js';
+	import {
+		boxBetween,
+		boxesOverlap,
+		bulkPlan,
+		rangeBetween,
+		rescheduleCalls,
+		shiftLabel,
+		spreadMoves
+	} from '#lib/domain/calendar-selection.js';
 	import { sessionExpiredIfUnauthorized } from '#lib/components/session-expired.js';
 	import { showToast } from '#lib/components/toast.svelte.js';
 	import {
@@ -88,6 +121,10 @@
 	});
 	const weeks = $derived(
 		Array.from({ length: Math.ceil(days.length / 7) }, (_, i) => days.slice(i * 7, i * 7 + 7))
+	);
+	// Hours nothing sits in stay short, so a week reads without scrolling past empty rows.
+	const busyHours = $derived(
+		new Set([...items.map((i) => i.hour), ...openSlots.map((slot) => slot.hour)])
 	);
 	const filterActive = $derived(query.brands.length > 0 || query.channels.length > 0);
 	const pickableChannels = $derived(data.channels.filter((c) => c.key));
@@ -273,7 +310,8 @@
 		return `${item.channel.brand.name} · ${item.channel.platformName}${handle}`;
 	}
 
-	type Undo = { ids: string[]; from: number; label: string };
+	type Move = { id: string; to: number };
+	type Undo = { moves: Move[]; label: string };
 	let undo = $state<Undo | null>(null);
 	let undoTimer: ReturnType<typeof setTimeout> | null = null;
 	onDestroy(() => {
@@ -303,8 +341,7 @@
 		offerUndo(
 			undoable
 				? {
-						ids: [item.id],
-						from,
+						moves: [{ id: item.id, to: from }],
 						label: `Moved ${item.channel.platformName} to ${formatDateTime(runAt, tz)}`
 					}
 				: null
@@ -318,10 +355,37 @@
 		const current = undo;
 		if (!current) return;
 		offerUndo(null);
-		const problem = await bulk(reschedulePayload(current.ids, current.from), 'Could not undo');
+		const problem = await applyMoves(current.moves, 'Could not undo');
 		if (problem) showToast(problem, 'error');
-		else showToast(`Moved back to ${formatDateTime(current.from, tz)}`);
+		else
+			showToast(
+				current.moves.length === 1
+					? `Moved back to ${formatDateTime(current.moves[0].to, tz)}`
+					: `Moved ${current.moves.length} posts back`
+			);
 		await invalidateAll();
+	}
+
+	/** Reschedules each item to its own instant, one call per shared minute; the first problem, else null. */
+	async function applyMoves(moves: Move[], fallback: string): Promise<string | null> {
+		let problem: string | null = null;
+		for (const call of rescheduleCalls(moves)) {
+			problem = (await bulk(reschedulePayload(call.ids, call.runAt), fallback)) ?? problem;
+		}
+		return problem;
+	}
+
+	/** The bulk route takes ten ids a call; the first problem, else null. */
+	async function inChunks(
+		op: 'cancel' | 'retry',
+		ids: string[],
+		fallback: string
+	): Promise<string | null> {
+		let problem: string | null = null;
+		for (let i = 0; i < ids.length; i += 10) {
+			problem = (await bulk({ op, ids: ids.slice(i, i + 10) }, fallback)) ?? problem;
+		}
+		return problem;
 	}
 
 	let pendingCancel = $state<ViewItem | null>(null);
@@ -452,6 +516,10 @@
 		if (!over) return;
 		const to = droppedInstant(item.at, over, tz);
 		if (Math.floor(to / 60_000) === Math.floor(item.at / 60_000)) return;
+		if (selected.has(item.id) && plan.move.length > 1) {
+			proposeShift(to - item.at);
+			return;
+		}
 		if (to <= Date.now()) {
 			showToast('That time has already passed', 'warn');
 			return;
@@ -468,17 +536,538 @@
 	}
 
 	function onWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape' && drag) endPress();
+		if (event.key === 'Escape' && drag) {
+			endPress();
+			return;
+		}
+		if (event.key === 'Escape' && marquee) {
+			endMarquee();
+			return;
+		}
+		if (event.key === 'Escape' && (moveMenuOpen || itemMenu || moreMenu || filterMenuOpen)) {
+			moveMenuOpen = false;
+			itemMenu = null;
+			moreMenu = null;
+			filterMenuOpen = false;
+			return;
+		}
+		const dialogOpen = openItem || pendingMove || pendingCancel || pendingShift || bulkConfirm;
+		if (event.key === 'Escape' && selected.size && !dialogOpen) {
+			event.preventDefault();
+			clearSelection();
+			return;
+		}
+		const typing = (event.target as HTMLElement | null)?.closest(
+			'input, textarea, select, [contenteditable]'
+		);
+		if ((event.metaKey || event.ctrlKey) && event.key === 'a' && !typing && !dialogOpen) {
+			event.preventDefault();
+			for (const item of items) selected.add(item.id);
+		}
 	}
 
+	// Selection: drag across empty grid, Shift/Ctrl/Cmd-click a post, or Select mode (taps).
+	const selected = new SvelteSet<string>();
+	let selectMode = $state(false);
+	const selectedItems = $derived(items.filter((i) => selected.has(i.id)));
+	const plan = $derived(
+		bulkPlan(
+			selectedItems.map((i) => ({
+				id: i.id,
+				status: i.status,
+				at: i.at,
+				channelStatus: i.channel.status
+			})),
+			Date.now()
+		)
+	);
+	const statusCounts = $derived.by(() => {
+		const counts = new Map<string, string[]>();
+		for (const item of items)
+			counts.set(item.status, [...(counts.get(item.status) ?? []), item.id]);
+		return CALENDAR_STATUSES.filter((s) => counts.has(s)).map((status) => ({
+			status,
+			ids: counts.get(status)!
+		}));
+	});
+
+	// A post that left the range (moved, cancelled out of view) leaves the selection too.
+	$effect(() => {
+		const present = new Set(items.map((i) => i.id));
+		for (const id of [...selected]) if (!present.has(id)) selected.delete(id);
+	});
+
+	function clearSelection() {
+		selected.clear();
+		selectMode = false;
+		moveMenuOpen = false;
+		moreMenu = null;
+		anchorId = null;
+	}
+
+	function toggleSelected(id: string) {
+		if (selected.has(id)) selected.delete(id);
+		else selected.add(id);
+		anchorId = id;
+	}
+
+	// Shift-click selects everything between the last post picked and this one, in time order.
+	let anchorId = $state<string | null>(null);
+	const ordered = $derived(
+		[...items].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).map((i) => i.id)
+	);
+
+	function selectRange(id: string) {
+		if (!anchorId || !selected.has(anchorId)) {
+			toggleSelected(id);
+			return;
+		}
+		for (const each of rangeBetween(ordered, anchorId, id)) selected.add(each);
+	}
+
+	function selectOnly(ids: string[]) {
+		selected.clear();
+		for (const id of ids) selected.add(id);
+	}
+
+	function onItemClick(item: ViewItem, trigger: HTMLElement | null, event: MouseEvent) {
+		if (suppressClick) return;
+		if (event.shiftKey) {
+			selectRange(item.id);
+			return;
+		}
+		if (selectMode || event.metaKey || event.ctrlKey) {
+			toggleSelected(item.id);
+			return;
+		}
+		openItemMenu(item, event, trigger);
+	}
+
+	// A click on one post offers what can be done with it, each with an icon, instead of
+	// opening the drawer straight away; Details is the first choice.
+	let itemMenu = $state<{ item: ViewItem; x: number; y: number } | null>(null);
+
+	function openItemMenu(item: ViewItem, event: MouseEvent, trigger?: HTMLElement | null) {
+		// A keyboard press reports (0, 0): open beside the post instead.
+		let { clientX: x, clientY: y } = event;
+		if (!x && !y && (trigger ?? event.currentTarget)) {
+			const box = ((trigger ?? event.currentTarget) as HTMLElement).getBoundingClientRect();
+			x = box.left;
+			y = box.bottom + 4;
+		}
+		itemMenu = { item, x, y };
+	}
+
+	function itemMenuActions(item: ViewItem): MenuAction[] {
+		const plan1 = bulkPlan(
+			[{ id: item.id, status: item.status, at: item.at, channelStatus: item.channel.status }],
+			Date.now()
+		);
+		const list: MenuAction[] = [
+			{ key: 'details', label: 'Details', icon: Eye, onSelect: () => openDetail(item) },
+			{
+				key: 'edit',
+				label: 'Edit in composer',
+				icon: PenLine,
+				onSelect: () => goto(`/compose?id=${encodeURIComponent(item.draftId)}`)
+			}
+		];
+		if (plan1.approve.length)
+			list.push({
+				key: 'approve',
+				label: 'Approve',
+				icon: ShieldCheck,
+				tone: 'primary',
+				hint: plan1.approveNow.length ? 'Its time has passed: it publishes now' : undefined,
+				onSelect: () => startApprove(plan1.approve, plan1.approveNow)
+			});
+		if (plan1.reject.length)
+			list.push({
+				key: 'reject',
+				label: 'Reject',
+				icon: ShieldX,
+				onSelect: () => (bulkConfirm = { kind: 'reject', ids: plan1.reject })
+			});
+		if (plan1.move.length)
+			list.push({
+				key: 'reschedule',
+				label: 'Reschedule',
+				icon: CalendarClock,
+				onSelect: () => openDetail(item)
+			});
+		if (plan1.retry.length)
+			list.push({ key: 'retry', label: 'Retry', icon: RotateCcw, onSelect: () => retry(item) });
+		list.push({
+			key: 'duplicate',
+			label: 'Duplicate as draft',
+			icon: Copy,
+			onSelect: () => duplicateDrafts([item.draftId])
+		});
+		if (item.remoteUrl)
+			list.push({
+				key: 'view',
+				label: 'View on ' + item.channel.platformName,
+				icon: ExternalLink,
+				onSelect: () => window.open(item.remoteUrl!, '_blank', 'noopener')
+			});
+		list.push({
+			key: 'select',
+			label: selected.has(item.id) ? 'Unselect' : 'Select',
+			icon: SquareCheck,
+			hint: selected.has(item.id) ? undefined : 'Shift-click picks a range',
+			onSelect: () => toggleSelected(item.id)
+		});
+		if (plan1.cancel.length)
+			list.push({
+				key: 'cancel',
+				label: item.status === 'failed' ? 'Remove' : 'Cancel post',
+				icon: Trash2,
+				tone: 'danger',
+				onSelect: () => (pendingCancel = item)
+			});
+		return list;
+	}
+
+	type Point = { x: number; y: number };
+	let marquee = $state<{
+		start: Point;
+		current: Point;
+		scrollStart: number;
+		base: string[];
+		moved: boolean;
+	} | null>(null);
+
+	function onGridPointerDown(event: PointerEvent) {
+		if (event.pointerType !== 'mouse' || event.button !== 0) return;
+		const target = event.target as HTMLElement;
+		if (target.closest('[data-cal-item], button, a, input')) return;
+		if (!target.closest('[data-drop-day]')) return;
+		// Keeps the browser from starting a text selection across the grid.
+		event.preventDefault();
+		const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+		marquee = {
+			start: { x: event.clientX, y: event.clientY },
+			current: { x: event.clientX, y: event.clientY },
+			scrollStart: weekScroller?.scrollTop ?? 0,
+			base: additive ? [...selected] : [],
+			moved: false
+		};
+		window.addEventListener('pointermove', onMarqueeMove);
+		window.addEventListener('pointerup', onMarqueeUp);
+		window.addEventListener('pointercancel', endMarquee);
+	}
+
+	// The start point is anchored to the content, so autoscrolling stretches the box.
+	const marqueeBox = $derived.by(() => {
+		if (!marquee?.moved) return null;
+		const drift = (weekScroller?.scrollTop ?? 0) - marquee.scrollStart;
+		return boxBetween({ x: marquee.start.x, y: marquee.start.y - drift }, marquee.current);
+	});
+
+	function onMarqueeMove(event: PointerEvent) {
+		if (!marquee) return;
+		marquee.current = { x: event.clientX, y: event.clientY };
+		if (!marquee.moved) {
+			const dist = Math.hypot(event.clientX - marquee.start.x, event.clientY - marquee.start.y);
+			if (dist < 5) return;
+			marquee.moved = true;
+		}
+		if (weekScroller) {
+			const box = weekScroller.getBoundingClientRect();
+			if (event.clientY < box.top + 40) weekScroller.scrollTop -= 14;
+			else if (event.clientY > box.bottom - 40) weekScroller.scrollTop += 14;
+		}
+		const area = marqueeBox;
+		if (!area) return;
+		const hits = Array.from(gridEl?.querySelectorAll<HTMLElement>('[data-cal-item]') ?? [])
+			.filter((el) => {
+				const r = el.getBoundingClientRect();
+				return boxesOverlap(area, { left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+			})
+			.map((el) => el.dataset.calItem!);
+		selectOnly([...new Set([...marquee.base, ...hits])]);
+	}
+
+	function onMarqueeUp() {
+		// A plain click on an empty cell clears the selection, as in a file manager.
+		if (marquee && !marquee.moved && !marquee.base.length) selected.clear();
+		endMarquee();
+	}
+
+	function endMarquee() {
+		marquee = null;
+		window.removeEventListener('pointermove', onMarqueeMove);
+		window.removeEventListener('pointerup', onMarqueeUp);
+		window.removeEventListener('pointercancel', endMarquee);
+	}
+	onMount(() => endMarquee);
+
+	let bulkBusy = $state(false);
+	let moveMenuOpen = $state(false);
+	let moveDate = $state('');
+	let pendingShift = $state<{ moves: Move[]; delta: number; spread?: boolean } | null>(null);
+	type BulkConfirm = { kind: 'approve-now' | 'reject' | 'cancel'; ids: string[] };
+	let bulkConfirm = $state<BulkConfirm | null>(null);
+	let rejectNote = $state('');
+
+	function count(n: number, word = 'post'): string {
+		return `${n} ${word}${n === 1 ? '' : 's'}`;
+	}
+
+	function proposeShift(delta: number) {
+		const moving = selectedItems.filter((i) => plan.move.includes(i.id));
+		const moves = moving.map((i) => ({ id: i.id, to: i.at + delta }));
+		if (!moves.length || delta === 0) return;
+		if (moves.some((m) => m.to <= Date.now())) {
+			showToast('That would put a post in the past', 'warn');
+			return;
+		}
+		moveMenuOpen = false;
+		pendingShift = { moves, delta };
+	}
+
+	function proposeMoveToDay(day: string) {
+		if (!day) return;
+		const moving = selectedItems.filter((i) => plan.move.includes(i.id));
+		const moves = moving.map((i) => ({ id: i.id, to: droppedInstant(i.at, { day }, tz) }));
+		if (moves.some((m) => m.to <= Date.now())) {
+			showToast('That would put a post in the past', 'warn');
+			return;
+		}
+		moveMenuOpen = false;
+		pendingShift = { moves, delta: NaN };
+	}
+
+	async function confirmShift() {
+		const shift = pendingShift;
+		if (!shift) return;
+		bulkBusy = true;
+		const before = new Map(items.map((i) => [i.id, i.at]));
+		const problem = await applyMoves(shift.moves, 'Could not reschedule').finally(
+			() => (bulkBusy = false)
+		);
+		pendingShift = null;
+		if (problem) showToast(problem, 'error');
+		else
+			offerUndo({
+				moves: shift.moves.map((m) => ({ id: m.id, to: before.get(m.id)! })),
+				label: `Moved ${count(shift.moves.length)}`
+			});
+		await invalidateAll();
+	}
+
+	async function postReview(
+		path: 'approve' | 'reject',
+		body: Record<string, unknown>
+	): Promise<string | null> {
+		try {
+			const res = await fetch(`/api/review/${path}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			if (sessionExpiredIfUnauthorized(res)) return 'Signed out';
+			const payload = await res.json().catch(() => ({}));
+			return res.ok ? null : humanizeError(payload.error || `Could not ${path}`);
+		} catch {
+			return humanizeError('fetch failed');
+		}
+	}
+
+	function startApprove(ids = plan.approve, pastIds = plan.approveNow) {
+		if (pastIds.length) {
+			approveNowCount = pastIds.length;
+			bulkConfirm = { kind: 'approve-now', ids };
+		} else void approve(ids);
+	}
+	let approveNowCount = $state(0);
+
+	async function duplicateDrafts(draftIds: string[]) {
+		bulkBusy = true;
+		let made = 0;
+		let problem: string | null = null;
+		for (const id of [...new Set(draftIds)]) {
+			try {
+				const res = await fetch(`/api/drafts/${encodeURIComponent(id)}/duplicate`, {
+					method: 'POST'
+				});
+				if (sessionExpiredIfUnauthorized(res)) {
+					problem = 'Signed out';
+					break;
+				}
+				if (res.ok) made++;
+				else
+					problem = humanizeError(
+						(await res.json().catch(() => ({}))).error || 'Could not duplicate'
+					);
+			} catch {
+				problem = humanizeError('fetch failed');
+			}
+		}
+		bulkBusy = false;
+		if (made) showToast(`Duplicated ${count(made)} as draft${made === 1 ? '' : 's'}`);
+		if (problem) showToast(problem, 'error');
+		await invalidateAll();
+	}
+
+	function proposeSpread() {
+		const moving = selectedItems.filter((i) => plan.move.includes(i.id));
+		const moves = spreadMoves(moving, tz);
+		if (moves.some((m) => m.to <= Date.now())) {
+			showToast('That would put a post in the past', 'warn');
+			return;
+		}
+		pendingShift = { moves, delta: NaN, spread: true };
+	}
+
+	// The bar keeps at most two actions in view; the rest sit under More, with icons.
+	const bulkActions = $derived.by(() => {
+		const n = selected.size;
+		const of = (k: number) => (k < n ? `${k} of ${n}` : undefined);
+		const list: (MenuAction & { primary?: boolean })[] = [];
+		if (plan.approve.length)
+			list.push({
+				key: 'approve',
+				label: 'Approve',
+				icon: ShieldCheck,
+				tone: 'primary',
+				hint: of(plan.approve.length),
+				onSelect: () => startApprove()
+			});
+		if (plan.retry.length)
+			list.push({
+				key: 'retry',
+				label: 'Retry',
+				icon: RotateCcw,
+				hint: of(plan.retry.length),
+				onSelect: retrySelected
+			});
+		if (plan.move.length)
+			list.push({
+				key: 'move',
+				label: 'Move',
+				icon: CalendarClock,
+				hint: of(plan.move.length),
+				onSelect: () => (moveMenuOpen = true)
+			});
+		if (plan.reject.length)
+			list.push({
+				key: 'reject',
+				label: 'Reject',
+				icon: ShieldX,
+				hint: of(plan.reject.length),
+				onSelect: () => (bulkConfirm = { kind: 'reject', ids: plan.reject })
+			});
+		if (plan.move.length > 1)
+			list.push({
+				key: 'spread',
+				label: 'Spread out',
+				icon: CalendarRange,
+				hint: 'One post a day, same times',
+				onSelect: proposeSpread
+			});
+		list.push({
+			key: 'duplicate',
+			label: 'Duplicate as drafts',
+			icon: Copy,
+			hint: 'Copies to reuse later',
+			onSelect: () => duplicateDrafts(selectedItems.map((i) => i.draftId))
+		});
+		if (plan.cancel.length)
+			list.push({
+				key: 'cancel',
+				label: 'Cancel',
+				icon: Trash2,
+				tone: 'danger',
+				hint: of(plan.cancel.length),
+				onSelect: () => (bulkConfirm = { kind: 'cancel', ids: plan.cancel })
+			});
+		return list;
+	});
+	const barActions = $derived(bulkActions.filter((a) => a.key !== 'cancel').slice(0, 2));
+	const moreActions = $derived(bulkActions.filter((a) => !barActions.includes(a)));
+	let moreMenu = $state<{ x: number; y: number } | null>(null);
+	let movePanel = $state<HTMLDivElement | null>(null);
+	$effect(() => {
+		if (!moveMenuOpen) return;
+		const away = (event: PointerEvent) => {
+			if (movePanel && !movePanel.contains(event.target as Node)) moveMenuOpen = false;
+		};
+		// Next frame, so the click that opened it does not close it.
+		const id = requestAnimationFrame(() => window.addEventListener('pointerdown', away, true));
+		return () => {
+			cancelAnimationFrame(id);
+			window.removeEventListener('pointerdown', away, true);
+		};
+	});
+	let filterMenuOpen = $state(false);
+
+	async function approve(ids: string[]) {
+		bulkBusy = true;
+		const problem = await postReview('approve', { deliveryIds: ids }).finally(
+			() => (bulkBusy = false)
+		);
+		bulkConfirm = null;
+		if (problem) showToast(problem, 'error');
+		else {
+			showToast(`Approved ${count(ids.length)}`);
+			for (const id of ids) selected.delete(id);
+		}
+		await invalidateAll();
+	}
+
+	async function confirmBulk() {
+		const current = bulkConfirm;
+		if (!current) return;
+		if (current.kind === 'approve-now') return approve(current.ids);
+		bulkBusy = true;
+		const problem =
+			current.kind === 'reject'
+				? await postReview('reject', {
+						deliveryIds: current.ids,
+						note: rejectNote.trim() || undefined
+					})
+				: await inChunks('cancel', current.ids, 'Could not cancel');
+		bulkBusy = false;
+		bulkConfirm = null;
+		rejectNote = '';
+		if (problem) showToast(problem, 'error');
+		else {
+			showToast(
+				`${current.kind === 'reject' ? 'Rejected' : 'Cancelled'} ${count(current.ids.length)}`
+			);
+			for (const id of current.ids) selected.delete(id);
+		}
+		await invalidateAll();
+	}
+
+	async function retrySelected() {
+		const ids = plan.retry;
+		bulkBusy = true;
+		const problem = await inChunks('retry', ids, 'Retry failed').finally(() => (bulkBusy = false));
+		if (problem) showToast(problem, 'error');
+		else showToast(`Retrying ${count(ids.length)}`);
+		await invalidateAll();
+	}
+
+	const barButton =
+		'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors disabled:opacity-40';
 	const navButton =
 		'flex h-10 min-w-10 items-center justify-center rounded-full border border-stone-200/80 bg-white px-3 text-[13px] font-bold text-stone-700 shadow-sm transition-colors hover:border-stone-300 hover:text-stone-900';
-	const chip =
-		'inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-bold transition-colors';
-	const chipOn = 'border-stone-900 bg-stone-900 text-white';
-	const chipOff =
-		'border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:text-stone-900';
-	let filtersOpen = $state(false);
+	const filterRow =
+		'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-bold text-stone-700 transition-colors hover:bg-stone-50';
+	let filterPanel = $state<HTMLDivElement | null>(null);
+	$effect(() => {
+		if (!filterMenuOpen) return;
+		const away = (event: PointerEvent) => {
+			const target = event.target as HTMLElement;
+			if (filterPanel?.contains(target) || target.closest('[data-testid="calendar-filter-button"]'))
+				return;
+			filterMenuOpen = false;
+		};
+		window.addEventListener('pointerdown', away, true);
+		return () => window.removeEventListener('pointerdown', away, true);
+	});
 </script>
 
 <svelte:head>
@@ -486,6 +1075,89 @@
 </svelte:head>
 
 <svelte:window onkeydown={onWindowKeydown} />
+
+{#snippet filterMenu()}
+	<div
+		bind:this={filterPanel}
+		id="calendar-filters"
+		role="dialog"
+		aria-label="Filter the calendar"
+		class="absolute top-full right-0 z-40 mt-2 max-h-[70dvh] w-72 overflow-y-auto rounded-2xl border border-stone-200/80 bg-white p-2 shadow-[0_16px_40px_-12px_rgb(28_25_23/0.25)]"
+		data-testid="calendar-filters"
+	>
+		<p class="px-2.5 pt-1 pb-1 text-[11px] font-bold tracking-widest text-stone-500 uppercase">
+			Brands
+		</p>
+		{#each data.brands as brand (brand.slug)}
+			{@const on = query.brands.includes(brand.slug)}
+			<button
+				type="button"
+				role="menuitemcheckbox"
+				aria-checked={on}
+				class={filterRow}
+				data-testid="brand-filter-{brand.slug}"
+				onclick={() => go({ brands: toggleValue(query.brands, brand.slug) })}
+			>
+				<span
+					class="h-2.5 w-2.5 shrink-0 rounded-full"
+					style="background-color: {brand.color}"
+					aria-hidden="true"
+				></span>
+				<span class="min-w-0 flex-1 truncate">{brand.name}</span>
+				{#if on}<Check class="h-4 w-4 shrink-0" aria-hidden="true" />{/if}
+			</button>
+		{/each}
+		{#if pickableChannels.length > 1}
+			<p
+				class="mt-1 border-t border-stone-100 px-2.5 pt-2.5 pb-1 text-[11px] font-bold tracking-widest text-stone-500 uppercase"
+			>
+				Accounts
+			</p>
+			{#each pickableChannels as channel (channel.connectionId)}
+				{@const on = query.channels.includes(channel.key)}
+				<button
+					type="button"
+					role="menuitemcheckbox"
+					aria-checked={on}
+					class={filterRow}
+					title={channel.key}
+					aria-label="{channel.brand.name} {channel.platformName} {displayAt(channel.handle)}"
+					data-testid="channel-filter-{channel.key}"
+					onclick={() => go({ channels: toggleValue(query.channels, channel.key) })}
+				>
+					<span class="shrink-0" style="color: {channel.brand.color}">
+						<PlatformLogo platform={channel.platform} size={13} />
+					</span>
+					<span class="min-w-0 flex-1 truncate"
+						>{channel.handle ? displayAt(channel.handle) : channel.platformName}</span
+					>
+					{#if on}<Check class="h-4 w-4 shrink-0" aria-hidden="true" />{/if}
+				</button>
+			{/each}
+		{/if}
+		<div class="mt-1 border-t border-stone-100 pt-1">
+			<button
+				type="button"
+				role="menuitemcheckbox"
+				aria-checked={query.cancelled}
+				class={filterRow}
+				onclick={() => go({ cancelled: !query.cancelled })}
+			>
+				<span class="min-w-0 flex-1">Show cancelled</span>
+				{#if query.cancelled}<Check class="h-4 w-4 shrink-0" aria-hidden="true" />{/if}
+			</button>
+			{#if filterActive || query.cancelled}
+				<button
+					type="button"
+					class="{filterRow} text-stone-500"
+					onclick={() => go({ brands: [], channels: [], cancelled: false })}
+				>
+					Clear filters
+				</button>
+			{/if}
+		</div>
+	</div>
+{/snippet}
 
 {#snippet unscheduledList()}
 	<section aria-labelledby="unscheduled-heading" data-testid="calendar-unscheduled">
@@ -531,36 +1203,8 @@
 {/snippet}
 
 <div class="flex w-full flex-1 flex-col">
-	<div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-		<div>
-			<p class="text-[11px] font-bold tracking-widest text-stone-500 uppercase">Plan</p>
-			<h1 class="mt-2 text-3xl font-extrabold tracking-tight text-stone-900">Calendar</h1>
-			<p class="mt-1 text-[12px] font-medium text-stone-500" data-testid="calendar-zone">
-				Times in {tz}
-			</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			<div
-				class="flex rounded-full border border-stone-200/80 bg-white p-1 shadow-sm"
-				role="group"
-				aria-label="View"
-			>
-				{#each ['week', 'month'] as const as view (view)}
-					<a
-						href={href({ view })}
-						data-sveltekit-reset="false"
-						aria-current={query.view === view ? 'page' : undefined}
-						class="rounded-full px-4 py-1.5 text-[13px] font-bold capitalize transition-colors {query.view ===
-						view
-							? 'bg-stone-900 text-white'
-							: 'text-stone-600 hover:text-stone-900'}">{view}</a
-					>
-				{/each}
-			</div>
-		</div>
-	</div>
-
-	<div class="mb-4 flex flex-wrap items-center gap-2">
+	<h1 class="sr-only">Calendar</h1>
+	<div class="mb-3 flex flex-wrap items-center gap-2">
 		<a
 			href={href({ date: shiftAnchor(query.view, query.date, -1) })}
 			data-sveltekit-reset="false"
@@ -583,86 +1227,95 @@
 		>
 			<ChevronRight class="h-4 w-4" />
 		</a>
-		<h2
-			class="order-first w-full min-w-0 truncate text-[15px] font-extrabold tracking-tight text-stone-900 md:order-none md:ml-2 md:w-auto md:flex-1"
-			aria-live="polite"
-		>
-			{rangeLabel(query.view, data.range, query.date)}
-		</h2>
-		<button
-			type="button"
-			class="{navButton} ml-auto md:hidden"
-			aria-expanded={filtersOpen}
-			aria-controls="calendar-filters"
-			onclick={() => (filtersOpen = !filtersOpen)}
-		>
-			<SlidersHorizontal class="h-4 w-4" />
-			<span class="ml-1.5"
-				>Filter{filterActive ? ` (${query.brands.length + query.channels.length})` : ''}</span
-			>
-		</button>
-	</div>
-
-	<div
-		id="calendar-filters"
-		class="mb-5 space-y-2 {filtersOpen ? '' : 'hidden'} md:block"
-		data-testid="calendar-filters"
-	>
-		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by brand">
+		<div class="order-first w-full min-w-0 md:order-none md:ml-2 md:w-auto md:flex-1">
+			<h2 class="truncate text-xl font-extrabold tracking-tight text-stone-900" aria-live="polite">
+				{rangeLabel(query.view, data.range, query.date)}
+			</h2>
+			<p class="text-[11px] font-medium text-stone-400" data-testid="calendar-zone">
+				Times in {tz}
+			</p>
+		</div>
+		<div class="ml-auto flex items-center gap-2">
 			<button
 				type="button"
-				class="{chip} {filterActive ? chipOff : chipOn}"
-				aria-pressed={!filterActive}
-				onclick={() => go({ brands: [], channels: [] })}>All</button
+				class="{navButton} md:hidden {selectMode
+					? '!border-stone-900 !bg-stone-900 !text-white'
+					: ''}"
+				aria-pressed={selectMode}
+				onclick={() => (selectMode ? clearSelection() : (selectMode = true))}
+				data-testid="calendar-select-mode"
 			>
-			{#each data.brands as brand (brand.slug)}
-				{@const on = query.brands.includes(brand.slug)}
+				<ListChecks class="h-4 w-4" />
+				<span class="ml-1.5">{selectMode ? 'Done' : 'Select'}</span>
+			</button>
+			<div class="relative">
 				<button
 					type="button"
-					class="{chip} {on ? chipOn : chipOff}"
-					aria-pressed={on}
-					data-testid="brand-filter-{brand.slug}"
-					onclick={() => go({ brands: toggleValue(query.brands, brand.slug) })}
+					class="{navButton} {filterActive || query.cancelled ? '!border-stone-900' : ''}"
+					aria-haspopup="dialog"
+					aria-expanded={filterMenuOpen}
+					aria-controls="calendar-filters"
+					onclick={() => (filterMenuOpen = !filterMenuOpen)}
+					data-testid="calendar-filter-button"
 				>
-					<span
-						class="h-2.5 w-2.5 rounded-full ring-2 ring-white/70"
-						style="background-color: {brand.color}"
-						aria-hidden="true"
-					></span>
-					{brand.name}
-				</button>
-			{/each}
-			<button
-				type="button"
-				class="{chip} {query.cancelled ? chipOn : chipOff}"
-				aria-pressed={query.cancelled}
-				onclick={() => go({ cancelled: !query.cancelled })}>Show cancelled</button
-			>
-		</div>
-		{#if pickableChannels.length > 1}
-			<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by channel">
-				{#each pickableChannels as channel (channel.connectionId)}
-					{@const on = query.channels.includes(channel.key)}
-					<button
-						type="button"
-						class="{chip} {on ? chipOn : chipOff}"
-						aria-pressed={on}
-						title={channel.key}
-						aria-label="{channel.brand.name} {channel.platformName} {displayAt(channel.handle)}"
-						data-testid="channel-filter-{channel.key}"
-						onclick={() => go({ channels: toggleValue(query.channels, channel.key) })}
-					>
-						<span style="color: {on ? 'currentColor' : channel.brand.color}">
-							<PlatformLogo platform={channel.platform} size={12} />
-						</span>
-						<span class="max-w-36 truncate"
-							>{channel.handle ? displayAt(channel.handle) : channel.platformName}</span
+					<SlidersHorizontal class="h-4 w-4" />
+					<span class="ml-1.5">Filter</span>
+					{#if filterActive || query.cancelled}
+						<span
+							class="ml-1.5 rounded-full bg-stone-900 px-1.5 text-[11px] text-white tabular-nums"
+							>{query.brands.length + query.channels.length + (query.cancelled ? 1 : 0)}</span
 						>
-					</button>
+					{/if}
+				</button>
+				{#if filterMenuOpen}
+					{@render filterMenu()}
+				{/if}
+			</div>
+			<div
+				class="flex rounded-full border border-stone-200/80 bg-white p-1 shadow-sm"
+				role="group"
+				aria-label="View"
+			>
+				{#each ['week', 'month'] as const as view (view)}
+					<a
+						href={href({ view })}
+						data-sveltekit-reset="false"
+						aria-current={query.view === view ? 'page' : undefined}
+						class="rounded-full px-4 py-1.5 text-[13px] font-bold capitalize transition-colors {query.view ===
+						view
+							? 'bg-stone-900 text-white'
+							: 'text-stone-600 hover:text-stone-900'}">{view}</a
+					>
 				{/each}
 			</div>
-		{/if}
+		</div>
 	</div>
+
+	{#if statusCounts.length}
+		<div
+			class="mb-3 flex flex-wrap items-center gap-x-1 gap-y-1"
+			role="group"
+			aria-label="Posts in view by status. Pick one to select them all."
+			data-testid="calendar-summary"
+		>
+			{#each statusCounts as row (row.status)}
+				{@const all = row.ids.every((id) => selected.has(id))}
+				<button
+					type="button"
+					class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold transition-colors {all
+						? 'bg-stone-900 text-white'
+						: 'text-stone-600 hover:bg-white hover:text-stone-900'}"
+					title="Select every {STATUS_LABEL[row.status].toLowerCase()} post in view"
+					aria-pressed={all}
+					onclick={() => (all ? row.ids.forEach((id) => selected.delete(id)) : selectOnly(row.ids))}
+				>
+					<span class="h-2 w-2 rounded-full {STATUS_DOT[row.status]}" aria-hidden="true"></span>
+					<span class="tabular-nums">{row.ids.length}</span>
+					{STATUS_LABEL[row.status]}
+				</button>
+			{/each}
+		</div>
+	{/if}
 
 	{#if data.loadFailed}
 		<p
@@ -682,15 +1335,16 @@
 		<div class="min-w-0">
 			<!-- Grid views: tablet and up. A phone gets the agenda below. -->
 			<div
-				class="hidden md:block"
+				class="hidden md:block {marquee ? 'select-none' : ''}"
 				bind:this={gridEl}
 				onkeydown={onGridKeydown}
+				onpointerdown={onGridPointerDown}
 				role="presentation"
 				data-testid="calendar-grid"
 			>
 				{#if query.view === 'week'}
 					<div
-						class="relative max-h-[70dvh] overflow-y-auto rounded-[1.25rem] border border-stone-200/80 bg-white shadow-[0_4px_20px_-8px_rgb(28_25_23/0.08)]"
+						class="relative max-h-[max(24rem,calc(100dvh-17rem))] overflow-y-auto rounded-[1.25rem] border border-stone-200/80 bg-white shadow-[0_4px_20px_-8px_rgb(28_25_23/0.08)]"
 						bind:this={weekScroller}
 					>
 						<div class="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))]">
@@ -722,7 +1376,11 @@
 							{/each}
 							{#each HOURS as hour (hour)}
 								<div
-									class="border-b border-stone-100 pt-1 pr-2 text-right text-[10px] font-bold text-stone-400 tabular-nums"
+									class="border-b border-stone-100 pr-2 text-right text-[10px] font-bold tabular-nums {busyHours.has(
+										hour
+									)
+										? 'pt-1.5 text-stone-500'
+										: 'pt-0.5 text-stone-300'}"
 									data-hour-row={hour}
 								>
 									{formatTime(Date.UTC(2000, 0, 1, hour), 'UTC').replace(':00', '')}
@@ -732,7 +1390,9 @@
 									<div
 										data-drop-day={day}
 										data-drop-hour={hour}
-										class="min-h-11 space-y-1 border-b border-l border-stone-100 p-0.5 {isOver(
+										class="{busyHours.has(hour)
+											? 'min-h-11'
+											: 'min-h-6'} space-y-1 border-b border-l border-stone-100 p-0.5 {isOver(
 											day,
 											hour
 										)
@@ -745,8 +1405,11 @@
 											<CalendarChip
 												{item}
 												timeZone={tz}
-												dragging={drag?.item.id === item.id}
-												onOpen={openDetail}
+												dragging={drag?.item.id === item.id ||
+													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
+												selected={selected.has(item.id)}
+												onOpen={onItemClick}
+												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
 											/>
 										{/each}
@@ -820,8 +1483,11 @@
 												{item}
 												timeZone={tz}
 												compact
-												dragging={drag?.item.id === item.id}
-												onOpen={openDetail}
+												dragging={drag?.item.id === item.id ||
+													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
+												selected={selected.has(item.id)}
+												onOpen={onItemClick}
+												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
 											/>
 										{/each}
@@ -847,8 +1513,8 @@
 					</div>
 				{/if}
 				<p class="mt-3 text-[11px] font-medium text-stone-500">
-					Drag a scheduled post to another {query.view === 'week' ? 'hour or day' : 'day'} to reschedule
-					it, or open it and press Reschedule. Arrow keys move between days.
+					Click a post for its actions. Drag across empty space, or Shift-click, to select several.
+					Drag a scheduled post to reschedule it.
 				</p>
 			</div>
 
@@ -877,14 +1543,19 @@
 												<button
 													type="button"
 													data-cal-item={item.id}
-													onclick={() => openDetail(item)}
+													onclick={(event) => onItemClick(item, null, event)}
+													aria-pressed={selectMode ? selected.has(item.id) : undefined}
 													aria-label="{channelName(item)}, {item.retrying
 														? 'Retrying'
 														: STATUS_LABEL[item.status]}, {formatDateTime(
 														item.at,
 														tz
 													)}: {draftExcerpt(item.text, 80)}"
-													class="flex min-h-14 w-full items-start gap-3 rounded-2xl border border-l-4 border-stone-200/80 bg-white px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(28_25_23/0.04)]"
+													class="flex min-h-14 w-full items-start gap-3 rounded-2xl border border-l-4 border-stone-200/80 bg-white px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(28_25_23/0.04)] {selected.has(
+														item.id
+													)
+														? 'ring-2 ring-stone-900'
+														: ''}"
 													style="border-left-color: {item.channel.brand.color}"
 												>
 													<span
@@ -946,27 +1617,16 @@
 					</p>
 				{/if}
 				<p class="mt-4 text-[11px] font-medium text-stone-500">
-					Tap a post to see it, reschedule, cancel or retry.
+					Tap a post for its actions. Press Select to act on several at once.
 				</p>
 			</div>
-
-			<ul class="mt-4 flex flex-wrap gap-x-4 gap-y-1" aria-label="Status legend">
-				{#each CALENDAR_STATUSES as status (status)}
-					<li class="flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
-						<span class="h-1.5 w-1.5 rounded-full {STATUS_DOT[status]}" aria-hidden="true"></span>
-						{STATUS_LABEL[status]}
-					</li>
-				{/each}
-				{#if openSlots.length}
-					<li class="flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
-						<span
-							class="h-2 w-3 rounded-sm border border-dashed border-stone-300"
-							aria-hidden="true"
-						></span>
-						Open posting slot
-					</li>
-				{/if}
-			</ul>
+			{#if openSlots.length}
+				<p class="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
+					<span class="h-2 w-3 rounded-sm border border-dashed border-stone-300" aria-hidden="true"
+					></span>
+					Open posting slot
+				</p>
+			{/if}
 		</div>
 
 		<aside class="mt-8 lg:mt-0">
@@ -1060,9 +1720,209 @@
 	onCancel={() => (pendingCancel = null)}
 />
 
+{#if marqueeBox}
+	<div
+		class="pointer-events-none fixed z-30 rounded-md border border-stone-900/50 bg-stone-900/5"
+		style="left: {marqueeBox.left}px; top: {marqueeBox.top}px; width: {marqueeBox.right -
+			marqueeBox.left}px; height: {marqueeBox.bottom - marqueeBox.top}px"
+		aria-hidden="true"
+	></div>
+{/if}
+
+{#if selected.size}
+	<div
+		class="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-40 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2"
+		role="toolbar"
+		aria-label="Selected posts"
+		data-testid="calendar-bulk-bar"
+	>
+		<div
+			class="flex items-center gap-1 rounded-full border border-stone-200/80 bg-white/95 p-1.5 pl-4 shadow-[0_12px_40px_-12px_rgb(28_25_23/0.35)] backdrop-blur-xl"
+		>
+			<span class="mr-1 text-[13px] font-extrabold whitespace-nowrap text-stone-900 tabular-nums"
+				>{selected.size} selected</span
+			>
+			{#each barActions as action (action.key)}
+				{@const Icon = action.icon}
+				<button
+					type="button"
+					class="{barButton} {action.tone === 'primary'
+						? 'bg-violet-600 text-white hover:bg-violet-700'
+						: 'text-stone-700 hover:bg-stone-100'}"
+					disabled={bulkBusy}
+					title={action.hint}
+					onclick={action.onSelect}
+					data-testid="bulk-{action.key}"
+				>
+					<Icon class="h-4 w-4" />
+					{action.label}
+				</button>
+			{/each}
+			{#if moreActions.length}
+				<button
+					type="button"
+					class="{barButton} text-stone-700 hover:bg-stone-100"
+					disabled={bulkBusy}
+					aria-haspopup="menu"
+					aria-expanded={moreMenu !== null}
+					onclick={(event) => {
+						const box = event.currentTarget.getBoundingClientRect();
+						moreMenu = moreMenu ? null : { x: box.left, y: box.top - 8 };
+					}}
+					data-testid="bulk-more"
+				>
+					<Ellipsis class="h-4 w-4" /> More
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="{barButton} text-stone-500 hover:bg-stone-100"
+				aria-label="Clear selection"
+				title="Clear selection (Esc)"
+				onclick={clearSelection}
+			>
+				<X class="h-4 w-4" />
+			</button>
+		</div>
+	</div>
+
+	{#if moveMenuOpen}
+		<div
+			bind:this={movePanel}
+			class="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-1/2 z-40 w-64 -translate-x-1/2 rounded-2xl border border-stone-200/80 bg-white p-2 shadow-[0_16px_40px_-12px_rgb(28_25_23/0.25)]"
+			role="dialog"
+			aria-label="Move {count(plan.move.length)}"
+			data-testid="calendar-move-menu"
+		>
+			<p class="px-3 pt-1 pb-1.5 text-[11px] font-bold tracking-wide text-stone-500 uppercase">
+				Move {count(plan.move.length)}
+			</p>
+			{#each [{ label: 'A day earlier', delta: -86_400_000 }, { label: 'A day later', delta: 86_400_000 }, { label: 'A week later', delta: 7 * 86_400_000 }] as option (option.label)}
+				<button
+					type="button"
+					class="block w-full rounded-xl px-3 py-2 text-left text-[13px] font-bold text-stone-700 hover:bg-stone-50"
+					onclick={() => proposeShift(option.delta)}>{option.label}</button
+				>
+			{/each}
+			<form
+				class="mt-1 border-t border-stone-100 px-3 pt-2 pb-1"
+				onsubmit={(event) => {
+					event.preventDefault();
+					proposeMoveToDay(moveDate);
+				}}
+			>
+				<label
+					for="calendar-move-day"
+					class="block text-[11px] font-bold tracking-wide text-stone-500 uppercase"
+					>To a day, same times</label
+				>
+				<div class="mt-1.5 flex gap-2">
+					<input
+						id="calendar-move-day"
+						type="date"
+						min={data.today}
+						bind:value={moveDate}
+						class="min-w-0 flex-1 rounded-lg border border-stone-200 px-2 py-1 text-[13px]"
+					/>
+					<button
+						type="submit"
+						disabled={!moveDate}
+						class="rounded-full bg-stone-900 px-3 text-[12px] font-bold text-white disabled:opacity-40"
+						>Move</button
+					>
+				</div>
+			</form>
+		</div>
+	{/if}
+{/if}
+
+{#if moreMenu}
+	<CalendarActionMenu
+		x={moreMenu.x}
+		y={moreMenu.y}
+		placement="above"
+		actions={moreActions}
+		onClose={() => (moreMenu = null)}
+	/>
+{/if}
+
+{#if itemMenu}
+	<CalendarActionMenu
+		x={itemMenu.x}
+		y={itemMenu.y}
+		title="{formatDateTime(itemMenu.item.at, tz)} · {itemMenu.item.channel.platformName}"
+		subtitle={draftExcerpt(itemMenu.item.text.split('\n')[0], 60)}
+		actions={itemMenuActions(itemMenu.item)}
+		onClose={() => (itemMenu = null)}
+	/>
+{/if}
+
+<ConfirmDialog
+	open={pendingShift !== null}
+	title={pendingShift ? `Move ${count(pendingShift.moves.length)}?` : ''}
+	body={pendingShift
+		? (pendingShift.spread
+				? 'One post a day from the first, each at its own time.'
+				: Number.isNaN(pendingShift.delta)
+					? 'Each keeps its time of day.'
+					: `Each moves ${shiftLabel(pendingShift.delta)}.`) +
+			(pendingShift.moves.length < selected.size
+				? ` ${count(selected.size - pendingShift.moves.length)} in the selection cannot move and stay where they are.`
+				: '')
+		: null}
+	confirmLabel="Move"
+	cancelLabel="Keep times"
+	tone="primary"
+	busy={bulkBusy}
+	idPrefix="calendar-shift"
+	onConfirm={confirmShift}
+	onCancel={() => (pendingShift = null)}
+/>
+
+{#snippet rejectDetails()}
+	<label for="calendar-reject-note" class="block text-[12px] font-bold text-stone-600"
+		>Note for the agent (optional)</label
+	>
+	<textarea
+		id="calendar-reject-note"
+		bind:value={rejectNote}
+		maxlength="2000"
+		rows="3"
+		class="mt-1 w-full rounded-xl border border-stone-200 px-3 py-2 text-[13px]"
+		placeholder="What should change?"></textarea>
+{/snippet}
+
+<ConfirmDialog
+	open={bulkConfirm !== null}
+	title={bulkConfirm?.kind === 'approve-now'
+		? `Approve ${count(bulkConfirm.ids.length)}?`
+		: bulkConfirm?.kind === 'reject'
+			? `Reject ${count(bulkConfirm.ids.length)}?`
+			: `Cancel ${count(bulkConfirm?.ids.length ?? 0)}?`}
+	body={bulkConfirm?.kind === 'approve-now'
+		? `${count(approveNowCount)} ${approveNowCount === 1 ? 'is' : 'are'} past ${approveNowCount === 1 ? 'its' : 'their'} time and will publish right away.${approveNowCount < bulkConfirm.ids.length ? ' The rest keep their times.' : ''}`
+		: bulkConfirm?.kind === 'cancel'
+			? 'They will not publish. Other accounts on the same posts are not touched.'
+			: null}
+	details={bulkConfirm?.kind === 'reject' ? rejectDetails : null}
+	confirmLabel={bulkConfirm?.kind === 'approve-now'
+		? 'Approve'
+		: bulkConfirm?.kind === 'reject'
+			? 'Reject'
+			: 'Cancel posts'}
+	cancelLabel="Keep"
+	tone={bulkConfirm?.kind === 'approve-now' ? 'primary' : 'danger'}
+	busy={bulkBusy}
+	idPrefix="calendar-bulk"
+	onConfirm={confirmBulk}
+	onCancel={() => (bulkConfirm = null)}
+/>
+
 {#if undo}
 	<div
-		class="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-full border border-stone-200/80 bg-white/95 py-2 pr-2 pl-4 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.25)] backdrop-blur-xl"
+		class="fixed {selected.size
+			? 'bottom-[calc(5.5rem+env(safe-area-inset-bottom))]'
+			: 'bottom-[calc(1.5rem+env(safe-area-inset-bottom))]'} left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-full border border-stone-200/80 bg-white/95 py-2 pr-2 pl-4 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.25)] backdrop-blur-xl"
 		role="status"
 		data-testid="calendar-undo"
 	>
