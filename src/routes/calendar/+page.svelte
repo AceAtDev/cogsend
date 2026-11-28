@@ -363,20 +363,55 @@
 		return true;
 	}
 
-	function readVisibleMonth() {
+	/** The month with the most days on screen, each week counted by how much of it shows. */
+	function monthInView(): string | null {
+		const box = monthScroller;
+		if (!box) return null;
+		const top = box.scrollTop + (monthHeader?.offsetHeight ?? 0);
+		const bottom = box.scrollTop + box.clientHeight;
+		const share = new Map<string, number>();
+		for (const row of box.querySelectorAll<HTMLElement>('[data-week]')) {
+			const from = row.offsetTop;
+			const to = from + row.offsetHeight;
+			if (to <= top) continue;
+			if (from >= bottom) break;
+			const seen = (Math.min(to, bottom) - Math.max(from, top)) / (to - from || 1);
+			for (let i = 0; i < 7; i++) {
+				const month = addDays(row.dataset.week!, i).slice(0, 7);
+				share.set(month, (share.get(month) ?? 0) + seen);
+			}
+		}
+		let best: string | null = null;
+		for (const [month, weight] of share) if (!best || weight > share.get(best)!) best = month;
+		return best ? `${best}-01` : null;
+	}
+
+	// After a jump (Today, an arrow, opening the page) the heading names the month
+	// jumped to, even when its last week shares the screen with the next month;
+	// the first scroll of your own hands it back to what is on screen.
+	let pinnedMonth = '';
+	function unpin() {
+		if (!pinnedMonth) return;
+		pinnedMonth = '';
+		readVisibleMonth();
+	}
+	$effect(() => {
 		const box = monthScroller;
 		if (!box) return;
-		const head = monthHeader?.offsetHeight ?? 0;
-		// A third of the way down is where the eye rests; that week names the month.
-		const row = weekRowAt(box.scrollTop + head + (box.clientHeight - head) / 3);
-		if (row?.dataset.mid) {
-			const month = monthStart(row.dataset.mid);
-			if (month !== visibleMonth) {
-				visibleMonth = month;
-				if (urlTimer) clearTimeout(urlTimer);
-				// The address only: no load runs, so nothing on screen waits for it.
-				urlTimer = setTimeout(() => replaceState(href({ date: month }), page.state), 300);
-			}
+		const events = ['wheel', 'touchstart', 'pointerdown'] as const;
+		for (const name of events) box.addEventListener(name, unpin, { passive: true });
+		return () => {
+			for (const name of events) box.removeEventListener(name, unpin);
+		};
+	});
+
+	function readVisibleMonth() {
+		const month = pinnedMonth || monthInView();
+		if (month && month !== visibleMonth) {
+			visibleMonth = month;
+			if (urlTimer) clearTimeout(urlTimer);
+			// The address only: no load runs, so nothing on screen waits for it.
+			urlTimer = setTimeout(() => replaceState(href({ date: month }), page.state), 300);
 		}
 		growIfNear();
 	}
@@ -413,6 +448,7 @@
 				const target = monthStart(d.query.date);
 				visibleMonth = target;
 				placeTarget = target;
+				pinnedMonth = target;
 				void tick().then(placeIfShown);
 				return;
 			}
@@ -453,10 +489,13 @@
 
 	/** Arrows and Today glide through the weeks on the page; past them the month loads afresh. */
 	function stepMonth(event: MouseEvent, day: string) {
-		if (query.view !== 'month' || scrollToDay(day, 'smooth')) {
-			if (query.view === 'month') event.preventDefault();
+		if (query.view === 'month' && scrollToDay(day, 'smooth')) {
+			event.preventDefault();
+			pinnedMonth = monthStart(day);
+			readVisibleMonth();
 			return;
 		}
+		if (query.view !== 'month') return;
 		if (monthScroller?.offsetParent === null) return;
 		event.preventDefault();
 		placeOnLoad = true;
@@ -541,7 +580,10 @@
 			case 'PageDown': {
 				const step = event.key === 'PageUp' ? -1 : 1;
 				const month = addMonths(shownMonth, step);
-				if (query.view !== 'month' || !scrollToDay(month, 'smooth')) {
+				if (query.view === 'month' && scrollToDay(month, 'smooth')) {
+					pinnedMonth = month;
+					readVisibleMonth();
+				} else {
 					placeOnLoad = true;
 					void go({
 						date: query.view === 'month' ? month : shiftAnchor(query.view, query.date, step)
@@ -1804,7 +1846,6 @@
 							<div
 								class="grid grid-cols-7 {w ? 'border-t border-stone-100' : ''}"
 								data-week={week[0]}
-								data-mid={week[3]}
 							>
 								{#each week as day (day)}
 									{@const list = byDay.get(day) ?? []}
