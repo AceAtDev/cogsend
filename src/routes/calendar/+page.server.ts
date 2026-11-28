@@ -5,6 +5,7 @@ import {
 	parseCalendarQuery,
 	rangeBounds,
 	safeTimeZone,
+	scrollRange,
 	visibleRange
 } from '#lib/domain/calendar.js';
 import { loadCalendar } from '#lib/server/calendar.js';
@@ -17,7 +18,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const now = new Date();
 	const today = dayKeyOf(now.getTime(), timeZone);
 	const query = parseCalendarQuery(url.searchParams, today);
-	const range = visibleRange(query.view, query.date);
+	const range =
+		query.view === 'month' ? scrollRange(query.date) : visibleRange(query.view, query.date);
 	const bounds = rangeBounds(range, timeZone);
 	const base = { timeZone, today, query, range, now: now.getTime() };
 	try {

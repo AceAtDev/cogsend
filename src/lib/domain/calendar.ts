@@ -92,6 +92,20 @@ export function visibleRange(view: CalendarView, anchor: string): VisibleRange {
 	return { start, end: addDays(start, 7), days };
 }
 
+/**
+ * The scrolling month view's window: whole weeks from the month before the
+ * anchor to the month after it, so the one in view always has a month of room
+ * either way before the page has to load more.
+ */
+export function scrollRange(anchor: string, startsOn = WEEK_STARTS_ON): VisibleRange {
+	const start = weekStart(monthStart(addMonths(monthStart(anchor), -1)), startsOn);
+	const lastWeek = monthGrid(addMonths(monthStart(anchor), 1), startsOn).at(-1)!;
+	const end = addDays(lastWeek[6], 1);
+	const days: string[] = [];
+	for (let day = start; day < end; day = addDays(day, 1)) days.push(day);
+	return { start, end, days };
+}
+
 export function shiftAnchor(view: CalendarView, anchor: string, direction: -1 | 1): string {
 	if (view === 'month') return addMonths(monthStart(anchor), direction);
 	return addDays(weekStart(anchor), 7 * direction);

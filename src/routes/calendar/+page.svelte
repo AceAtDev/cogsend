@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll, replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		CalendarClock,
 		CalendarRange,
@@ -47,6 +48,7 @@
 	import { showToast } from '#lib/components/toast.svelte.js';
 	import {
 		addDays,
+		addMonths,
 		CALENDAR_STATUSES,
 		calendarHref,
 		canMove,
@@ -55,6 +57,7 @@
 		formatDay,
 		formatTime,
 		monthStart,
+		weekStart,
 		rangeLabel,
 		reschedulePayload,
 		shiftAnchor,
@@ -62,6 +65,8 @@
 		toggleValue,
 		weekday,
 		zonedParts,
+		type CalendarItem,
+		type CalendarMedia,
 		type CalendarQuery
 	} from '#lib/domain/calendar.js';
 	import { displayAt } from '#lib/domain/channel-keys.js';
@@ -72,15 +77,42 @@
 
 	let { data } = $props();
 
+	// The scrolling month view's weeks on the page, and the posts it fetched past the page's own.
+	let renderStart = $state('');
+	let renderEnd = $state('');
+	let extraItems = $state<CalendarItem[]>([]);
+	let extraMedia = $state<Record<string, CalendarMedia[]>>({});
+
 	const tz = $derived(data.timeZone);
 	const query = $derived(data.query);
-	const days = $derived(data.range.days);
+	const days = $derived(
+		query.view === 'month' && renderStart ? daysBetween(renderStart, renderEnd) : data.range.days
+	);
 	const HOURS = Array.from({ length: 24 }, (_, h) => h);
 	const MONTH_CHIPS = 3;
+	const monthName = (day: string) =>
+		new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: 'UTC' }).format(
+			Date.parse(`${day}T12:00:00Z`)
+		);
+
+	function daysBetween(from: string, to: string): string[] {
+		const out: string[] = [];
+		for (let day = from; day < to; day = addDays(day, 1)) out.push(day);
+		return out;
+	}
 
 	const channelById = $derived(new Map(data.channels.map((c) => [c.connectionId, c])));
+	// The page's own posts, plus those the scrolling month fetched for weeks past them.
+	const allItems = $derived.by(() => {
+		if (!extraItems.length) return data.items;
+		const own = new Set(data.items.map((i) => i.id));
+		return [...data.items, ...extraItems.filter((i) => !own.has(i.id))];
+	});
+	const media = $derived<Record<string, CalendarMedia[]>>(
+		Object.keys(extraMedia).length ? { ...extraMedia, ...data.media } : data.media
+	);
 	const items = $derived<ViewItem[]>(
-		data.items.flatMap((item) => {
+		allItems.flatMap((item) => {
 			const channel = channelById.get(item.connectionId);
 			if (!channel) return [];
 			const { key, minutes } = zonedParts(item.at, tz);
@@ -177,40 +209,244 @@
 		if (row) weekScroller.scrollTop = row.offsetTop - 44;
 	});
 
-	// Over the month grid the wheel turns the month, like a desk calendar. One step
-	// per gesture: after a turn the wheel has to go quiet before the next, so a
-	// trackpad's momentum cannot skip several months.
-	// Kept outside the effect: it re-runs on every turn, and must not reset the lock.
-	let wheelTotal = 0;
-	let wheelLocked = false;
-	let wheelQuiet: ReturnType<typeof setTimeout> | null = null;
-	onDestroy(() => {
-		if (wheelQuiet) clearTimeout(wheelQuiet);
-	});
-	$effect(() => {
-		const el = gridEl;
-		if (!el || query.view !== 'month') return;
-		const onWheel = (event: WheelEvent) => {
-			if (event.ctrlKey || drag || marquee) return;
-			const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-			if (!delta) return;
-			event.preventDefault();
-			if (wheelQuiet) clearTimeout(wheelQuiet);
-			wheelQuiet = setTimeout(() => {
-				wheelTotal = 0;
-				wheelLocked = false;
-			}, 250);
-			if (wheelLocked) return;
-			wheelTotal += event.deltaMode === 1 ? delta * 40 : delta;
-			if (Math.abs(wheelTotal) < 60) return;
-			wheelLocked = true;
-			const step = wheelTotal > 0 ? 1 : -1;
-			wheelTotal = 0;
-			void go({ date: shiftAnchor('month', query.date, step) });
+	// The month view scrolls without ever reloading the page. Weeks are added
+	// well before they come into view, as empty rows straight away, and their
+	// posts are fetched in the background and merged in; the address follows the
+	// month in view so a reload or a shared link opens the same place.
+	let monthScroller = $state<HTMLDivElement | null>(null);
+	let monthHeader = $state<HTMLDivElement | null>(null);
+	// Empty until the grid has placed itself; the title falls back to the address.
+	let visibleMonth = $state('');
+	const pending = new SvelteSet<string>();
+	let covered = { start: '', end: '' };
+	let fetchGen = 0;
+	let filterKey = '';
+	let lastView = '';
+	let placeOnLoad = true;
+	let readFrame = 0;
+	let urlTimer: ReturnType<typeof setTimeout> | null = null;
+	const shownMonth = $derived(visibleMonth || monthStart(query.date));
+	const headerLabel = $derived(
+		rangeLabel(
+			query.view,
+			data.range,
+			query.view === 'month' && visibleMonth ? visibleMonth : query.date
+		)
+	);
+	/** Weeks added past either end at a time, and how close to an end that happens. */
+	const GROW_DAYS = 63;
+	const GROW_WITHIN_WEEKS = 6;
+
+	function activeScroller(): HTMLDivElement | null {
+		return weekScroller ?? monthScroller;
+	}
+
+	function weekRowAt(y: number): HTMLElement | null {
+		const rows = monthScroller?.querySelectorAll<HTMLElement>('[data-week]') ?? [];
+		for (const row of rows) if (row.offsetTop + row.offsetHeight > y) return row;
+		return null;
+	}
+
+	function isPending(day: string): boolean {
+		for (const range of pending) {
+			const [from, to] = range.split('|');
+			if (day >= from && day < to) return true;
+		}
+		return false;
+	}
+
+	/** The range route reads at most 100 days a call. */
+	function spans(from: string, to: string): [string, string][] {
+		const out: [string, string][] = [];
+		for (let day = from; day < to; day = addDays(day, 98)) {
+			const next = addDays(day, 98);
+			out.push([day, next < to ? next : to]);
+		}
+		return out;
+	}
+
+	async function fetchRange(from: string, to: string) {
+		const params = new URL(href({}), location.origin).searchParams;
+		params.set('start', from);
+		params.set('end', to);
+		const res = await fetch(`/api/calendar?${params}`);
+		if (!res.ok) throw new Error(`calendar range ${res.status}`);
+		return (await res.json()) as {
+			items: CalendarItem[];
+			media: Record<string, CalendarMedia[]>;
 		};
-		el.addEventListener('wheel', onWheel, { passive: false });
-		return () => el.removeEventListener('wheel', onWheel);
+	}
+
+	function mergeExtra(found: CalendarItem[], foundMedia: Record<string, CalendarMedia[]>) {
+		const seen = new Set(extraItems.map((i) => i.id));
+		extraItems = [...extraItems, ...found.filter((i) => !seen.has(i.id))];
+		extraMedia = { ...extraMedia, ...foundMedia };
+	}
+
+	function loadSpan(from: string, to: string) {
+		if (from >= to) return;
+		const gen = fetchGen;
+		for (const [a, b] of spans(from, to)) {
+			const key = `${a}|${b}`;
+			pending.add(key);
+			fetchRange(a, b)
+				.then((found) => {
+					if (gen === fetchGen) mergeExtra(found.items, found.media);
+				})
+				.catch(() => {
+					// A failed span stays empty; the next reload of the page fills it.
+				})
+				.finally(() => pending.delete(key));
+		}
+	}
+
+	async function growStart() {
+		const box = monthScroller;
+		if (!box) return;
+		const top = weekRowAt(box.scrollTop + (monthHeader?.offsetHeight ?? 0));
+		const key = top?.dataset.week;
+		const offset = top ? top.offsetTop - box.scrollTop : 0;
+		const from = addDays(renderStart, -GROW_DAYS);
+		renderStart = from;
+		// Rows added above push everything down; put the same week back under the eye.
+		await tick();
+		const row = key ? box.querySelector<HTMLElement>(`[data-week="${key}"]`) : null;
+		if (row) box.scrollTop = row.offsetTop - offset;
+		if (from < covered.start) {
+			loadSpan(from, covered.start);
+			covered.start = from;
+		}
+	}
+
+	function growEnd() {
+		const to = addDays(renderEnd, GROW_DAYS);
+		renderEnd = to;
+		if (to > covered.end) {
+			loadSpan(covered.end, to);
+			covered.end = to;
+		}
+	}
+
+	function growIfNear() {
+		const box = monthScroller;
+		const row = box?.querySelector<HTMLElement>('[data-week]');
+		if (!box || !row) return;
+		const rowHeight = row.offsetHeight || 112;
+		const below = (box.scrollHeight - box.scrollTop - box.clientHeight) / rowHeight;
+		if (below < GROW_WITHIN_WEEKS) growEnd();
+		// Growing upward moves the scroll position, which would cut a glide short.
+		if (!gliding && box.scrollTop / rowHeight < GROW_WITHIN_WEEKS) void growStart();
+	}
+
+	// While a glide runs nothing above it changes.
+	let gliding: ReturnType<typeof setTimeout> | null = null;
+
+	function endGlide() {
+		if (!gliding) return;
+		clearTimeout(gliding);
+		gliding = null;
+		readVisibleMonth();
+	}
+
+	function scrollToDay(day: string, behavior: ScrollBehavior): boolean {
+		const box = monthScroller;
+		const row = box?.querySelector<HTMLElement>(`[data-week="${weekStart(day)}"]`);
+		// Hidden on a phone, where the agenda shows instead.
+		if (!box || !row || box.offsetParent === null) return false;
+		if (behavior === 'smooth') {
+			if (gliding) clearTimeout(gliding);
+			// scrollend is not everywhere yet; the timeout is the fallback.
+			gliding = setTimeout(endGlide, 900);
+			box.addEventListener('scrollend', endGlide, { once: true });
+		}
+		box.scrollTo({ top: row.offsetTop - (monthHeader?.offsetHeight ?? 0), behavior });
+		return true;
+	}
+
+	function readVisibleMonth() {
+		const box = monthScroller;
+		if (!box) return;
+		const head = monthHeader?.offsetHeight ?? 0;
+		// A third of the way down is where the eye rests; that week names the month.
+		const row = weekRowAt(box.scrollTop + head + (box.clientHeight - head) / 3);
+		if (row?.dataset.mid) {
+			const month = monthStart(row.dataset.mid);
+			if (month !== visibleMonth) {
+				visibleMonth = month;
+				if (urlTimer) clearTimeout(urlTimer);
+				// The address only: no load runs, so nothing on screen waits for it.
+				urlTimer = setTimeout(() => replaceState(href({ date: month }), page.state), 300);
+			}
+		}
+		growIfNear();
+	}
+
+	function onMonthScroll() {
+		if (readFrame) return;
+		readFrame = requestAnimationFrame(() => {
+			readFrame = 0;
+			readVisibleMonth();
+		});
+	}
+
+	// New page data: a fresh month (first visit, a filter, a jump past the loaded
+	// weeks) starts over at its first week; a reload of the same view after an
+	// action keeps the weeks on screen and refreshes the ones it fetched itself.
+	$effect(() => {
+		const d = data;
+		untrack(() => {
+			const cameFromWeek = lastView !== 'month';
+			lastView = d.query.view;
+			if (d.query.view !== 'month') return;
+			const key = `${d.query.brands}|${d.query.channels}|${d.query.cancelled}`;
+			const apart = !renderStart || d.range.end < renderStart || d.range.start > renderEnd;
+			if (key !== filterKey || placeOnLoad || cameFromWeek || apart) {
+				filterKey = key;
+				placeOnLoad = false;
+				fetchGen++;
+				pending.clear();
+				renderStart = d.range.start;
+				renderEnd = d.range.end;
+				covered = { start: d.range.start, end: d.range.end };
+				extraItems = [];
+				extraMedia = {};
+				const target = monthStart(d.query.date);
+				visibleMonth = target;
+				void tick().then(() => scrollToDay(target, 'instant'));
+				return;
+			}
+			if (d.range.start < renderStart) renderStart = d.range.start;
+			if (d.range.end > renderEnd) renderEnd = d.range.end;
+			covered = { start: renderStart, end: renderEnd };
+			const gen = ++fetchGen;
+			const outside = [...spans(renderStart, d.range.start), ...spans(d.range.end, renderEnd)];
+			void Promise.all(outside.map(([a, b]) => fetchRange(a, b)))
+				.then((parts) => {
+					if (gen !== fetchGen) return;
+					extraItems = parts.flatMap((p) => p.items);
+					extraMedia = Object.assign({}, ...parts.map((p) => p.media));
+				})
+				.catch(() => {});
+		});
 	});
+
+	onDestroy(() => {
+		if (readFrame) cancelAnimationFrame(readFrame);
+		if (gliding) clearTimeout(gliding);
+		if (urlTimer) clearTimeout(urlTimer);
+	});
+
+	/** Arrows and Today glide through the weeks on the page; past them the month loads afresh. */
+	function stepMonth(event: MouseEvent, day: string) {
+		if (query.view !== 'month' || scrollToDay(day, 'smooth')) {
+			if (query.view === 'month') event.preventDefault();
+			return;
+		}
+		if (monthScroller?.offsetParent === null) return;
+		event.preventDefault();
+		placeOnLoad = true;
+		void go({ date: monthStart(day) });
+	}
 
 	let focusedDay = $state<string | null>(null);
 	let pendingFocus: string | null = null;
@@ -227,6 +463,7 @@
 	async function focusDay(key: string) {
 		if (!days.includes(key)) {
 			pendingFocus = key;
+			placeOnLoad = true;
 			await go({ date: key });
 			return;
 		}
@@ -286,11 +523,17 @@
 				void focusDay(days[days.length - 1]);
 				break;
 			case 'PageUp':
-				void go({ date: shiftAnchor(query.view, query.date, -1) });
+			case 'PageDown': {
+				const step = event.key === 'PageUp' ? -1 : 1;
+				const month = addMonths(shownMonth, step);
+				if (query.view !== 'month' || !scrollToDay(month, 'smooth')) {
+					placeOnLoad = true;
+					void go({
+						date: query.view === 'month' ? month : shiftAnchor(query.view, query.date, step)
+					});
+				}
 				break;
-			case 'PageDown':
-				void go({ date: shiftAnchor(query.view, query.date, 1) });
-				break;
+			}
 			case 'Escape':
 				if (itemEl && !drag) void focusDay(day);
 				else handled = false;
@@ -522,10 +765,11 @@
 		drag.x = event.clientX;
 		drag.y = event.clientY;
 		drag.over = dropAt(event.clientX, event.clientY);
-		if (weekScroller) {
-			const box = weekScroller.getBoundingClientRect();
-			if (event.clientY < box.top + 48) weekScroller.scrollTop -= 16;
-			else if (event.clientY > box.bottom - 48) weekScroller.scrollTop += 16;
+		const scroller = activeScroller();
+		if (scroller) {
+			const box = scroller.getBoundingClientRect();
+			if (event.clientY < box.top + 48) scroller.scrollTop -= 16;
+			else if (event.clientY > box.bottom - 48) scroller.scrollTop += 16;
 		}
 	}
 
@@ -617,7 +861,12 @@
 	);
 	const statusCounts = $derived.by(() => {
 		const counts = new Map<string, string[]>();
-		for (const item of items)
+		// The month view holds three months; the counts are for the one in view.
+		const inView =
+			query.view === 'month'
+				? items.filter((i) => i.day.slice(0, 7) === shownMonth.slice(0, 7))
+				: items;
+		for (const item of inView)
 			counts.set(item.status, [...(counts.get(item.status) ?? []), item.id]);
 		return CALENDAR_STATUSES.filter((s) => counts.has(s)).map((status) => ({
 			status,
@@ -804,7 +1053,7 @@
 		marquee = {
 			start: { x: event.clientX, y: event.clientY },
 			current: { x: event.clientX, y: event.clientY },
-			scrollStart: weekScroller?.scrollTop ?? 0,
+			scrollStart: activeScroller()?.scrollTop ?? 0,
 			base: additive ? [...selected] : [],
 			moved: false
 		};
@@ -816,7 +1065,7 @@
 	// The start point is anchored to the content, so autoscrolling stretches the box.
 	const marqueeBox = $derived.by(() => {
 		if (!marquee?.moved) return null;
-		const drift = (weekScroller?.scrollTop ?? 0) - marquee.scrollStart;
+		const drift = (activeScroller()?.scrollTop ?? 0) - marquee.scrollStart;
 		return boxBetween({ x: marquee.start.x, y: marquee.start.y - drift }, marquee.current);
 	});
 
@@ -828,10 +1077,11 @@
 			if (dist < 5) return;
 			marquee.moved = true;
 		}
-		if (weekScroller) {
-			const box = weekScroller.getBoundingClientRect();
-			if (event.clientY < box.top + 40) weekScroller.scrollTop -= 14;
-			else if (event.clientY > box.bottom - 40) weekScroller.scrollTop += 14;
+		const scroller = activeScroller();
+		if (scroller) {
+			const box = scroller.getBoundingClientRect();
+			if (event.clientY < box.top + 40) scroller.scrollTop -= 14;
+			else if (event.clientY > box.bottom - 40) scroller.scrollTop += 14;
 		}
 		const area = marqueeBox;
 		if (!area) return;
@@ -1128,7 +1378,7 @@
 </script>
 
 <svelte:head>
-	<title>Calendar — {rangeLabel(query.view, data.range, query.date)}</title>
+	<title>Calendar — {headerLabel}</title>
 </svelte:head>
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -1227,7 +1477,7 @@
 		{#if data.unscheduled.length}
 			<ul class="mt-3 space-y-2">
 				{#each data.unscheduled as draft (draft.id)}
-					{@const thumb = thumbOf(data.media[draft.id])}
+					{@const thumb = thumbOf(media[draft.id])}
 					<li>
 						<a
 							href="/compose?id={encodeURIComponent(draft.id)}"
@@ -1289,6 +1539,7 @@
 			data-sveltekit-reset="false"
 			class={navButton}
 			aria-label="Previous {query.view}"
+			onclick={(event) => stepMonth(event, addMonths(shownMonth, -1))}
 		>
 			<ChevronLeft class="h-4 w-4" />
 		</a>
@@ -1296,19 +1547,21 @@
 			href={href({ date: data.today })}
 			data-sveltekit-reset="false"
 			class={navButton}
-			aria-label="Go to today">Today</a
+			aria-label="Go to today"
+			onclick={(event) => stepMonth(event, data.today)}>Today</a
 		>
 		<a
 			href={href({ date: shiftAnchor(query.view, query.date, 1) })}
 			data-sveltekit-reset="false"
 			class={navButton}
 			aria-label="Next {query.view}"
+			onclick={(event) => stepMonth(event, addMonths(shownMonth, 1))}
 		>
 			<ChevronRight class="h-4 w-4" />
 		</a>
 		<div class="order-first w-full min-w-0 md:order-none md:ml-2 md:w-auto md:flex-1">
 			<h2 class="truncate text-xl font-extrabold tracking-tight text-stone-900" aria-live="polite">
-				{rangeLabel(query.view, data.range, query.date)}
+				{headerLabel}
 			</h2>
 			<p class="text-[11px] font-medium text-stone-400" data-testid="calendar-zone">
 				Times in {tz}
@@ -1487,7 +1740,7 @@
 												dragging={drag?.item.id === item.id ||
 													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
 												selected={selected.has(item.id)}
-												thumb={thumbOf(data.media[item.draftId])}
+												thumb={thumbOf(media[item.draftId])}
 												onOpen={onItemClick}
 												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
@@ -1514,9 +1767,15 @@
 					</div>
 				{:else}
 					<div
-						class="overflow-hidden rounded-[1.25rem] border border-stone-200/80 bg-white shadow-[0_4px_20px_-8px_rgb(28_25_23/0.08)]"
+						class="relative max-h-[max(24rem,calc(100dvh-17rem))] overflow-y-auto overscroll-contain rounded-[1.25rem] border border-stone-200/80 bg-white shadow-[0_4px_20px_-8px_rgb(28_25_23/0.08)] [overflow-anchor:none]"
+						bind:this={monthScroller}
+						onscroll={onMonthScroll}
+						data-testid="calendar-month-scroller"
 					>
-						<div class="grid grid-cols-7 border-b border-stone-200">
+						<div
+							class="sticky top-0 z-10 grid grid-cols-7 border-b border-stone-200 bg-white"
+							bind:this={monthHeader}
+						>
 							{#each weeks[0] ?? [] as day (day)}
 								<div
 									class="py-2 text-center text-[11px] font-bold tracking-wide text-stone-500 uppercase"
@@ -1527,13 +1786,17 @@
 							{/each}
 						</div>
 						{#each weeks as week, w (week[0])}
-							<div class="grid grid-cols-7 {w ? 'border-t border-stone-100' : ''}">
+							<div
+								class="grid grid-cols-7 {w ? 'border-t border-stone-100' : ''}"
+								data-week={week[0]}
+								data-mid={week[3]}
+							>
 								{#each week as day (day)}
 									{@const list = byDay.get(day) ?? []}
-									{@const inMonth = day.slice(0, 7) === query.date.slice(0, 7)}
+									{@const inMonth = day.slice(0, 7) === shownMonth.slice(0, 7)}
 									<div
 										data-drop-day={day}
-										class="flex min-h-28 min-w-0 flex-col gap-1 border-l border-stone-100 p-1 first:border-l-0 {isOver(
+										class="flex min-h-28 min-w-0 flex-col gap-1 border-l border-stone-100 p-1 transition-colors duration-300 first:border-l-0 {isOver(
 											day,
 											null
 										)
@@ -1542,6 +1805,12 @@
 												? ''
 												: 'bg-stone-50/70'}"
 									>
+										{#if day.endsWith('-01')}
+											<span
+												class="-mb-7 self-start px-1 pt-1 text-[11px] font-extrabold tracking-wide text-stone-900 uppercase"
+												aria-hidden="true">{monthName(day)}</span
+											>
+										{/if}
 										<button
 											type="button"
 											data-cal-day-btn={day}
@@ -1566,12 +1835,18 @@
 												dragging={drag?.item.id === item.id ||
 													Boolean(drag && selected.has(drag.item.id) && selected.has(item.id))}
 												selected={selected.has(item.id)}
-												thumb={thumbOf(data.media[item.draftId])}
+												thumb={thumbOf(media[item.draftId])}
 												onOpen={onItemClick}
 												onMenu={(item, event) => openItemMenu(item, event)}
 												onPointerDown={startPress}
 											/>
 										{/each}
+										{#if !list.length && isPending(day)}
+											<span
+												class="mx-0.5 h-8 rounded-md bg-stone-100 motion-safe:animate-pulse"
+												aria-hidden="true"
+											></span>
+										{/if}
 										{#if slotsByDay.get(day)}
 											<span
 												class="px-1 text-[10px] font-medium text-stone-400"
@@ -1595,7 +1870,7 @@
 				{/if}
 				<p class="mt-3 text-[11px] font-medium text-stone-500">
 					Click a post to preview it; right-click for everything else.{query.view === 'month'
-						? ' Scroll over the month to change it.'
+						? ' Scroll to move through the months.'
 						: ''} Drag a post to move it (held posts stay held), and Undo puts it back. Drag across empty
 					space or Shift-click to select several.
 				</p>
@@ -1742,7 +2017,7 @@
 {#if openItem}
 	<CalendarDetail
 		item={openItem}
-		media={data.media[openItem.draftId] ?? []}
+		media={media[openItem.draftId] ?? []}
 		timeZone={tz}
 		{busy}
 		error={detailError}
@@ -1898,7 +2173,7 @@
 {#if previewItem}
 	<CalendarPreview
 		item={previewItem}
-		media={data.media[previewItem.draftId] ?? []}
+		media={media[previewItem.draftId] ?? []}
 		timeZone={tz}
 		actions={previewActions(previewItem)}
 		onClose={() => (previewId = null)}

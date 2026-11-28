@@ -245,3 +245,16 @@ describe('calendar query', () => {
 		expect(filteredConnectionIds(channels, { brands: ['nobody'], channels: [] })!.size).toBe(0);
 	});
 });
+
+describe('scrolling month window', () => {
+	it('covers whole weeks from the month before to the month after', async () => {
+		const { scrollRange, weekday } = await import('#lib/domain/calendar.js');
+		const range = scrollRange('2026-11-17');
+		expect(range.start).toBe('2026-09-28');
+		expect(range.end).toBe('2027-01-04');
+		expect(range.days.length % 7).toBe(0);
+		expect(weekday(range.start)).toBe(1);
+		expect(range.days).toContain('2026-10-01');
+		expect(range.days).toContain('2026-12-31');
+	});
+});
