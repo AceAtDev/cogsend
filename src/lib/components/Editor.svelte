@@ -2327,6 +2327,9 @@
 	const firstMediaCard = $derived(media.length ? Math.min(...mediaBySegment.keys()) : 0);
 
 	function cardFit(index: number): PlatformFit[] {
+		// A blank composer is not a mistake yet: red "needs a video" rows before
+		// the first keystroke read as errors on a page that has nothing wrong.
+		if (baseBody.trim() === '' && media.length === 0) return [];
 		const list = cardMedia(index);
 		const flattened = activeTab !== 'global' && !supportsThreads(activeTab);
 		return fitProblems(list, flattened || index === firstMediaCard);
