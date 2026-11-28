@@ -412,7 +412,8 @@
 				extraMedia = {};
 				const target = monthStart(d.query.date);
 				visibleMonth = target;
-				void tick().then(() => scrollToDay(target, 'instant'));
+				placeTarget = target;
+				void tick().then(placeIfShown);
 				return;
 			}
 			if (d.range.start < renderStart) renderStart = d.range.start;
@@ -434,6 +435,20 @@
 		if (readFrame) cancelAnimationFrame(readFrame);
 		if (gliding) clearTimeout(gliding);
 		if (urlTimer) clearTimeout(urlTimer);
+	});
+
+	// A page opened at phone width has the grid hidden, so it cannot be placed
+	// yet; it is placed the moment it first takes up room.
+	let placeTarget = '';
+	function placeIfShown() {
+		if (placeTarget && scrollToDay(placeTarget, 'instant')) placeTarget = '';
+	}
+	$effect(() => {
+		const box = monthScroller;
+		if (!box) return;
+		const watcher = new ResizeObserver(placeIfShown);
+		watcher.observe(box);
+		return () => watcher.disconnect();
 	});
 
 	/** Arrows and Today glide through the weeks on the page; past them the month loads afresh. */
