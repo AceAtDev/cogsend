@@ -54,6 +54,7 @@
 	// A preview link looks the same to its owner as to whoever it was sent to.
 	const isShareRoute = $derived(page.url.pathname.startsWith('/p/'));
 	// A week of seven columns does not fit the reading width the other pages use.
+	// The header follows the same width, or its pills float over the page's own controls.
 	const isWideRoute = $derived(page.url.pathname === '/calendar');
 	// The legal pages read the same signed in or out.
 	const isLegalRoute = $derived(page.url.pathname.startsWith('/legal/'));
@@ -171,7 +172,9 @@
 	<div class="min-h-dvh bg-stone-50 font-sans text-stone-900 selection:bg-stone-200">
 		<!-- TOP NAVIGATION (Floating Header) -->
 		<header
-			class="pointer-events-none fixed top-0 right-0 left-0 z-40 mx-auto flex w-full max-w-[800px] items-center justify-between px-4 py-6 sm:px-6"
+			class="pointer-events-none fixed top-0 right-0 left-0 z-40 mx-auto flex w-full {isWideRoute
+				? 'max-w-[1280px]'
+				: 'max-w-[800px]'} items-center justify-between px-4 py-6 sm:px-6"
 		>
 			<!-- Page content scrolls under the floating pills; this scrim keeps it legible. -->
 			<div
