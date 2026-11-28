@@ -39,6 +39,7 @@ A failed request answers a JSON object with an `error` property.
 - `GET /api/drafts/:id`: one draft.
 - `GET /api/drafts/:id/share`: the draft's preview link, see [Preview links](#preview-links).
 - `GET /api/queue`: upcoming and recent deliveries.
+- `GET /api/calendar?start=&end=`: every delivery between two days (`YYYY-MM-DD`, at most 100 days apart, in your time zone) as `{items, media, truncated}`, the same entries the [calendar](posts.md#calendar) shows. Takes the calendar's filters too: `brand`, `channel` and `cancelled=1`.
 - `POST /api/validate`: check a post against each platform's rules.
 - `GET /api/insights`: delivery stats. `?days=` and `?tz=` are optional.
 - `GET /api/insights/performance`: totals per brand and per channel, and the top posts, over `?days=` (7, 30 or 90). See [Performance metrics](posts.md#performance-metrics).
@@ -70,7 +71,7 @@ A failed request answers a JSON object with an `error` property.
 - `POST /api/targets/:id/retry`: retry one delivery.
 - `POST /api/targets/:id/reschedule`: `{"runAt": "<ISO date>"}` moves one delivery.
 - `POST /api/targets/:id/metrics`: read the delivery's counts from the platform now. Answers `{refreshed, reason?, metrics}`; within five minutes of the last reading it answers the stored counts with `refreshed: false`.
-- `POST /api/targets/bulk`: `{"op", "ids", "runAt?"}` acts on up to 10 deliveries at once. `op` is `cancel`, `retry` or `reschedule`.
+- `POST /api/targets/bulk`: `{"op", "ids", "runAt?", "keepHeld?"}` acts on up to 10 deliveries at once. `op` is `cancel`, `retry` or `reschedule`. Rescheduling a delivery held for review approves it when a signed-in session does it, unless `keepHeld` is `true`; with a key it always stays held.
 - `PATCH /api/settings`: change settings.
 
 Approving and rejecting are the operator's alone, so `POST /api/review/approve` (`{"deliveryIds": []}`, `{"brandId"}` or `{"all": true}`, with an optional future `runAt`) and `POST /api/review/reject` (the same selection and an optional `note` of up to 2,000 characters) answer **401** to every key.

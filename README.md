@@ -47,7 +47,7 @@ Hosted schedulers usually charge per channel and keep your posts and tokens on t
 - **Preview links**: share a read-only link to a draft for feedback, no login needed, revocable and expiring
 - **Publish or schedule**: see results per account, then cancel, reschedule or retry from Posts
 - **Automatic retries**: temporary failures retry on their own, up to five attempts
-- **Calendar**: every post per account on a week or month grid, colour-coded and filtered by brand, with drag to reschedule
+- **Calendar**: every post per account on a week grid or a scrolling month, with pictures and a preview on click, filtered by brand, with drag to reschedule and bulk approve, move, spread out and duplicate
 - **Interactive post previews**: click media in Calendar or Review for an uncropped media inspector with Fit width, Whole image and actual-size zoom. Captions sit beside or below the artwork. Feed mode offers mobile and desktop simulations across all seven platforms, with overlays off by default. Provider crops and app UI can vary. Opening a preview never approves or publishes a post.
 - **Insights**: published against failed over 7, 30 or 90 days, why posts failed, and how posts performed (likes, shares, views) per brand and channel on Bluesky, Mastodon, TikTok, Instagram and LinkedIn pages
 - **Link previews**: cards for URLs in a post

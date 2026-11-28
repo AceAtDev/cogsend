@@ -4,6 +4,10 @@ The composer is one draft: a thread of cards, the accounts it goes to, and a
 Publish button with a schedule option next to it. Everything here happens in the
 browser; the same actions are available to scripts through the [API](api.md), and to AI agents through its [MCP server](mcp.md).
 
+## What is coming up
+
+Beside the composer, on a wide screen, a short summary shows the next post going out (its time, text, accounts and state) and a count for today, this week, posts waiting for [review](posts.md#review), failed posts and drafts; each opens the page it counts. On a narrower screen it is one line above the editor that opens the same summary.
+
 ## Drafts save themselves
 
 A draft is saved as you type, and **Cmd/Ctrl + S** saves it on demand. Drafts are
@@ -54,13 +58,13 @@ Publish and Schedule stop until it is resolved.
 
 ## Instagram
 
-Every Instagram post needs a photo or a video, so with an Instagram account selected a text-only post shows **Instagram needs a photo or video** on the first card, with **Uncheck Instagram**, and Publish and Schedule stop until you attach something or uncheck it. The other accounts are not held to it.
+Every Instagram post needs a photo or a video, so with an Instagram account selected a text-only post shows **Instagram needs a photo or video** on the first card once it has some text, with **Uncheck Instagram**, and Publish and Schedule stop until you attach something or uncheck it. The other accounts are not held to it.
 
 One photo goes out as a photo post, two to ten as a carousel, and a video on its own as a Reel. Instagram takes JPEG photos from 4:5 tall to 1.91:1 wide; a PNG or WebP is sent through a full-size JPEG copy your browser makes when you attach it, and an image without one, attached before Instagram support or too large to copy within Instagram's 8 MB, asks to be attached again or as a JPEG. With the [Images binding](configuration.md#faster-post-thumbnails), the server makes a missing copy itself when the post is scheduled or published. GIFs, a video beside photos, and more than ten photos are refused for Instagram the same way, with a line naming the problem. A thread is flattened into one caption of up to 2,200 characters and 30 hashtags.
 
 ## TikTok
 
-TikTok takes one video on its own, or a photo post (carousel) of up to 20 JPEG or WebP photos in order, the first one the cover; a PNG goes as its JPEG copy and a GIF not at all. With a TikTok account selected a post with no media shows **TikTok needs a video or photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. Photo posts need the instance's address verified with TikTok (see [OAuth apps](oauth-apps.md)). The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two.
+TikTok takes one video on its own, or a photo post (carousel) of up to 20 JPEG or WebP photos in order, the first one the cover; a PNG goes as its JPEG copy and a GIF not at all. With a TikTok account selected a post with text but no media shows **TikTok needs a video or photos**, and Publish and Schedule stop until you fix it or uncheck TikTok. Photo posts need the instance's address verified with TikTok (see [OAuth apps](oauth-apps.md)). The caption is up to 2,200 characters as TikTok counts them, where an emoji counts as two.
 
 Selecting a TikTok account opens a **Post to TikTok** panel under the post, laid out as TikTok's [Content Sharing Guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines) require. It reads the account from TikTok each time the composer opens it, and shows:
 

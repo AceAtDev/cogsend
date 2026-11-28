@@ -51,17 +51,37 @@ The link shows the latest save, so a reviewer who refreshes sees your newest edi
 
 ## Calendar
 
-**Calendar** shows every post going to every account on a week (the default) or month grid, in your account's time zone, which is named under the heading. On a phone it is a list of days instead. The arrows step a week or a month, **Today** comes back, and the view, the date and the filters stay in the address, so a link opens the same calendar.
+**Calendar** shows every post going to every account on a week (the default) or month grid, in your account's time zone, which is named under the heading. On a phone it is a list of days instead. The view, the date and the filters stay in the address, so a link opens the same calendar.
 
-A post going to three accounts is three entries, one per account. Each shows its time, the account's platform and handle, the first line of its text (the version written for that platform, if there is one), a mark when it has images or video, and a dot for its state: **Awaiting review** (dashed and violet, with a shield: an agent wrote it and it goes out only once you approve it), **Rejected**, **Scheduled**, **Due** (its time has passed and the next tick sends it), **Sending**, **Processing**, **Published**, **Failed** or **Cancelled**. The left edge takes the colour of the account's brand ([Brands](accounts.md#brands)); accounts with no brand are grey and grouped as **Unbranded**. A post published straight away, and a cancelled one, sit at the time they last changed. Cancelled posts are hidden until you press **Show cancelled**.
+A post going to three accounts is three entries, one per account. Each shows its time, the account's platform, a picture of its first image or video cover, the start of its text (the version written for that platform, if there is one), and a dot for its state: **Awaiting review** (dashed and violet: an agent wrote it and it goes out only once you approve it), **Rejected**, **Scheduled**, **Due** (its time has passed and the next tick sends it), **Sending**, **Processing**, **Published**, **Failed** or **Cancelled**. The left edge takes the colour of the account's brand ([Brands](accounts.md#brands)); accounts with no brand are grey and grouped as **Unbranded**. A post published straight away, and a cancelled one, sit at the time they last changed. Above the grid, a count per state covers what is in view; pick one to select all of those posts.
 
-The brand chips double as the legend. Pick one or more brands, accounts, or both, to see only those; brands and accounts add up, so **JobJob** with **@465cal** shows JobJob's accounts and that one. **All** clears the filter.
+**Filter** narrows the calendar to one or more brands, accounts, or both; brands and accounts add up, so **JobJob** with **@465cal** shows JobJob's accounts and that one. **Show cancelled** in the same menu brings back cancelled posts, and **Clear filters** shows everything again.
 
-Pressing an entry opens it: the full text, its media, the channel key an agent uses for that account (with a copy button), and its state. **Open in composer** edits the post and **View post** opens it on the platform once it is published. A published entry also shows its [performance](#performance-metrics), with **Refresh** to read it now. A scheduled or due entry offers **Reschedule** and **Cancel**, a failed one **Retry** and **Remove**, the same as its card in Posts; each acts on that one account only.
+### Week and month
 
-To move a scheduled entry, drag it to another hour (week) or day (month; it keeps its time of day). A confirmation shows the account and the old and new times before anything changes, and an **Undo** button stays up for a few seconds after. On a touch screen hold the entry a moment before dragging, or open it and press **Reschedule** to pick a new time. With a keyboard, the arrow keys move between days, **Page Up** and **Page Down** change the week or month, and **Tab** reaches the entries.
+The week grid has a row per hour; hours with nothing in them stay short, so a week reads without scrolling past empty rows. The arrows step a week and **Today** comes back.
 
-Drafts with no time yet are listed beside the calendar under **Unscheduled drafts**; open one in the composer to schedule it.
+The month view scrolls: weeks run on as one list, the heading follows the month in view, and each month's first day is labelled. Weeks are added well before you reach them and their posts load in the background, so scrolling never waits for the page. The arrows and **Today** glide to the start of a month, and to one further away than the weeks already shown the calendar opens there directly. A day with more posts than fit shows **+N more**, which opens that week.
+
+### Opening a post
+
+Clicking an entry shows it the way it will look: the account, its images or video (with arrows for several), the full text and when it goes out. Under it, **Edit** opens it in the composer, **Approve** appears for a post held for review, **Open post** for a published one, **Details** opens the full panel, **On a phone** shows the post on a simulated phone, and **More** lists everything else. Right-clicking an entry opens that full list straight away: details, edit, approve or reject, reschedule, retry, duplicate as a draft, select, and cancel or remove, each only where it applies.
+
+The details panel has the full text, its media, the channel key an agent uses for that account (with a copy button), and its state. A published entry also shows its [performance](#performance-metrics), with **Refresh** to read it now. A scheduled or due entry offers **Reschedule** and **Cancel**, a failed one **Retry** and **Remove**, the same as its card in Posts; each acts on that one account only.
+
+### Moving posts
+
+Drag an entry to another hour (week) or day (month; it keeps its time of day). The move happens at once and an **Undo** button stays up for a few seconds. A post awaiting review can be moved too, and it stays held: moving it does not approve it. On a touch screen hold the entry a moment before dragging, or open its details and press **Reschedule** to pick a new time. With a keyboard, the arrow keys move between days, **Page Up** and **Page Down** change the week or month, and **Tab** reaches the entries.
+
+### Several posts at once
+
+Drag across empty space in the grid to select every post the box touches. **Shift**-click selects everything from the last post you picked to this one, in time order, and **Ctrl**- or **Cmd**-click adds or removes one. On a phone, press **Select** and tap posts. **Esc** clears the selection.
+
+A bar at the bottom shows how many are selected and the actions that apply to them, with the rest under **More**: **Approve**, **Reject** (with an optional note for the agent), **Move** (a day earlier or later, a week later, or to a day you pick, each keeping its time), **Spread out** (one post a day from the first, each at its own time; a post going to several accounts moves as one), **Duplicate as drafts**, **Retry** and **Cancel**. Each acts only on the selected posts it fits; a hint says how many when that is not all of them. Approving a held post whose time has passed publishes it at once, so the bar asks first. Dragging one of several selected posts moves them all by the same amount.
+
+### Unscheduled drafts
+
+Drafts with no time yet are listed beside the calendar under **Unscheduled drafts**, each with its first picture, its title and the start of its text; open one in the composer to schedule it.
 
 ## Review
 
